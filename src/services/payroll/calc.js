@@ -31,13 +31,17 @@ function daysInclusive(from, to) {
  * período. Un mes completo da 30 aunque tenga 31 o 28 días; medio período da
  * la mitad. Es proporcional a la CONTRATACIÓN, no a la asistencia: un ausente
  * cobra igual.
+ *
+ * Sin redondear: este valor multiplica el sueldo en `proratedAmount`. La
+ * columna days_worked es Decimal(5,2) y redondea al guardar, pero el monto se
+ * calcula con la fracción exacta para no dejar centavos sin pagar.
  */
 function proratedDays({ periodStart, periodEnd, hireDate, terminationDate }) {
   const periodDays = daysInclusive(periodStart, periodEnd)
   if (periodDays === 0) return 0
   const from = hireDate > periodStart ? hireDate : periodStart
   const to = terminationDate && terminationDate < periodEnd ? terminationDate : periodEnd
-  return round2((30 * daysInclusive(from, to)) / periodDays)
+  return (30 * daysInclusive(from, to)) / periodDays
 }
 
 /** Importe mensual llevado a los días comerciales efectivamente contratados. */

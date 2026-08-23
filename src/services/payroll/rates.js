@@ -47,8 +47,12 @@ async function getPayrollRates(db, companyId) {
   try { parsed = JSON.parse(row.value) } catch { return { ...DEFAULT_RATES } }
   const rates = { ...DEFAULT_RATES }
   for (const key of Object.keys(DEFAULT_RATES)) {
-    const n = Number(parsed?.[key])
-    if (Number.isFinite(n) && n >= 0) rates[key] = n
+    const value = parsed?.[key]
+    // typeof antes que Number(): Number(null), Number(''), Number(false) y Number([])
+    // valen 0, pasan el >= 0 y se guardarían como tasa real. Un campo vacío en la
+    // configuración no puede volver Q0 la deducción única del ISR.
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
+    rates[key] = value
   }
   return rates
 }

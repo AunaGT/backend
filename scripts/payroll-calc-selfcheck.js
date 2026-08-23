@@ -32,6 +32,12 @@ assert.strictEqual(proratedDays({ periodStart: d('2026-06-01'), periodEnd: d('20
 // Empleado que ingresa después del período: no le toca nada
 assert.strictEqual(proratedDays({ periodStart: d('2026-06-01'), periodEnd: d('2026-06-30'), hireDate: d('2026-07-01'), terminationDate: null }), 0)
 
+// El prorrateo no se redondea antes de multiplicar el sueldo: un alta a mitad de un mes
+// de 31 días no puede dejar centavos sin pagar
+const mediaAgosto = proratedDays({ periodStart: d('2026-08-01'), periodEnd: d('2026-08-31'), hireDate: d('2026-08-16'), terminationDate: null })
+assert.ok(Math.abs(mediaAgosto - (30 * 16) / 31) < 1e-9, 'proratedDays no debe redondear')
+assert.strictEqual(proratedAmount(50000, mediaAgosto), 25806.45)
+
 assert.strictEqual(proratedAmount(3500, 30), 3500)
 assert.strictEqual(proratedAmount(3500, 15), 1750)
 
