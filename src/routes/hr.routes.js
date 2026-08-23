@@ -12,6 +12,7 @@ const { Router } = require('express')
 const router = Router()
 const { Auth, hasPermission } = require('../middlewares/autenticacion')
 const Employees = require('../controllers/hrEmployees.controller')
+const Attendance = require('../controllers/hrAttendance.controller')
 
 // Empleados
 router.get('/employees', Auth, hasPermission('hr.employees.view'), Employees.list)
@@ -19,5 +20,11 @@ router.post('/employees', Auth, hasPermission('hr.employees.create'), Employees.
 router.get('/employees/:id', Auth, hasPermission('hr.employees.view'), Employees.getById)
 router.put('/employees/:id', Auth, hasPermission('hr.employees.edit'), Employees.update)
 router.delete('/employees/:id', Auth, hasPermission('hr.employees.delete'), Employees.remove)
+
+// Asistencia
+router.get('/attendance', Auth, hasPermission('hr.attendance.view'), Attendance.list)
+router.post('/attendance', Auth, hasPermission('hr.attendance.manage'), Attendance.upsert)
+router.post('/attendance/bulk', Auth, hasPermission('hr.attendance.manage'), Attendance.bulk)
+router.delete('/attendance/:id', Auth, hasPermission('hr.attendance.manage'), Attendance.remove)
 
 module.exports = router
