@@ -16,13 +16,20 @@
 
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
-const { fail, toDate, trim } = require('./hrEmployees.controller')
+const { fail, toDate, trim, toEnum } = require('./hrEmployees.controller')
 const { getPayrollRates } = require('../services/payroll/rates')
 const { buildPayslip } = require('../services/payroll/build')
 const { round2 } = require('../services/payroll/calc')
 
 const TX_OPTIONS = { maxWait: 10000, timeout: 30000 }
 const PAYROLL_TYPES = ['ORDINARIA', 'AGUINALDO', 'BONO14']
+const PAYROLL_STATUSES = ['BORRADOR', 'CONFIRMADA', 'PAGADA', 'ANULADA']
+
+// Serializa la numeración por empresa dentro de la transacción, igual que
+// nextEntryNumber para los asientos. Un reintento sobre P2002 no sirve aquí:
+// Postgres aborta la transacción entera al primer error y el siguiente query
+// muere con 25P02, no con P2002.
+const RUN_LOCK_KEY = 910005
 
 const RUN_INCLUDE = {
   branch: { select: { id: true, name: true, code: true } },
@@ -37,8 +44,11 @@ const RUN_INCLUDE = {
   },
 }
 
-/** Correlativo NOM-2026-08-001 por empresa y mes. El llamador reintenta si choca. */
+/** Correlativo NOM-2026-08-001 por empresa y mes. */
 async function nextRunCode(tx, companyId, payDate) {
+  // Los casts son obligatorios: la forma de dos argumentos es (int, int) y
+  // Prisma manda el número como bigint y el hash como integer.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RUN_LOCK_KEY}::int, hashtext(${companyId})::int)`
   const prefix = `NOM-${payDate.getUTCFullYear()}-${String(payDate.getUTCMonth() + 1).padStart(2, '0')}-`
   const last = await tx.payrollRun.findFirst({
     where: { company_id: companyId, code: { startsWith: prefix } },
@@ -210,8 +220,8 @@ exports.list = async (req, res, next) => {
     const companyId = requireCompany(req)
     const { year, type, status } = req.query || {}
     const where = { company_id: companyId, ...branchWhere(req) }
-    if (type) where.type = String(type).toUpperCase()
-    if (status) where.status = String(status).toUpperCase()
+    if (type) where.type = toEnum(type, PAYROLL_TYPES, 'El tipo de planilla no es válido')
+    if (status) where.status = toEnum(status, PAYROLL_STATUSES, 'El estado de planilla no es válido')
     if (year) {
       const y = Number(year)
       if (!Number.isInteger(y)) fail(400, 'El año no es válido')
@@ -282,29 +292,21 @@ exports.create = async (req, res, next) => {
     const overrides = (b.overtime && typeof b.overtime === 'object') ? b.overtime : {}
 
     const created = await prismaTransaction.$transaction(async (tx) => {
-      let run = null
-      for (let attempt = 0; attempt < 3 && !run; attempt++) {
-        const code = await nextRunCode(tx, companyId, payDate)
-        try {
-          run = await tx.payrollRun.create({
-            data: {
-              company_id: companyId,
-              branch_id: branchId,
-              code,
-              name: trim(b.name, 150) || `Planilla ${code}`,
-              type,
-              period_start: periodStart,
-              period_end: periodEnd,
-              pay_date: payDate,
-              notes: trim(b.notes, 1000),
-              created_by: req.user?.sub || null,
-            },
-          })
-        } catch (err) {
-          if (err.code !== 'P2002') throw err
-        }
-      }
-      if (!run) fail(409, 'No se pudo asignar el correlativo de la planilla, intenta de nuevo')
+      const code = await nextRunCode(tx, companyId, payDate)
+      const run = await tx.payrollRun.create({
+        data: {
+          company_id: companyId,
+          branch_id: branchId,
+          code,
+          name: trim(b.name, 150) || `Planilla ${code}`,
+          type,
+          period_start: periodStart,
+          period_end: periodEnd,
+          pay_date: payDate,
+          notes: trim(b.notes, 1000),
+          created_by: req.user?.sub || null,
+        },
+      })
 
       await generatePayslips(tx, run, overrides)
       return tx.payrollRun.findUnique({ where: { id: run.id }, include: RUN_INCLUDE })

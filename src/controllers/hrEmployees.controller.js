@@ -86,7 +86,7 @@ exports.list = async (req, res, next) => {
     const { status, q, department } = req.query || {}
 
     const where = { company_id: companyId, ...branchWhere(req) }
-    if (status) where.status = String(status).toUpperCase()
+    if (status) where.status = toEnum(status, EMPLOYEE_STATUSES, 'El estado del empleado no es válido')
     if (department) where.department = String(department)
     if (q && String(q).trim()) {
       const term = String(q).trim()

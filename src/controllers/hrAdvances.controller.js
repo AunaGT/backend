@@ -19,7 +19,9 @@
 
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
-const { fail, toDate, toMoney, trim } = require('./hrEmployees.controller')
+const { fail, toDate, toMoney, trim, toEnum } = require('./hrEmployees.controller')
+
+const ADVANCE_STATUSES = ['PENDIENTE', 'PAGADO', 'CANCELADO']
 
 const ADVANCE_INCLUDE = {
   employee: { select: { id: true, code: true, first_name: true, last_name: true } },
@@ -35,7 +37,7 @@ exports.list = async (req, res, next) => {
     const { employee_id, status } = req.query || {}
     const where = { company_id: companyId, ...branchWhere(req) }
     if (employee_id) where.employee_id = String(employee_id)
-    if (status) where.status = String(status).toUpperCase()
+    if (status) where.status = toEnum(status, ADVANCE_STATUSES, 'El estado del anticipo no es válido')
 
     const items = await prisma.employeeAdvance.findMany({
       where,
