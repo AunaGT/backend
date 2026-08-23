@@ -50,6 +50,17 @@ function toMoney(value, field, { required = false, min = 0 } = {}) {
 
 const trim = (v, max) => (v == null || String(v).trim() === '' ? null : String(v).trim().slice(0, max))
 
+const CONTRACT_TYPES = ['INDEFINIDO', 'PLAZO_FIJO', 'POR_OBRA']
+const PAY_FREQUENCIES = ['MENSUAL', 'QUINCENAL']
+const EMPLOYEE_STATUSES = ['ACTIVO', 'SUSPENDIDO', 'BAJA']
+
+/** Valida contra la lista de valores del enum; null, '' o basura dan 400 en español. */
+function toEnum(value, allowed, message) {
+  const raw = value == null ? '' : String(value).trim().toUpperCase()
+  if (!allowed.includes(raw)) fail(400, message)
+  return raw
+}
+
 const EMPLOYEE_INCLUDE = {
   branch: { select: { id: true, name: true, code: true } },
   user: { select: { id: true, name: true, email: true } },
@@ -138,8 +149,8 @@ exports.create = async (req, res, next) => {
       position: trim(b.position, 100),
       department: trim(b.department, 100),
       hire_date: toDate(b.hire_date, 'La fecha de ingreso', { required: true }),
-      contract_type: b.contract_type ? String(b.contract_type).toUpperCase() : undefined,
-      pay_frequency: b.pay_frequency ? String(b.pay_frequency).toUpperCase() : undefined,
+      contract_type: b.contract_type ? toEnum(b.contract_type, CONTRACT_TYPES, 'El tipo de contrato no es válido') : undefined,
+      pay_frequency: b.pay_frequency ? toEnum(b.pay_frequency, PAY_FREQUENCIES, 'La frecuencia de pago no es válida') : undefined,
       base_salary: toMoney(b.base_salary, 'El sueldo base', { required: true }),
       bonificacion_incentivo: toMoney(b.bonificacion_incentivo, 'La bonificación incentivo') ?? 250,
       bank_account: trim(b.bank_account, 50),
@@ -187,12 +198,12 @@ exports.update = async (req, res, next) => {
     if (b.department !== undefined) setIf('department', trim(b.department, 100))
     if (b.hire_date !== undefined) setIf('hire_date', toDate(b.hire_date, 'La fecha de ingreso', { required: true }))
     if (b.termination_date !== undefined) setIf('termination_date', toDate(b.termination_date, 'La fecha de retiro'))
-    if (b.contract_type !== undefined) setIf('contract_type', String(b.contract_type).toUpperCase())
-    if (b.pay_frequency !== undefined) setIf('pay_frequency', String(b.pay_frequency).toUpperCase())
+    if (b.contract_type !== undefined) setIf('contract_type', toEnum(b.contract_type, CONTRACT_TYPES, 'El tipo de contrato no es válido'))
+    if (b.pay_frequency !== undefined) setIf('pay_frequency', toEnum(b.pay_frequency, PAY_FREQUENCIES, 'La frecuencia de pago no es válida'))
     if (b.base_salary !== undefined) setIf('base_salary', toMoney(b.base_salary, 'El sueldo base', { required: true }))
-    if (b.bonificacion_incentivo !== undefined) setIf('bonificacion_incentivo', toMoney(b.bonificacion_incentivo, 'La bonificación incentivo'))
+    if (b.bonificacion_incentivo !== undefined) setIf('bonificacion_incentivo', toMoney(b.bonificacion_incentivo, 'La bonificación incentivo', { required: true }))
     if (b.bank_account !== undefined) setIf('bank_account', trim(b.bank_account, 50))
-    if (b.status !== undefined) setIf('status', String(b.status).toUpperCase())
+    if (b.status !== undefined) setIf('status', toEnum(b.status, EMPLOYEE_STATUSES, 'El estado del empleado no es válido'))
     if (b.user_id !== undefined) setIf('user_id', b.user_id ? String(b.user_id) : null)
     if (b.branch_id !== undefined) setIf('branch_id', targetBranch(req, b.branch_id))
 
@@ -232,3 +243,7 @@ module.exports.fail = fail
 module.exports.toDate = toDate
 module.exports.toMoney = toMoney
 module.exports.trim = trim
+module.exports.toEnum = toEnum
+module.exports.CONTRACT_TYPES = CONTRACT_TYPES
+module.exports.PAY_FREQUENCIES = PAY_FREQUENCIES
+module.exports.EMPLOYEE_STATUSES = EMPLOYEE_STATUSES
