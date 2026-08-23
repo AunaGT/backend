@@ -73,6 +73,8 @@ router.use('/commercial-documents', require('./commercialDocuments.routes'))
 router.use('/accounting', require('./accounting.routes'))
 // RRHH (empleados, asistencia, anticipos)
 router.use('/hr', require('./hr.routes'))
+// Nómina (planillas y recibos)
+router.use('/payroll', require('./payroll.routes'))
 
 
 module.exports = router
