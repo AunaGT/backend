@@ -20,10 +20,9 @@ router.post('/runs/:id/recalculate', Auth, hasPermission('payroll.create'), Payr
 router.delete('/runs/:id', Auth, hasPermission('payroll.create'), Payroll.remove)
 router.get('/runs/:id/payslips/:payslipId', Auth, hasPermission('payroll.view'), Payroll.getPayslip)
 
-// Transiciones (Task 10): descomentar junto con payrollTransitions.controller.js
-// const Transitions = require('../controllers/payrollTransitions.controller')
-// router.post('/runs/:id/confirm', Auth, hasPermission('payroll.confirm'), Transitions.confirm)
-// router.post('/runs/:id/pay', Auth, hasPermission('payroll.pay'), Transitions.pay)
-// router.post('/runs/:id/cancel', Auth, hasPermission('payroll.cancel'), Transitions.cancel)
+const Transitions = require('../controllers/payrollTransitions.controller')
+router.post('/runs/:id/confirm', Auth, hasPermission('payroll.confirm'), Transitions.confirm)
+router.post('/runs/:id/pay', Auth, hasPermission('payroll.pay'), Transitions.pay)
+router.post('/runs/:id/cancel', Auth, hasPermission('payroll.cancel'), Transitions.cancel)
 
 module.exports = router
