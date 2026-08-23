@@ -76,6 +76,13 @@ exports.list = async (req, res, next) => {
 /**
  * POST /api/hr/attendance — upsert por (employee_id, work_date).
  * Marcar dos veces el mismo día corrige la marca, no crea una segunda.
+ *
+ * Solo se tocan los campos que vinieron en el body: el diálogo de horas extra
+ * del frontend manda { employee_id, work_date, overtime_hours, status } sin
+ * check_in/check_out, y una corrección parcial no debe borrar la entrada y
+ * salida ya capturadas. Omitir un campo significa "no lo toques"; mandarlo
+ * explícito en null significa "bórralo" — mismo contrato que
+ * hrEmployees.controller.update.
  */
 exports.upsert = async (req, res, next) => {
   try {
@@ -85,19 +92,22 @@ exports.upsert = async (req, res, next) => {
     const workDate = toDate(b.work_date, 'La fecha', { required: true })
     const branchId = targetBranch(req, b.branch_id || employee.branch_id)
 
-    const data = {
-      check_in: toTime(b.check_in, 'La hora de entrada'),
-      check_out: toTime(b.check_out, 'La hora de salida'),
-      hours: toHours(b.hours, 'Las horas trabajadas'),
-      overtime_hours: toHours(b.overtime_hours, 'Las horas extra') ?? 0,
-      status: toStatus(b.status) ?? 'PRESENTE',
-      notes: trim(b.notes, 1000),
-    }
+    const supplied = {}
+    const setIf = (key, value) => { if (value !== undefined) supplied[key] = value }
+    if (b.check_in !== undefined) setIf('check_in', toTime(b.check_in, 'La hora de entrada'))
+    if (b.check_out !== undefined) setIf('check_out', toTime(b.check_out, 'La hora de salida'))
+    if (b.hours !== undefined) setIf('hours', toHours(b.hours, 'Las horas trabajadas'))
+    if (b.overtime_hours !== undefined) setIf('overtime_hours', toHours(b.overtime_hours, 'Las horas extra') ?? 0)
+    if (b.status !== undefined) setIf('status', toStatus(b.status))
+    if (b.notes !== undefined) setIf('notes', trim(b.notes, 1000))
+
+    // Defaults solo para una marca nueva; una corrección parcial no los aplica.
+    const defaults = { overtime_hours: 0, status: 'PRESENTE' }
 
     const saved = await prisma.attendance.upsert({
       where: { employee_id_work_date: { employee_id: employee.id, work_date: workDate } },
-      update: data,
-      create: { company_id: companyId, branch_id: branchId, employee_id: employee.id, work_date: workDate, ...data },
+      update: supplied,
+      create: { company_id: companyId, branch_id: branchId, employee_id: employee.id, work_date: workDate, ...defaults, ...supplied },
       include: { employee: { select: { id: true, code: true, first_name: true, last_name: true } } },
     })
     res.status(201).json(saved)
@@ -107,13 +117,16 @@ exports.upsert = async (req, res, next) => {
 /**
  * POST /api/hr/attendance/bulk — marca un mismo día para varios empleados.
  * Body: { work_date, status?, overtime_hours?, employee_ids: [] }
+ *
+ * Igual que `upsert`, un bulk que solo trae `status` no debe borrar horas
+ * extra ya registradas ese día para alguno de los empleados.
  */
 exports.bulk = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
     const b = req.body || {}
     const workDate = toDate(b.work_date, 'La fecha', { required: true })
-    const ids = Array.isArray(b.employee_ids) ? b.employee_ids.map(String) : []
+    const ids = Array.isArray(b.employee_ids) ? [...new Set(b.employee_ids.map(String))] : []
     if (ids.length === 0) fail(400, 'Selecciona al menos un empleado')
 
     const employees = await prisma.employee.findMany({
@@ -122,18 +135,30 @@ exports.bulk = async (req, res, next) => {
     })
     if (employees.length !== ids.length) fail(404, 'Uno o más empleados no existen en esta empresa')
 
-    const data = {
-      status: toStatus(b.status) ?? 'PRESENTE',
-      overtime_hours: toHours(b.overtime_hours, 'Las horas extra') ?? 0,
-      notes: trim(b.notes, 1000),
-    }
+    // Resuelve el acceso de sucursal de todos antes de escribir nada: si uno
+    // solo no es alcanzable, la llamada completa falla sin dejar cambios a medias.
+    const branchByEmployee = new Map(employees.map((e) => [e.id, targetBranch(req, e.branch_id)]))
+
+    const status = toStatus(b.status) ?? 'PRESENTE'
+    const supplied = {}
+    if (b.overtime_hours !== undefined) supplied.overtime_hours = toHours(b.overtime_hours, 'Las horas extra') ?? 0
+    if (b.notes !== undefined) supplied.notes = trim(b.notes, 1000)
 
     let saved = 0
     for (const employee of employees) {
       await prisma.attendance.upsert({
         where: { employee_id_work_date: { employee_id: employee.id, work_date: workDate } },
-        update: data,
-        create: { company_id: companyId, branch_id: employee.branch_id, employee_id: employee.id, work_date: workDate, ...data },
+        update: { status, ...supplied },
+        create: {
+          company_id: companyId,
+          branch_id: branchByEmployee.get(employee.id),
+          employee_id: employee.id,
+          work_date: workDate,
+          status,
+          overtime_hours: 0,
+          notes: null,
+          ...supplied,
+        },
       })
       saved += 1
     }
