@@ -102,12 +102,14 @@ exports.cancel = async (req, res, next) => {
     }
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
-      // Reclamo atómico: dos cancelaciones simultáneas no deben revertir dos veces.
+      // Reclamo atómico: dos cancelaciones simultáneas no deben revertir dos veces, y
+      // el saldo entra al where para que el reclamo también falle si una planilla
+      // descontó una cuota entre la lectura de arriba y este commit.
       const claim = await tx.employeeAdvance.updateMany({
-        where: { id: current.id, status: 'PENDIENTE' },
+        where: { id: current.id, status: 'PENDIENTE', balance: current.balance },
         data: { status: 'CANCELADO', balance: 0 },
       })
-      if (claim.count !== 1) fail(409, 'El anticipo ya fue cancelado')
+      if (claim.count !== 1) fail(409, 'El anticipo cambió antes de completarse la cancelación, intenta de nuevo')
       // fase 3: await reverseAdvance(tx, { advance: current, userId: req.user?.sub })
       return tx.employeeAdvance.findUnique({ where: { id: current.id }, include: ADVANCE_INCLUDE })
     }, TX_OPTIONS)
