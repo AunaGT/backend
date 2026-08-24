@@ -25,14 +25,15 @@
 
 const { prismaTransaction } = require('../models/prisma')
 const { requireCompany } = require('../middlewares/tenant')
-const { fail } = require('./hrEmployees.controller')
+const { fail, toUuid } = require('./hrEmployees.controller')
 const { RUN_INCLUDE, TX_OPTIONS } = require('./payroll.controller')
 
 /** Lee la corrida de la empresa del request o falla con 404. */
 async function loadRun(tx, req) {
   const companyId = requireCompany(req)
+  const id = toUuid(req.params.id, 'Planilla no encontrada')
   const run = await tx.payrollRun.findFirst({
-    where: { id: req.params.id, company_id: companyId },
+    where: { id, company_id: companyId },
     include: { payslips: { include: { lines: true } } },
   })
   if (!run) fail(404, 'Planilla no encontrada')
@@ -57,13 +58,22 @@ exports.confirm = async (req, res, next) => {
       for (const slip of run.payslips) {
         for (const line of slip.lines) {
           if (line.concept !== 'ANTICIPO' || !line.advance_id) continue
-          const advance = await tx.employeeAdvance.update({
-            where: { id: line.advance_id },
+          // Reclamo atómico también sobre el anticipo: el importe quedó congelado al
+          // generar el borrador, y entre eso y ahora otra planilla pudo descontar su
+          // cuota o RRHH pudo cancelar el anticipo. Sin el `gte` el saldo se iría a
+          // negativo y el clamp de abajo lo taparía cobrándole dos veces al empleado.
+          const claim = await tx.employeeAdvance.updateMany({
+            where: { id: line.advance_id, status: 'PENDIENTE', balance: { gte: line.amount } },
             data: { balance: { decrement: line.amount } },
           })
-          if (Number(advance.balance) <= 0) {
-            await tx.employeeAdvance.update({ where: { id: advance.id }, data: { balance: 0, status: 'PAGADO' } })
+          if (claim.count !== 1) {
+            fail(409, 'El anticipo cambió desde que se generó la planilla; recalcula la planilla antes de confirmarla')
           }
+          // El saldo ya no puede quedar negativo: solo hay que marcar el que llegó a cero.
+          await tx.employeeAdvance.updateMany({
+            where: { id: line.advance_id, balance: 0, status: 'PENDIENTE' },
+            data: { status: 'PAGADO' },
+          })
         }
       }
 

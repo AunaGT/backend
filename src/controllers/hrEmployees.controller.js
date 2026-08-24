@@ -61,6 +61,15 @@ function toEnum(value, allowed, message) {
   return raw
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Un id mal formado se trata como no encontrado: nunca debe llegar a Prisma y volver como 500. */
+function toUuid(value, message) {
+  const raw = value == null ? '' : String(value).trim()
+  if (!UUID_RE.test(raw)) fail(404, message)
+  return raw
+}
+
 const EMPLOYEE_INCLUDE = {
   branch: { select: { id: true, name: true, code: true } },
   user: { select: { id: true, name: true, email: true } },
@@ -244,6 +253,7 @@ module.exports.toDate = toDate
 module.exports.toMoney = toMoney
 module.exports.trim = trim
 module.exports.toEnum = toEnum
+module.exports.toUuid = toUuid
 module.exports.CONTRACT_TYPES = CONTRACT_TYPES
 module.exports.PAY_FREQUENCIES = PAY_FREQUENCIES
 module.exports.EMPLOYEE_STATUSES = EMPLOYEE_STATUSES

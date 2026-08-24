@@ -16,7 +16,7 @@
 
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
-const { fail, toDate, trim, toEnum } = require('./hrEmployees.controller')
+const { fail, toDate, trim, toEnum, toUuid } = require('./hrEmployees.controller')
 const { getPayrollRates } = require('../services/payroll/rates')
 const { buildPayslip } = require('../services/payroll/build')
 const { round2 } = require('../services/payroll/calc')
@@ -242,8 +242,9 @@ exports.list = async (req, res, next) => {
 exports.getById = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
+    const id = toUuid(req.params.id, 'Planilla no encontrada')
     const run = await prisma.payrollRun.findFirst({
-      where: { id: req.params.id, company_id: companyId },
+      where: { id, company_id: companyId },
       include: RUN_INCLUDE,
     })
     if (!run) fail(404, 'Planilla no encontrada')
@@ -255,8 +256,10 @@ exports.getById = async (req, res, next) => {
 exports.getPayslip = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
+    const runId = toUuid(req.params.id, 'Recibo no encontrado')
+    const payslipId = toUuid(req.params.payslipId, 'Recibo no encontrado')
     const payslip = await prisma.payslip.findFirst({
-      where: { id: req.params.payslipId, run_id: req.params.id, run: { company_id: companyId } },
+      where: { id: payslipId, run_id: runId, run: { company_id: companyId } },
       include: {
         employee: true,
         lines: { orderBy: { sort_order: 'asc' } },
@@ -322,8 +325,9 @@ exports.recalculate = async (req, res, next) => {
     const companyId = requireCompany(req)
     const overrides = (req.body?.overtime && typeof req.body.overtime === 'object') ? req.body.overtime : {}
 
+    const id = toUuid(req.params.id, 'Planilla no encontrada')
     const updated = await prismaTransaction.$transaction(async (tx) => {
-      const run = await tx.payrollRun.findFirst({ where: { id: req.params.id, company_id: companyId } })
+      const run = await tx.payrollRun.findFirst({ where: { id, company_id: companyId } })
       if (!run) fail(404, 'Planilla no encontrada')
       if (run.status !== 'BORRADOR') fail(409, 'Solo se puede recalcular una planilla en borrador')
       await generatePayslips(tx, run, overrides)
@@ -338,7 +342,8 @@ exports.recalculate = async (req, res, next) => {
 exports.remove = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
-    const run = await prisma.payrollRun.findFirst({ where: { id: req.params.id, company_id: companyId } })
+    const id = toUuid(req.params.id, 'Planilla no encontrada')
+    const run = await prisma.payrollRun.findFirst({ where: { id, company_id: companyId } })
     if (!run) fail(404, 'Planilla no encontrada')
     if (run.status !== 'BORRADOR') fail(409, 'Solo se puede eliminar una planilla en borrador')
     // Reclamo atómico: si alguien la confirmó entre la lectura y el borrado, no se borra.
