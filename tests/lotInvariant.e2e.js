@@ -53,6 +53,14 @@ async function main() {
   assert(await traced(locationId, product.id) === 6, 'automatic lot is also six')
 
   await prisma.productLot.deleteMany({ where: { product_id: product.id, location_id: locationId } })
+  const [branchStock, productStock, movementCount] = await Promise.all([
+    prisma.productStock.findUnique({
+      where: { product_id_branch_id: { product_id: product.id, branch_id: branch.id } },
+      select: { stock: true },
+    }),
+    prisma.product.findUnique({ where: { id: product.id }, select: { stock: true } }),
+    prisma.stockMovement.count({ where: { product_id: product.id } }),
+  ])
   let rejected = null
   try {
     await prisma.$transaction((tx) => deductStockMap(
@@ -64,6 +72,14 @@ async function main() {
   }
   assert(rejected?.code === 'LOT_STOCK_MISMATCH', 'missing lots reject the physical deduction')
   assert(await physical(locationId, product.id) === 6, 'failed lot deduction leaves physical stock unchanged')
+  assert((await prisma.productStock.findUnique({
+    where: { product_id_branch_id: { product_id: product.id, branch_id: branch.id } },
+    select: { stock: true },
+  })).stock === branchStock.stock, 'failed lot deduction leaves branch stock unchanged')
+  assert((await prisma.product.findUnique({ where: { id: product.id }, select: { stock: true } })).stock === productStock.stock,
+    'failed lot deduction leaves product stock unchanged')
+  assert(await prisma.stockMovement.count({ where: { product_id: product.id } }) === movementCount,
+    'failed lot deduction leaves no stock movement')
 }
 
 main()
