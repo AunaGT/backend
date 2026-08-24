@@ -36,6 +36,13 @@ function validateControlledLot(product, lotCode, expiryDate) {
   }
 }
 
+function lotReconciliation(physicalQty, tracedQty) {
+  const physical = Number(physicalQty) || 0
+  const traced = Number(tracedQty) || 0
+  const difference = physical - traced
+  return { physical, traced, difference, consistent: difference === 0 }
+}
+
 /**
  * Reparte una cantidad a consumir entre lotes ya ordenados FEFO.
  * Pura (testeable): no toca la BD.
@@ -351,6 +358,6 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 module.exports = {
   planConsume, planConsumeStrict, planRestore, fefoSort,
   createAutomaticLots, consumeLotsForLocations,
-  generateLotCode, validateControlledLot, recreateLotsFromSnapshot,
+  generateLotCode, validateControlledLot, lotReconciliation, recreateLotsFromSnapshot,
   syncLotExpiryAlerts,
 }

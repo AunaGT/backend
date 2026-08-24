@@ -76,6 +76,18 @@ async function main() {
     branchId: branch.id, fromLocationId: destinationId, toLocationId: locationId,
     lines: [{ product_id: product.id, qty: 2 }],
   }))
+  const productsController = require('../src/controllers/products.controller')
+  let lotsResponse = null
+  await productsController.getLots(
+    { params: { id: product.id }, branchId: branch.id, companyId: company.id },
+    { json: (body) => { lotsResponse = body } },
+    (error) => { throw error },
+  )
+  assert(JSON.stringify(lotsResponse.reconciliation) === JSON.stringify({
+    physical: 6, traced: 6, difference: 0, consistent: true,
+  }), 'lot API returns exact physical/traced reconciliation')
+  assert(lotsResponse.lots.every((lot) => lot.location?.code && lot.location?.warehouse?.code),
+    'lot API includes location and warehouse codes')
 
   await prisma.productLot.deleteMany({ where: { product_id: product.id, location_id: locationId } })
   const [branchStock, productStock, movementCount] = await Promise.all([

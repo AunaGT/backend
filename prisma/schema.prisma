@@ -588,16 +588,14 @@ model Product {
   @@map("products")
 }
 
-/// Lote de producto con caducidad. Capa advisory: `Product.stock` sigue siendo la
-/// verdad para vender; los lotes se descuentan FEFO en segundo plano (trazabilidad + alertas).
+/// Partida trazable de producto; su existencia debe cuadrar con la ubicación física.
 model ProductLot {
   id                      String    @id @default(uuid()) @db.Uuid
   product_id              String    @db.Uuid
   product                 Product   @relation(fields: [product_id], references: [id])
   branch_id               String    @db.Uuid
   branch                  Branch    @relation(fields: [branch_id], references: [id], onDelete: Restrict)
-  /// Anaquel donde está el lote. Null = sin ubicación conocida (lote heredado):
-  /// sigue contando para caducidad y puede despachar desde cualquiera.
+  /// Anaquel donde está el lote. Null solo puede existir en datos históricos pendientes de reconciliar.
   location_id             String?   @db.Uuid
   location                StockLocation? @relation(fields: [location_id], references: [id], onDelete: SetNull)
   /// Nº de lote del proveedor (opcional)
@@ -605,7 +603,7 @@ model ProductLot {
   /// Obligatoria vía API si product.tracks_expiry
   expiry_date             DateTime? @db.Date
   qty_received            Int
-  /// Restante según consumo FEFO; advisory, se reconcilia por reporte
+  /// Restante según consumo FEFO estricto en su ubicación.
   qty_remaining           Int
   is_system_generated     Boolean   @default(false)
   unit_cost               Decimal?  @db.Decimal(12, 2)

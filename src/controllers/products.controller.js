@@ -204,7 +204,7 @@ const {
   restoreStockMap,
   deductStockMap,
 } = require('../services/bomStock')
-const { generateLotCode, syncLotExpiryAlerts, validateControlledLot } = require('../services/lots')
+const { generateLotCode, syncLotExpiryAlerts, validateControlledLot, lotReconciliation } = require('../services/lots')
 
 // Inicializar cliente de Supabase con service role key (solo para backend)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -1212,15 +1212,37 @@ exports.critical = async (req, res, next) => {
 exports.getLots = async (req, res, next) => {
   try {
     const { id } = req.params
-    const lots = await prisma.productLot.findMany({
-      where: {
-        product_id: id,
-        qty_remaining: { gt: 0 },
-        ...(req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }),
-      },
-      orderBy: [{ expiry_date: { sort: 'asc', nulls: 'last' } }, { received_at: 'asc' }],
+    const branchScope = req.branchId
+      ? { branch_id: req.branchId }
+      : { branch: { company_id: req.companyId } }
+    const locationScope = req.branchId
+      ? { warehouse: { branch_id: req.branchId } }
+      : { warehouse: { branch: { company_id: req.companyId } } }
+    const [lots, physicalRow] = await Promise.all([
+      prisma.productLot.findMany({
+        where: { product_id: id, qty_remaining: { gt: 0 }, ...branchScope },
+        include: {
+          location: {
+            select: {
+              id: true, code: true, name: true,
+              warehouse: { select: { id: true, code: true, name: true } },
+            },
+          },
+        },
+        orderBy: [{ expiry_date: { sort: 'asc', nulls: 'last' } }, { received_at: 'asc' }],
+      }),
+      prisma.productStockLocation.aggregate({
+        where: { product_id: id, location: locationScope },
+        _sum: { stock: true },
+      }),
+    ])
+    res.json({
+      lots,
+      reconciliation: lotReconciliation(
+        physicalRow._sum.stock,
+        lots.reduce((sum, lot) => sum + Number(lot.qty_remaining), 0),
+      ),
     })
-    res.json({ lots })
   } catch (e) { next(e) }
 }
 

@@ -5,8 +5,15 @@ const path = require('path')
 const {
   planConsume, planConsumeStrict, planRestore, fefoSort,
   createAutomaticLots, consumeLotsForLocations, recreateLotsFromSnapshot,
-  validateControlledLot,
+  validateControlledLot, lotReconciliation,
 } = require('../src/services/lots')
+
+assert.deepStrictEqual(lotReconciliation(20, 20), {
+  physical: 20, traced: 20, difference: 0, consistent: true,
+})
+assert.deepStrictEqual(lotReconciliation(20, 9), {
+  physical: 20, traced: 9, difference: 11, consistent: false,
+})
 
 assert.throws(
   () => validateControlledLot({ name: 'Leche', tracks_expiry: true }, '', '2026-12-31'),
