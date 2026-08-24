@@ -1582,6 +1582,11 @@ enum JournalSourceType {
   /// Ajustes de inventario: manuales, diferencias de conteo y bajas de lote.
   /// Va al final: ADD VALUE lo agrega ahí y el orden del enum es el de la base.
   STOCK_ADJUSTMENT
+  /// Nómina: devengo de la planilla al confirmarla, su pago, y los anticipos.
+  /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
+  PAYROLL
+  PAYROLL_PAYMENT
+  PAYROLL_ADVANCE
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.

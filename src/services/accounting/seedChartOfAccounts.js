@@ -21,10 +21,15 @@ const ACCOUNTS_SEED = [
   { code: '1103', name: 'Clientes', type: 'ASSET', parent: '1' },
   { code: '1104', name: 'IVA Crédito Fiscal', type: 'ASSET', parent: '1', system: true },
   { code: '1105', name: 'Inventario de Mercaderías', type: 'ASSET', parent: '1', system: true },
+  { code: '1106', name: 'Anticipos a Empleados', type: 'ASSET', parent: '1', system: true },
   { code: '2', name: 'PASIVO', type: 'LIABILITY', is_group: true },
   { code: '2101', name: 'Proveedores', type: 'LIABILITY', parent: '2', system: true },
   { code: '2102', name: 'IVA Débito Fiscal', type: 'LIABILITY', parent: '2', system: true },
   { code: '2103', name: 'IVA Pequeño Contribuyente por Pagar', type: 'LIABILITY', parent: '2', system: true },
+  { code: '2104', name: 'IGSS por Pagar', type: 'LIABILITY', parent: '2', system: true },
+  { code: '2105', name: 'ISR Retenido por Pagar', type: 'LIABILITY', parent: '2', system: true },
+  { code: '2106', name: 'Provisiones Laborales por Pagar', type: 'LIABILITY', parent: '2', system: true },
+  { code: '2107', name: 'Sueldos por Pagar', type: 'LIABILITY', parent: '2', system: true },
   { code: '3', name: 'CAPITAL', type: 'EQUITY', is_group: true },
   { code: '3101', name: 'Capital', type: 'EQUITY', parent: '3' },
   { code: '3201', name: 'Utilidades Acumuladas', type: 'EQUITY', parent: '3', system: true },
@@ -40,6 +45,9 @@ const ACCOUNTS_SEED = [
   { code: '6103', name: 'Servicios (agua, luz, internet)', type: 'EXPENSE', parent: '6' },
   { code: '6104', name: 'Otros Gastos', type: 'EXPENSE', parent: '6' },
   { code: '6105', name: 'IVA Pequeño Contribuyente (5%)', type: 'EXPENSE', parent: '6', system: true },
+  { code: '6106', name: 'Bonificación Incentivo', type: 'EXPENSE', parent: '6', system: true },
+  { code: '6107', name: 'Cuota Patronal (IGSS/IRTRA/INTECAP)', type: 'EXPENSE', parent: '6', system: true },
+  { code: '6108', name: 'Provisiones Laborales', type: 'EXPENSE', parent: '6', system: true },
 ]
 
 const DEFAULT_ACCOUNT_CODES = {
@@ -48,6 +56,19 @@ const DEFAULT_ACCOUNT_CODES = {
   ivaDebit: '2102', ivaCredit: '1104',
   pequenoTax: '2103', pequenoTaxExpense: '6105',
   currentEarnings: '3202', retainedEarnings: '3201',
+  // Nómina. Van en este mismo mapeo (el seed hace merge, así que agregarlas es
+  // aditivo), pero las resuelve getPayrollAccounts, NO getDefaultAccounts: si
+  // entraran en DEFAULT_ACCOUNT_KEYS, una empresa sin ellas dejaría de postear
+  // ventas y compras.
+  payrollAdvances: '1106',
+  payrollIgssPayable: '2104',
+  payrollIsrPayable: '2105',
+  payrollProvisionsPayable: '2106',
+  payrollWagesPayable: '2107',
+  payrollWagesExpense: '6101',
+  payrollBonificacion: '6106',
+  payrollEmployerCost: '6107',
+  payrollProvisionsExpense: '6108',
 }
 
 /** Crea el catálogo de cuentas y el mapeo por defecto de una empresa; nunca pisa cuentas ya remapeadas. */
