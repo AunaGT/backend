@@ -8,6 +8,8 @@
  * Correr: node scripts/seed-payroll-accounts.js
  */
 
+// El .env no se carga solo cuando esto corre con `node` (index.js sí lo hace).
+require('dotenv/config')
 const { prisma } = require('../src/models/prisma')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 
