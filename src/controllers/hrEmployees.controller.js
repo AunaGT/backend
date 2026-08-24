@@ -75,6 +75,63 @@ const EMPLOYEE_INCLUDE = {
   user: { select: { id: true, name: true, email: true } },
 }
 
+/**
+ * Valida el usuario a vincular y devuelve su id (o null para desvincular).
+ * Tres cosas que la columna sola no garantiza: que el usuario exista, que sea de
+ * esta empresa, y que no esté ya tomado por otro empleado. El @unique de la base
+ * atrapa la tercera, pero como un P2002 que el llamador confunde con el choque de
+ * código — así que acá se revisa antes y se dice de quién es el conflicto.
+ */
+async function resolveUserLink(db, companyId, raw, { excludeEmployeeId = null } = {}) {
+  if (raw == null || String(raw).trim() === '') return null
+  const userId = toUuid(raw, 'El usuario seleccionado no es válido')
+
+  const user = await db.user.findFirst({
+    where: { id: userId, user_companies: { some: { company_id: companyId } } },
+    select: { id: true, name: true },
+  })
+  if (!user) fail(404, 'El usuario no existe o no pertenece a esta empresa')
+
+  const taken = await db.employee.findFirst({
+    where: { user_id: userId, ...(excludeEmployeeId ? { id: { not: excludeEmployeeId } } : {}) },
+    select: { first_name: true, last_name: true, code: true },
+  })
+  if (taken) {
+    fail(409, `Ese usuario ya está vinculado a ${taken.first_name} ${taken.last_name} (${taken.code})`)
+  }
+  return userId
+}
+
+/**
+ * GET /api/hr/employees/linkable-users — usuarios de la empresa que todavía no
+ * tienen empleado. Con ?employee_id= incluye además el que ese empleado ya tiene,
+ * para que el selector pueda mostrar su valor actual.
+ */
+exports.linkableUsers = async (req, res, next) => {
+  try {
+    const companyId = requireCompany(req)
+    const current = req.query.employee_id
+      ? await prisma.employee.findFirst({
+          where: { id: toUuid(req.query.employee_id, 'Empleado no encontrado'), company_id: companyId },
+          select: { user_id: true },
+        })
+      : null
+
+    const users = await prisma.user.findMany({
+      where: {
+        user_companies: { some: { company_id: companyId } },
+        OR: [
+          { employee_record: { is: null } },
+          ...(current?.user_id ? [{ id: current.user_id }] : []),
+        ],
+      },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    })
+    res.json({ items: users })
+  } catch (e) { next(e) }
+}
+
 /** Correlativo EMP-0001 por empresa. Reintenta el llamador si choca el unique. */
 async function nextEmployeeCode(tx, companyId) {
   const last = await tx.employee.findFirst({
@@ -164,7 +221,7 @@ exports.create = async (req, res, next) => {
       base_salary: toMoney(b.base_salary, 'El sueldo base', { required: true }),
       bonificacion_incentivo: toMoney(b.bonificacion_incentivo, 'La bonificación incentivo') ?? 250,
       bank_account: trim(b.bank_account, 50),
-      user_id: b.user_id ? String(b.user_id) : null,
+      user_id: await resolveUserLink(prisma, companyId, b.user_id),
     }
 
     // Correlativo con reintento: dos altas simultáneas pueden leer el mismo último código.
@@ -175,6 +232,10 @@ exports.create = async (req, res, next) => {
         created = await prisma.employee.create({ data: { ...data, code }, include: EMPLOYEE_INCLUDE })
       } catch (err) {
         if (err.code !== 'P2002') throw err
+        // user_id también es @unique: sin distinguir, un usuario ya tomado agotaba
+        // los tres intentos y salía como «no se pudo asignar un código».
+        const campos = err.meta?.target || []
+        if (String(campos).includes('user_id')) fail(409, 'Ese usuario ya está vinculado a otro empleado')
         if (trim(b.code, 20)) fail(409, `Ya existe un empleado con el código ${code}`)
       }
     }
@@ -219,7 +280,9 @@ exports.update = async (req, res, next) => {
     if (b.bonificacion_incentivo !== undefined) setIf('bonificacion_incentivo', toMoney(b.bonificacion_incentivo, 'La bonificación incentivo', { required: true }))
     if (b.bank_account !== undefined) setIf('bank_account', trim(b.bank_account, 50))
     if (b.status !== undefined) setIf('status', toEnum(b.status, EMPLOYEE_STATUSES, 'El estado del empleado no es válido'))
-    if (b.user_id !== undefined) setIf('user_id', b.user_id ? String(b.user_id) : null)
+    if (b.user_id !== undefined) {
+      setIf('user_id', await resolveUserLink(prisma, companyId, b.user_id, { excludeEmployeeId: current.id }))
+    }
     if (b.branch_id !== undefined) setIf('branch_id', targetBranch(req, b.branch_id))
 
     const updated = await prisma.employee.update({

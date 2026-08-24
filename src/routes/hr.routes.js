@@ -17,6 +17,8 @@ const Advances = require('../controllers/hrAdvances.controller')
 
 // Empleados
 router.get('/employees', Auth, hasPermission('hr.employees.view'), Employees.list)
+// Antes de /employees/:id, si no 'linkable-users' se lee como un id.
+router.get('/employees/linkable-users', Auth, hasPermission('hr.employees.view'), Employees.linkableUsers)
 router.post('/employees', Auth, hasPermission('hr.employees.create'), Employees.create)
 router.get('/employees/:id', Auth, hasPermission('hr.employees.view'), Employees.getById)
 router.put('/employees/:id', Auth, hasPermission('hr.employees.edit'), Employees.update)
