@@ -63,7 +63,12 @@ function planConsumeStrict(lots, qty, context = {}) {
 }
 
 async function createAutomaticLots(tx, branchId, locationDeltas, context = {}) {
-  const client = tx || prisma
+  if (!tx?.productLot || typeof tx.productLot.create !== 'function') {
+    const err = new Error('createAutomaticLots requiere un cliente de transacción')
+    err.code = 'LOT_TRANSACTION_REQUIRED'
+    throw err
+  }
+  const client = tx
   return Promise.all(locationDeltas
     .filter(({ qty }) => Number(qty) > 0)
     .map(({ product_id, location_id, qty }) => client.productLot.create({

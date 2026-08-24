@@ -1,5 +1,7 @@
 // Self-check de la lógica FEFO pura (sin BD). Correr: node tests/lots.selfcheck.js
 const assert = require('assert')
+const fs = require('fs')
+const path = require('path')
 const {
   planConsume, planConsumeStrict, planRestore, fefoSort,
   createAutomaticLots, consumeLotsForLocations,
@@ -41,6 +43,13 @@ assert.deepStrictEqual(
   [{ lotId: 'a', take: 2 }, { lotId: 'b', take: 2 }]
 )
 
+const migrationSql = fs.readFileSync(path.join(__dirname, '../prisma/migrations/20260824120000_strict_lot_traceability/migration.sql'), 'utf8')
+const locationlessPreflight = migrationSql.indexOf('WHERE location_id IS NULL AND qty_remaining > 0')
+const locationlessRemediation = migrationSql.indexOf('Assign each legacy supplier lot to its physical stock location, then retry.')
+const genericOverTracedGuard = migrationSql.indexOf('traced stock exceeds physical stock')
+assert(locationlessPreflight >= 0 && locationlessRemediation >= 0, 'locationless lots have a dedicated remediation preflight')
+assert(locationlessPreflight < genericOverTracedGuard && locationlessRemediation < genericOverTracedGuard, 'locationless-lot preflight runs before generic traced-stock guard')
+
 // planRestore: devuelve al lote con espacio, más nuevos primero (inverso del consumo)
 const consumed = [
   { id: 'x', expiry_date: '2026-07-10', received_at: '2026-01-01', qty_received: 10, qty_remaining: 0 },
@@ -69,6 +78,12 @@ async function strictLocationHelpersSelfCheck() {
     product_id: 'p', branch_id: 'branch', location_id: 'l', qty_received: 2, qty_remaining: 2, is_system_generated: true,
   }])
   assert.match(created[0].lot_code, /^AUTO-/)
+
+  await assert.rejects(
+    () => createAutomaticLots(null, 'branch', []),
+    (error) => error.code === 'LOT_TRANSACTION_REQUIRED',
+    'automatic lot creation requires a transaction client before work'
+  )
 
   const updates = []
   const consumed = await consumeLotsForLocations({
