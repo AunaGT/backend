@@ -490,6 +490,7 @@ async function clearBranchLocations(tx, productId, branchId) {
 
 module.exports = {
   defaultLocationId,
+  salesLocationId,
   assertBranchLocations,
   dispatchedByRef,
   planDispatch,
