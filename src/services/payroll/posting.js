@@ -38,30 +38,52 @@ function totalOf(run, concepts) {
 /**
  * Devengo de la planilla, al confirmarla.
  *
- *   Debe  6101 Sueldos y Salarios        ordinario + extras + aguinaldo/bono14
+ *   Debe  6101 Sueldos y Salarios        ordinario + extras + otros devengos
  *   Debe  6106 Bonificación Incentivo
  *   Debe  6107 Cuota Patronal            IGSS patronal + IRTRA + INTECAP
  *   Debe  6108 Provisiones Laborales
- *     Haber 2104 IGSS por Pagar          laboral + patronal + IRTRA + INTECAP
+ *   Debe  2106 Provisiones por Pagar     aguinaldo/bono 14 con cargo a la provisión
+ *     Haber 2104 IGSS por Pagar          laboral y patronal (IRTRA/INTECAP incluidos), en líneas separadas
  *     Haber 2105 ISR Retenido por Pagar
- *     Haber 2106 Provisiones por Pagar
+ *     Haber 2106 Provisiones por Pagar   provisión mensual (aguinaldo/bono14/vacaciones/indemnización)
  *     Haber 1106 Anticipos a Empleados   recuperación de las cuotas
  *     Haber 2107 Sueldos por Pagar       neto
  *
+ * AGUINALDO y BONO14 no van a 6101: ya se reconocieron como gasto mes a mes vía
+ * 6108/2106 en las corridas ordinarias. Pagarlos debita la provisión (2106) en
+ * vez de volver a debitar sueldos, o el gasto se contaría dos veces. `buildPayslip`
+ * solo emite esos conceptos en corridas no ordinarias, así que `sueldos` y
+ * `bonosAnuales` nunca son ambos distintos de cero en la misma corrida.
+ *
  * IRTRA e INTECAP se acreditan en 2104 porque se recaudan en la misma planilla
- * del IGSS: separarlos obligaría a dos cuentas más que se liquidan juntas.
+ * del IGSS: separarlos obligaría a dos cuentas más que se liquidan juntas. Se
+ * postean en línea aparte de la retención laboral para no perder el desglose
+ * que pide el informe mensual del IGSS.
  */
 async function postPayrollRun(tx, { run, userId }) {
+  // Red de seguridad: build.js ya limita las cuotas de anticipo al neto disponible,
+  // pero esto atrapa cualquier otra deducción futura (p.ej. OTRA_DEDUCCION) que deje
+  // un recibo en negativo antes de que llegue a romper el balance del asiento.
+  const negativo = run.payslips.find((p) => Number(p.net_pay) < 0)
+  if (negativo) {
+    const nombre = negativo.employee ? `${negativo.employee.first_name} ${negativo.employee.last_name}` : null
+    const e = new Error(nombre
+      ? `El recibo de ${nombre} queda en negativo: las deducciones superan lo devengado. Revisá sus anticipos.`
+      : 'Un recibo de la planilla queda en negativo: las deducciones superan lo devengado. Revisá sus anticipos.')
+    e.status = 422
+    throw e
+  }
+
   const acc = await getPayrollAccounts(tx, run.company_id)
 
-  const sueldos = totalOf(run, ['SUELDO_ORDINARIO', 'HORAS_EXTRA', 'AGUINALDO', 'BONO14', 'OTRO_DEVENGO'])
+  const sueldos = totalOf(run, ['SUELDO_ORDINARIO', 'HORAS_EXTRA', 'OTRO_DEVENGO'])
+  const bonosAnuales = totalOf(run, ['AGUINALDO', 'BONO14'])
   const bonificacion = totalOf(run, ['BONIFICACION_INCENTIVO'])
   const patronal = totalOf(run, ['IGSS_PATRONAL', 'IRTRA', 'INTECAP'])
   const provisiones = totalOf(run, ['PROVISION_AGUINALDO', 'PROVISION_BONO14', 'PROVISION_VACACIONES', 'PROVISION_INDEMNIZACION'])
   const igssLaboral = totalOf(run, ['IGSS_LABORAL'])
   const isr = totalOf(run, ['ISR_RETENIDO'])
   const anticipos = totalOf(run, ['ANTICIPO'])
-  const otrasDeducciones = totalOf(run, ['OTRA_DEDUCCION'])
   const neto = round2(run.payslips.reduce((s, p) => s + Number(p.net_pay), 0))
 
   const lines = []
@@ -76,20 +98,21 @@ async function postPayrollRun(tx, { run, userId }) {
   add(acc.payrollBonificacion, bonificacion, 0, 'Bonificación incentivo')
   add(acc.payrollEmployerCost, patronal, 0, 'Cuota patronal IGSS/IRTRA/INTECAP')
   add(acc.payrollProvisionsExpense, provisiones, 0, 'Provisiones laborales')
-  add(acc.payrollIgssPayable, 0, round2(igssLaboral + patronal), 'IGSS por pagar')
+  add(acc.payrollProvisionsPayable, bonosAnuales, 0, 'Aguinaldo/bono 14 con cargo a provisión')
+  add(acc.payrollIgssPayable, 0, igssLaboral, 'IGSS laboral retenido')
+  add(acc.payrollIgssPayable, 0, patronal, 'IGSS/IRTRA/INTECAP patronal')
   add(acc.payrollIsrPayable, 0, isr, 'ISR retenido por pagar')
   add(acc.payrollProvisionsPayable, 0, provisiones, 'Provisiones por pagar')
   add(acc.payrollAdvances, 0, anticipos, 'Recuperación de anticipos')
-  // Las «otras deducciones» todavía no tienen cuenta propia: van contra sueldos
-  // por pagar, que es donde ya está el neto.
-  add(acc.payrollWagesPayable, 0, round2(neto + otrasDeducciones), 'Sueldos por pagar')
+  add(acc.payrollWagesPayable, 0, neto, 'Sueldos por pagar')
 
   if (lines.length === 0) return null
 
   return createEntry(tx, {
     company_id: run.company_id,
     branch_id: run.branch_id,
-    date: run.pay_date,
+    // String plano: así entra por la rama de toEntryDate que corrige a mediodía-Guatemala en vez de quedarse en medianoche UTC.
+    date: run.pay_date.toISOString().slice(0, 10),
     description: `Planilla ${run.code} — ${run.name}`,
     source_type: 'PAYROLL',
     source_id: run.id,
@@ -111,7 +134,7 @@ async function postPayrollPayment(tx, { run, userId }) {
   return createEntry(tx, {
     company_id: run.company_id,
     branch_id: run.branch_id,
-    date: run.pay_date,
+    date: run.pay_date.toISOString().slice(0, 10),
     description: `Pago de planilla ${run.code}`,
     source_type: 'PAYROLL_PAYMENT',
     source_id: run.id,
@@ -170,8 +193,8 @@ async function postAdvance(tx, { advance, userId }) {
   return createEntry(tx, {
     company_id: advance.company_id,
     branch_id: advance.branch_id,
-    date: advance.date,
-    description: 'Anticipo de sueldo a empleado',
+    date: advance.date.toISOString().slice(0, 10),
+    description: `Anticipo de sueldo — ${advance.employee ? `${advance.employee.first_name} ${advance.employee.last_name}` : 'empleado'}`,
     source_type: 'PAYROLL_ADVANCE',
     source_id: advance.id,
     created_by: userId || null,

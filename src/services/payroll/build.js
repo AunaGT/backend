@@ -83,9 +83,19 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
     }, rates)
     push('ISR_RETENIDO', 'DEDUCCION', 'ISR retenido', isr)
 
+    // La cuota no puede comerse más de lo que el empleado devengó neto hasta acá
+    // (devengos menos IGSS laboral e ISR, las únicas deducciones que van antes):
+    // si el saldo no alcanza, se amortiza más lento en vez de dejar el recibo en negativo.
+    let disponible = round2(
+      lines.filter((l) => l.type === 'DEVENGO').reduce((s, l) => s + l.amount, 0) -
+      lines.filter((l) => l.type === 'DEDUCCION').reduce((s, l) => s + l.amount, 0)
+    )
     for (const advance of advances) {
-      const cuota = Math.min(round2(advance.installment), round2(advance.balance))
+      if (disponible <= 0) break
+      const cuota = Math.min(round2(advance.installment), round2(advance.balance), disponible)
+      if (cuota <= 0) continue
       push('ANTICIPO', 'DEDUCCION', 'Cuota de anticipo', cuota, { advance_id: advance.id })
+      disponible = round2(disponible - cuota)
     }
 
     const employer = employerCost(igss_base, rates)
