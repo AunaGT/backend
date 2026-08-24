@@ -20,6 +20,7 @@ const { requireBranch } = require('../middlewares/tenant')
 const { moveBetweenLocations, replenishmentSuggestions } = require('../services/stockLocations')
 const { deductStockMap, restoreStockMap } = require('../services/bomStock')
 const { ensureStockAlertsBatch } = require('../services/stockAlerts')
+const { validateControlledLot } = require('../services/lots')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías.
 const TX_OPTIONS = { maxWait: 10000, timeout: 20000 }
@@ -98,7 +99,11 @@ exports.createAdjustment = async (req, res, next) => {
     if (!location_id) return res.status(400).json({ message: 'location_id es obligatorio' })
 
     const rows = (lines || [])
-      .map((l) => ({ product_id: String(l.product_id || ''), qty: Math.floor(Number(l.qty || 0)) }))
+      .map((l) => ({
+        product_id: String(l.product_id || ''), qty: Math.floor(Number(l.qty || 0)),
+        lot_code: l.lot_code != null ? String(l.lot_code).trim().slice(0, 60) : '',
+        expiry_date: l.expiry_date || '',
+      }))
       .filter((l) => l.product_id && l.qty !== 0)
     if (rows.length === 0) {
       return res.status(400).json({ message: 'Indica al menos un producto con una diferencia distinta de 0' })
@@ -122,9 +127,37 @@ exports.createAdjustment = async (req, res, next) => {
     }
     const updated = await prismaTransaction.$transaction(async (tx) => {
       const out = []
-      const ups = new Map(rows.filter((r) => r.qty > 0).map((r) => [r.product_id, r.qty]))
+      const positiveRows = rows.filter((row) => row.qty > 0)
+      const products = await tx.product.findMany({
+        where: { id: { in: positiveRows.map((row) => row.product_id) }, company_id: req.companyId, deleted: false },
+        select: { id: true, name: true, tracks_expiry: true, cost: true },
+      })
+      const productsById = new Map(products.map((product) => [String(product.id), product]))
+      if (products.length !== new Set(positiveRows.map((row) => row.product_id)).size) {
+        const error = new Error('Uno de los productos no existe en esta empresa')
+        error.status = 400
+        throw error
+      }
+      for (const row of positiveRows) {
+        const product = productsById.get(row.product_id)
+        validateControlledLot(product, row.lot_code, row.expiry_date)
+        const explicit = Boolean(row.lot_code || row.expiry_date)
+        out.push(...await restoreStockMap(tx, new Map([[row.product_id, row.qty]]), branchId, {
+          ...ctx, lotsManagedExternally: explicit,
+        }))
+        if (explicit) {
+          await tx.productLot.create({
+            data: {
+              product_id: row.product_id, branch_id: branchId, location_id: owned.id,
+              lot_code: row.lot_code || null,
+              expiry_date: row.expiry_date ? new Date(row.expiry_date) : null,
+              qty_received: row.qty, qty_remaining: row.qty,
+              unit_cost: product.cost,
+            },
+          })
+        }
+      }
       const downs = new Map(rows.filter((r) => r.qty < 0).map((r) => [r.product_id, -r.qty]))
-      if (ups.size) out.push(...await restoreStockMap(tx, ups, branchId, ctx))
       if (downs.size) out.push(...await deductStockMap(tx, downs, branchId, ctx))
       await ensureStockAlertsBatch(tx, out, branchId)
       return out

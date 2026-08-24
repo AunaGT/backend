@@ -204,7 +204,7 @@ const {
   restoreStockMap,
   deductStockMap,
 } = require('../services/bomStock')
-const { generateLotCode, syncLotExpiryAlerts } = require('../services/lots')
+const { generateLotCode, syncLotExpiryAlerts, validateControlledLot } = require('../services/lots')
 
 // Inicializar cliente de Supabase con service role key (solo para backend)
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -1653,15 +1653,10 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         }
       }
 
-      // Productos que controlan caducidad exigen expiry_date en su item
+      // Productos controlados exigen identidad de proveedor y caducidad.
       for (const item of items) {
         const product = products.find(p => p.id === item.product_id)
-        const hasExpiry = item.expiry_date != null && item.expiry_date !== ''
-        if (product?.tracks_expiry && !hasExpiry) {
-          const err = new Error(`El producto "${product.name}" controla caducidad: expiry_date es requerida`)
-          err.status = 400
-          throw err
-        }
+        validateControlledLot(product, item.lot_code, item.expiry_date)
       }
 
       // Create incoming merchandise audit record

@@ -22,6 +22,20 @@ function generateLotCode(date = new Date()) {
   return `L-${y}${m}${d}-${suffix}`
 }
 
+function validateControlledLot(product, lotCode, expiryDate) {
+  if (!product?.tracks_expiry) return
+  if (!String(lotCode || '').trim()) {
+    const err = new Error(`"${product.name}" requiere numero de lote`)
+    err.status = 400
+    throw err
+  }
+  if (expiryDate == null || expiryDate === '') {
+    const err = new Error(`"${product.name}" requiere fecha de caducidad`)
+    err.status = 400
+    throw err
+  }
+}
+
 /**
  * Reparte una cantidad a consumir entre lotes ya ordenados FEFO.
  * Pura (testeable): no toca la BD.
@@ -337,6 +351,6 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 module.exports = {
   planConsume, planConsumeStrict, planRestore, fefoSort,
   createAutomaticLots, consumeLotsForLocations,
-  generateLotCode, recreateLotsFromSnapshot,
+  generateLotCode, validateControlledLot, recreateLotsFromSnapshot,
   syncLotExpiryAlerts,
 }

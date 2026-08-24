@@ -5,7 +5,23 @@ const path = require('path')
 const {
   planConsume, planConsumeStrict, planRestore, fefoSort,
   createAutomaticLots, consumeLotsForLocations, recreateLotsFromSnapshot,
+  validateControlledLot,
 } = require('../src/services/lots')
+
+assert.throws(
+  () => validateControlledLot({ name: 'Leche', tracks_expiry: true }, '', '2026-12-31'),
+  (error) => error.status === 400 && error.message === '"Leche" requiere numero de lote',
+  'controlled products require supplier lot code'
+)
+assert.throws(
+  () => validateControlledLot({ name: 'Leche', tracks_expiry: true }, 'L-1', ''),
+  (error) => error.status === 400 && error.message === '"Leche" requiere fecha de caducidad',
+  'controlled products require expiry date'
+)
+assert.doesNotThrow(
+  () => validateControlledLot({ name: 'Arroz', tracks_expiry: false }, '', ''),
+  'ordinary products keep both fields optional'
+)
 
 // fefoSort: caducidad más próxima primero, sin fecha al final, desempate por recepción
 const lots = [
