@@ -81,11 +81,16 @@ async function createAutomaticLots(tx, branchId, locationDeltas, context = {}) {
 }
 
 async function consumeLotsForLocations(tx, branchId, locationDeltas) {
-  const client = tx || prisma
+  if (!tx?.productLot || typeof tx.productLot.findMany !== 'function' || typeof tx.productLot.update !== 'function') {
+    const err = new Error('consumeLotsForLocations requiere un cliente de transacción')
+    err.code = 'LOT_TRANSACTION_REQUIRED'
+    throw err
+  }
+  const client = tx
   const deltas = locationDeltas.filter(({ qty }) => Number(qty) > 0)
   const consumed = new Map()
-  if (deltas.length === 0) return consumed
   if (!branchId) throw new Error('consumeLotsForLocations requiere branchId')
+  if (deltas.length === 0) return consumed
 
   const lots = await client.productLot.findMany({
     where: {
@@ -101,18 +106,27 @@ async function consumeLotsForLocations(tx, branchId, locationDeltas) {
     },
   })
 
+  const availableLots = lots.map((lot) => ({ ...lot }))
+  const lotsById = new Map(lots.map((lot) => [lot.id, lot]))
+  const plans = []
   for (const { product_id, location_id, qty } of deltas) {
-    const locationLots = lots
+    const locationLots = availableLots
       .filter((lot) => lot.product_id === product_id && lot.location_id === location_id)
       .sort(fefoSort)
     const plan = planConsumeStrict(locationLots, qty, { productId: product_id, locationId: location_id })
+    for (const { lotId, take } of plan) {
+      locationLots.find(({ id }) => id === lotId).qty_remaining -= take
+    }
+    plans.push({ product_id, plan })
+  }
+
+  for (const { product_id, plan } of plans) {
     for (const { lotId, take } of plan) {
       await client.productLot.update({
         where: { id: lotId },
         data: { qty_remaining: { decrement: take } },
       })
-      const lot = locationLots.find(({ id }) => id === lotId)
-      lot.qty_remaining -= take
+      const lot = lotsById.get(lotId)
       if (!consumed.has(product_id)) consumed.set(product_id, [])
       consumed.get(product_id).push({
         lot_code: lot.lot_code,

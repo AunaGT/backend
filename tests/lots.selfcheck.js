@@ -87,6 +87,30 @@ async function strictLocationHelpersSelfCheck() {
   assert.deepStrictEqual(consumed.get('p').map(({ lot_code, qty }) => ({ lot_code, qty })), [
     { lot_code: 'A', qty: 2 }, { lot_code: 'B', qty: 1 },
   ])
+
+  const shortfallUpdates = []
+  await assert.rejects(
+    () => consumeLotsForLocations({
+      productLot: {
+        findMany: async () => [
+          { id: 'only', product_id: 'p', location_id: 'first', qty_remaining: 1, expiry_date: null, received_at: new Date('2026-01-01'), lot_code: 'A', unit_cost: null, supplier_id: null, is_system_generated: false },
+        ],
+        update: async ({ where, data }) => shortfallUpdates.push({ where, data }),
+      },
+    }, 'branch', [
+      { product_id: 'p', location_id: 'first', qty: 1 },
+      { product_id: 'p', location_id: 'missing', qty: 1 },
+    ]),
+    (error) => error.code === 'LOT_STOCK_MISMATCH',
+    'strict shortfall rejects before any lot update'
+  )
+  assert.deepStrictEqual(shortfallUpdates, [], 'strict shortfall leaves all lots unchanged')
+
+  await assert.rejects(
+    () => consumeLotsForLocations(null, 'branch', []),
+    (error) => error.code === 'LOT_TRANSACTION_REQUIRED',
+    'location consumption requires a transaction client before work'
+  )
 }
 
 strictLocationHelpersSelfCheck()

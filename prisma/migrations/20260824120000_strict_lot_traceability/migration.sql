@@ -5,9 +5,18 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1
+    FROM "public"."product_lots"
+    WHERE location_id IS NULL AND qty_remaining > 0
+  ) THEN
+    RAISE EXCEPTION 'Cannot enable strict lot traceability: positive lots without a location. Assign each legacy supplier lot to its physical stock location, then retry.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
     FROM (
       SELECT product_id, branch_id, location_id, SUM(qty_remaining) AS traced
       FROM "public"."product_lots"
+      WHERE location_id IS NOT NULL
       GROUP BY product_id, branch_id, location_id
     ) traced
     LEFT JOIN (
@@ -43,6 +52,7 @@ BEGIN
   LEFT JOIN (
     SELECT product_id, branch_id, location_id, SUM(qty_remaining) AS traced
     FROM "public"."product_lots"
+    WHERE location_id IS NOT NULL
     GROUP BY product_id, branch_id, location_id
   ) traced
     ON traced.product_id = physical.product_id
@@ -55,6 +65,7 @@ BEGIN
     FROM (
       SELECT product_id, branch_id, location_id, SUM(qty_remaining) AS traced
       FROM "public"."product_lots"
+      WHERE location_id IS NOT NULL
       GROUP BY product_id, branch_id, location_id
     ) traced
     FULL JOIN (
