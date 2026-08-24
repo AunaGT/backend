@@ -170,7 +170,8 @@ async function stockMapToLines(stockMap) {
  * (para alertas de mínimo por sucursal).
  *
  * `ctx` describe la operación para el libro por ubicación
- * ({ reason, refType, refId, userId, locationId }); ver services/stockLocations.js.
+ * ({ reason, refType, refId, userId, locationId, lotsManagedExternally,
+ * lotSnapshots }); ver services/stockLocations.js.
  */
 async function applyStockDelta(tx, stockMap, branchId, sign, ctx = {}) {
   const client = dbClient(tx)

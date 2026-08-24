@@ -12,6 +12,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { requireBranchId } = require('./stockAvailability')
+const { createAutomaticLots, consumeLotsForLocations } = require('./lots')
 
 /** Orden de despacho: almacén, luego ubicación, luego código (desempate estable). */
 const DISPATCH_ORDER = Prisma.sql`w.dispatch_priority, l.dispatch_priority, l.code`
@@ -322,7 +323,22 @@ async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
       qty: Number(qty),
     }))
   }
-  return applyLocationDeltas(tx, deltas, { ...ctx, branchId: b, negativosPermitidos })
+  const locationRows = await applyLocationDeltas(tx, deltas, { ...ctx, branchId: b, negativosPermitidos })
+  if (!ctx.lotsManagedExternally) {
+    if (sign > 0) {
+      await createAutomaticLots(tx, b, locationRows)
+    } else {
+      const consumed = await consumeLotsForLocations(tx, b, locationRows.map((row) => ({
+        product_id: String(row.product_id), location_id: String(row.location_id), qty: -Number(row.qty),
+      })))
+      if (ctx.lotSnapshots) {
+        for (const [productId, snapshot] of consumed) {
+          ctx.lotSnapshots.set(productId, [...(ctx.lotSnapshots.get(productId) || []), ...snapshot])
+        }
+      }
+    }
+  }
+  return locationRows
 }
 
 /**
