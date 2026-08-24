@@ -15,7 +15,7 @@
  */
 
 const { prisma, prismaTransaction } = require('../models/prisma')
-const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
+const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../middlewares/tenant')
 const { fail, toDate, trim, toEnum, toUuid } = require('./hrEmployees.controller')
 const { getPayrollRates } = require('../services/payroll/rates')
 const { buildPayslip } = require('../services/payroll/build')
@@ -244,7 +244,8 @@ exports.getById = async (req, res, next) => {
     const companyId = requireCompany(req)
     const id = toUuid(req.params.id, 'Planilla no encontrada')
     const run = await prisma.payrollRun.findFirst({
-      where: { id, company_id: companyId },
+      // branchWhere y no requireBranch: la consolidada es lectura legítima.
+      where: { id, company_id: companyId, ...branchWhere(req) },
       include: RUN_INCLUDE,
     })
     if (!run) fail(404, 'Planilla no encontrada')
@@ -259,7 +260,7 @@ exports.getPayslip = async (req, res, next) => {
     const runId = toUuid(req.params.id, 'Recibo no encontrado')
     const payslipId = toUuid(req.params.payslipId, 'Recibo no encontrado')
     const payslip = await prisma.payslip.findFirst({
-      where: { id: payslipId, run_id: runId, run: { company_id: companyId } },
+      where: { id: payslipId, run_id: runId, run: { company_id: companyId, ...branchWhere(req) } },
       include: {
         employee: true,
         lines: { orderBy: { sort_order: 'asc' } },
@@ -327,7 +328,11 @@ exports.recalculate = async (req, res, next) => {
 
     const id = toUuid(req.params.id, 'Planilla no encontrada')
     const updated = await prismaTransaction.$transaction(async (tx) => {
-      const run = await tx.payrollRun.findFirst({ where: { id, company_id: companyId } })
+      // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+      // sucursal es aparte (UserBranch).
+      const run = await tx.payrollRun.findFirst({
+        where: { id, company_id: companyId, branch_id: requireBranch(req) },
+      })
       if (!run) fail(404, 'Planilla no encontrada')
       if (run.status !== 'BORRADOR') fail(409, 'Solo se puede recalcular una planilla en borrador')
       await generatePayslips(tx, run, overrides)
@@ -343,7 +348,11 @@ exports.remove = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
     const id = toUuid(req.params.id, 'Planilla no encontrada')
-    const run = await prisma.payrollRun.findFirst({ where: { id, company_id: companyId } })
+    // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+    // sucursal es aparte (UserBranch).
+    const run = await prisma.payrollRun.findFirst({
+      where: { id, company_id: companyId, branch_id: requireBranch(req) },
+    })
     if (!run) fail(404, 'Planilla no encontrada')
     if (run.status !== 'BORRADOR') fail(409, 'Solo se puede eliminar una planilla en borrador')
     // Reclamo atómico: si alguien la confirmó entre la lectura y el borrado, no se borra.

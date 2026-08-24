@@ -14,7 +14,7 @@
  */
 
 const { prisma } = require('../models/prisma')
-const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
+const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../middlewares/tenant')
 
 /** Error de negocio con status HTTP; lo traduce el error handler global. */
 function fail(status, message) {
@@ -127,7 +127,8 @@ exports.getById = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
     const employee = await prisma.employee.findFirst({
-      where: { id: req.params.id, company_id: companyId },
+      // branchWhere y no requireBranch: la consolidada es lectura legítima.
+      where: { id: req.params.id, company_id: companyId, ...branchWhere(req) },
       include: EMPLOYEE_INCLUDE,
     })
     if (!employee) fail(404, 'Empleado no encontrado')
@@ -188,7 +189,12 @@ exports.update = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
     const b = req.body || {}
-    const current = await prisma.employee.findFirst({ where: { id: req.params.id, company_id: companyId } })
+    // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+    // sucursal es aparte (UserBranch), así que sin esto alguien reasignado a otra
+    // sucursal seguiría pudiendo tocar registros de la anterior.
+    const current = await prisma.employee.findFirst({
+      where: { id: req.params.id, company_id: companyId, branch_id: requireBranch(req) },
+    })
     if (!current) fail(404, 'Empleado no encontrado')
 
     const data = {}
@@ -232,7 +238,12 @@ exports.update = async (req, res, next) => {
 exports.remove = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
-    const current = await prisma.employee.findFirst({ where: { id: req.params.id, company_id: companyId } })
+    // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+    // sucursal es aparte (UserBranch), así que sin esto alguien reasignado a otra
+    // sucursal seguiría pudiendo tocar registros de la anterior.
+    const current = await prisma.employee.findFirst({
+      where: { id: req.params.id, company_id: companyId, branch_id: requireBranch(req) },
+    })
     if (!current) fail(404, 'Empleado no encontrado')
     if (current.status === 'BAJA') fail(409, 'El empleado ya está dado de baja')
 

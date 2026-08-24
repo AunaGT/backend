@@ -15,7 +15,7 @@
  */
 
 const { prisma } = require('../models/prisma')
-const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
+const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../middlewares/tenant')
 const { fail, toDate, trim, toEnum } = require('./hrEmployees.controller')
 
 const ATTENDANCE_STATUSES = ['PRESENTE', 'TARDE', 'AUSENTE', 'VACACIONES', 'INCAPACIDAD', 'PERMISO', 'ASUETO']
@@ -170,7 +170,12 @@ exports.bulk = async (req, res, next) => {
 exports.remove = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
-    const current = await prisma.attendance.findFirst({ where: { id: req.params.id, company_id: companyId } })
+    // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+    // sucursal es aparte (UserBranch), así que sin esto alguien reasignado a otra
+    // sucursal seguiría pudiendo tocar registros de la anterior.
+    const current = await prisma.attendance.findFirst({
+      where: { id: req.params.id, company_id: companyId, branch_id: requireBranch(req) },
+    })
     if (!current) fail(404, 'Marca de asistencia no encontrada')
     await prisma.attendance.delete({ where: { id: current.id } })
     res.json({ ok: true })

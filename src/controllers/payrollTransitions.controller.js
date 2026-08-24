@@ -24,7 +24,7 @@
  */
 
 const { prismaTransaction } = require('../models/prisma')
-const { requireCompany } = require('../middlewares/tenant')
+const { requireCompany, requireBranch } = require('../middlewares/tenant')
 const { fail, toUuid } = require('./hrEmployees.controller')
 const { RUN_INCLUDE, TX_OPTIONS } = require('./payroll.controller')
 const { postPayrollRun, postPayrollPayment, reversePayrollRun } = require('../services/payroll/posting')
@@ -34,7 +34,10 @@ async function loadRun(tx, req) {
   const companyId = requireCompany(req)
   const id = toUuid(req.params.id, 'Planilla no encontrada')
   const run = await tx.payrollRun.findFirst({
-    where: { id, company_id: companyId },
+    // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
+    // sucursal es aparte (UserBranch), así que sin esto alguien reasignado a otra
+    // sucursal podría confirmar, pagar o anular planillas de la anterior.
+    where: { id, company_id: companyId, branch_id: requireBranch(req) },
     // employee: lo usa el 422 de postPayrollRun para nombrar a quién revisarle los anticipos.
     include: {
       payslips: {
