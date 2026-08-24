@@ -22,6 +22,16 @@ The existing `tracks_expiry` flag defines the input policy:
 
 An `is_system_generated` boolean on `ProductLot` identifies internal lots without relying on a code prefix.
 
+## User experience constraint
+
+Traceability must not add routine work for normal products:
+
+- Normal products keep the current short forms. Lot fields stay optional and the automatic internal lot is explained in one short helper message.
+- Products marked `tracks_expiry` reveal and require supplier lot plus expiry date at the point where stock is created.
+- Validation errors name the product and the missing field; the operator is never asked to understand reconciliation internals.
+- Reconciliation details live on the product detail page and reports, not in the normal POS flow.
+- POS continues to scan and sell normally; strict lot consumption happens in the transaction without extra cashier input.
+
 ## Stock transaction boundary
 
 The current defect exists because physical stock is updated by shared stock services while lot changes are attempted separately by controllers and intentionally swallow errors.
