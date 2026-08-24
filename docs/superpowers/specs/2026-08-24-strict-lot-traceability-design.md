@@ -43,7 +43,7 @@ The backend will provide strict tracked-stock operations in the shared inventory
 - Internal moves consume lots from the source location and recreate the same lot metadata in the destination location without changing branch totals.
 - Transfer dispatch returns the consumed lot snapshot; transfer receipt recreates that snapshot at the chosen destination.
 - Sale returns restore the lots consumed by the sale when that snapshot exists; legacy returns receive an automatic lot at the returned location.
-- Kit assembly consumes component lots and creates an automatic lot for assembled kit stock. Disassembly performs the inverse with automatic component lots when original component metadata is unavailable.
+- Existing kit assembly consumes component lots and creates an automatic lot for assembled kit stock.
 
 Every operation runs inside its existing Prisma transaction. A missing lot quantity raises `LOT_STOCK_MISMATCH` and rolls back physical stock, branch stock, company stock, accounting side effects, and lot changes together.
 
@@ -113,7 +113,7 @@ Required regression scenarios:
 2. A controlled product receipt rejects a missing supplier lot or expiry date.
 3. A positive manual adjustment creates an automatic lot in the adjusted location.
 4. A negative adjustment consumes FEFO lots in that location.
-5. A sale, return, internal move, transfer send/receive, inventory count, and kit operation preserve the location invariant.
+5. A sale, return, internal move, transfer send/receive, inventory count, and kit assembly preserve the location invariant.
 6. A forced lot shortfall aborts the entire stock transaction with `LOT_STOCK_MISMATCH`.
 7. The migration fills positive gaps and rejects negative gaps.
 8. The product API returns the reconciliation summary and locations.
