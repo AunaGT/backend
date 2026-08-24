@@ -35,7 +35,12 @@ async function loadRun(tx, req) {
   const id = toUuid(req.params.id, 'Planilla no encontrada')
   const run = await tx.payrollRun.findFirst({
     where: { id, company_id: companyId },
-    include: { payslips: { include: { lines: true } } },
+    // employee: lo usa el 422 de postPayrollRun para nombrar a quién revisarle los anticipos.
+    include: {
+      payslips: {
+        include: { lines: true, employee: { select: { first_name: true, last_name: true } } },
+      },
+    },
   })
   if (!run) fail(404, 'Planilla no encontrada')
   return run
