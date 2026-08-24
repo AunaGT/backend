@@ -202,7 +202,7 @@ async function main() {
   const account2106 = await prisma.account.findUnique({ where: { company_id_code: { company_id: company.id, code: '2106' } } })
   const account6101 = await prisma.account.findUnique({ where: { company_id_code: { company_id: company.id, code: '6101' } } })
   const line2106Debit = aguinaldoEntry && aguinaldoEntry.lines.find((l) => l.account_id === account2106.id && Number(l.debit) > 0)
-  assert(line2106Debit !== undefined && round2(Number(line2106Debit.debit)) === round2(Number(aguinaldoLine.amount)),
+  assert(line2106Debit != null && round2(Number(line2106Debit.debit)) === round2(Number(aguinaldoLine.amount)),
     `el aguinaldo debita la cuenta 2106 (provisión) por ${aguinaldoLine ? aguinaldoLine.amount : '?'}`)
   const line6101InEntry = aguinaldoEntry && aguinaldoEntry.lines.find((l) => l.account_id === account6101.id)
   assert(line6101InEntry === undefined, 'el aguinaldo NO debita la cuenta 6101 (sueldos y salarios)')
