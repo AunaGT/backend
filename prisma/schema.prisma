@@ -607,6 +607,7 @@ model ProductLot {
   qty_received            Int
   /// Restante según consumo FEFO; advisory, se reconcilia por reporte
   qty_remaining           Int
+  is_system_generated     Boolean   @default(false)
   unit_cost               Decimal?  @db.Decimal(12, 2)
   supplier_id             String?   @db.Uuid
   /// Ingreso de mercancía que originó el lote (auditoría)

@@ -47,6 +47,87 @@ function planConsume(lots, qty) {
   return plan
 }
 
+function planConsumeStrict(lots, qty, context = {}) {
+  const plan = planConsume(lots, qty)
+  const shortfall = (Number(qty) || 0) - plan.reduce((sum, { take }) => sum + take, 0)
+  if (shortfall > 0) {
+    const err = new Error(`Los lotes no cubren ${shortfall} unidad(es) del inventario físico`)
+    err.status = 409
+    err.code = 'LOT_STOCK_MISMATCH'
+    err.shortfall = shortfall
+    err.productId = context.productId || null
+    err.locationId = context.locationId || null
+    throw err
+  }
+  return plan
+}
+
+async function createAutomaticLots(tx, branchId, locationDeltas, context = {}) {
+  const client = tx || prisma
+  return Promise.all(locationDeltas
+    .filter(({ qty }) => Number(qty) > 0)
+    .map(({ product_id, location_id, qty }) => client.productLot.create({
+      data: {
+        product_id,
+        branch_id: branchId,
+        location_id,
+        lot_code: generateLotCode().replace('L-', 'AUTO-'),
+        qty_received: Number(qty),
+        qty_remaining: Number(qty),
+        unit_cost: context.unitCost ?? null,
+        is_system_generated: true,
+      },
+    })))
+}
+
+async function consumeLotsForLocations(tx, branchId, locationDeltas) {
+  const client = tx || prisma
+  const deltas = locationDeltas.filter(({ qty }) => Number(qty) > 0)
+  const consumed = new Map()
+  if (deltas.length === 0) return consumed
+  if (!branchId) throw new Error('consumeLotsForLocations requiere branchId')
+
+  const lots = await client.productLot.findMany({
+    where: {
+      branch_id: branchId,
+      product_id: { in: [...new Set(deltas.map(({ product_id }) => product_id))] },
+      location_id: { in: [...new Set(deltas.map(({ location_id }) => location_id))] },
+      qty_remaining: { gt: 0 },
+    },
+    select: {
+      id: true, product_id: true, location_id: true, qty_remaining: true,
+      expiry_date: true, received_at: true, lot_code: true, unit_cost: true,
+      supplier_id: true, is_system_generated: true,
+    },
+  })
+
+  for (const { product_id, location_id, qty } of deltas) {
+    const locationLots = lots
+      .filter((lot) => lot.product_id === product_id && lot.location_id === location_id)
+      .sort(fefoSort)
+    const plan = planConsumeStrict(locationLots, qty, { productId: product_id, locationId: location_id })
+    for (const { lotId, take } of plan) {
+      await client.productLot.update({
+        where: { id: lotId },
+        data: { qty_remaining: { decrement: take } },
+      })
+      const lot = locationLots.find(({ id }) => id === lotId)
+      lot.qty_remaining -= take
+      if (!consumed.has(product_id)) consumed.set(product_id, [])
+      consumed.get(product_id).push({
+        lot_code: lot.lot_code,
+        expiry_date: lot.expiry_date ? new Date(lot.expiry_date).toISOString().slice(0, 10) : null,
+        unit_cost: lot.unit_cost != null ? Number(lot.unit_cost) : null,
+        supplier_id: lot.supplier_id,
+        location_id: lot.location_id,
+        is_system_generated: lot.is_system_generated,
+        qty: take,
+      })
+    }
+  }
+  return consumed
+}
+
 /**
  * Reparte una cantidad a devolver entre lotes con espacio (qty_received - qty_remaining),
  * más nuevos primero (caducidad más lejana), que es el inverso del consumo FEFO.
@@ -336,7 +417,9 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 }
 
 module.exports = {
-  planConsume, planRestore, fefoSort, consumeLotsFEFO, restoreLotsFEFO, generateLotCode,
+  planConsume, planConsumeStrict, planRestore, fefoSort,
+  createAutomaticLots, consumeLotsForLocations,
+  consumeLotsFEFO, restoreLotsFEFO, generateLotCode,
   recreateLotsFromSnapshot,
   syncLotExpiryAlerts,
 }
