@@ -1225,15 +1225,50 @@ exports.critical = async (req, res, next) => {
 exports.getLots = async (req, res, next) => {
   try {
     const { id } = req.params
+    const scope = req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }
     const lots = await prisma.productLot.findMany({
-      where: {
-        product_id: id,
-        qty_remaining: { gt: 0 },
-        ...(req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }),
+      where: { product_id: id, qty_remaining: { gt: 0 }, ...scope },
+      // La ubicación evita que tres lotes del mismo código parezcan duplicados.
+      include: {
+        location: {
+          select: { id: true, code: true, warehouse: { select: { id: true, name: true } } },
+        },
       },
       orderBy: [{ expiry_date: { sort: 'asc', nulls: 'last' } }, { received_at: 'asc' }],
     })
-    res.json({ lots })
+
+    // Reconciliación: la ficha mostraba las dos sumas por separado y el usuario
+    // tenía que restarlas de cabeza para descubrir que no cuadraban.
+    const product = await prisma.product.findFirst({
+      where: { id, company_id: req.companyId },
+      select: { tracks_expiry: true },
+    })
+    const stocks = await prisma.productStockLocation.findMany({
+      where: {
+        product_id: id,
+        location: {
+          warehouse: req.branchId
+            ? { branch_id: req.branchId }
+            : { branch: { company_id: req.companyId } },
+        },
+      },
+      select: { stock: true },
+    })
+    const physical = stocks.reduce((s, r) => s + Number(r.stock || 0), 0)
+    const lotted = lots.reduce((s, l) => s + Number(l.qty_remaining || 0), 0)
+
+    res.json({
+      lots,
+      reconciliation: {
+        physical,
+        lotted,
+        unlotted: physical - lotted,
+        tracks_expiry: Boolean(product?.tracks_expiry),
+        // Con tracks_expiry cualquier diferencia es un descuadre que hay que
+        // corregir; sin él, lo no lotificado es esperado y no es un error.
+        balanced: physical === lotted,
+      },
+    })
   } catch (e) { next(e) }
 }
 

@@ -910,7 +910,7 @@ exports.updateStatus = async (req, res, next) => {
           const updatedProducts = await restoreStockMap(tx, stockMap, saleBranchId, {
             reason: 'SALE_RETURN', refType: 'sale', refId: String(id), userId: req.user?.sub || null,
           })
-          await restoreLotsFEFO(tx, stockMap, saleBranchId) // advisory: devuelve cantidad a los lotes
+          await restoreLotsFEFO(tx, stockMap, saleBranchId) // devuelve cantidad a los lotes
 
           updatedProducts.forEach(p => {
             console.log(`[STOCK REVERT] ${p.name}: stock restaurado = ${p.stock}`)
