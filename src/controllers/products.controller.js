@@ -19,7 +19,7 @@ const { ensureStockAlert } = require('../services/stockAlerts')
 const { requireBranch, branchWhere } = require('../middlewares/tenant')
 const { ensureBranchStockRows } = require('../services/stockAvailability')
 const {
-  applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId,
+  applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId, salesLocationId,
 } = require('../services/stockLocations')
 
 /**
@@ -492,8 +492,14 @@ exports.assembleKit = async (req, res, next) => {
 }
 
 /**
- * GET /api/products/availability?ids=uuid1,uuid2
+ * GET /api/products/availability?ids=uuid1,uuid2[&scope=pos]
  * Stock físico, reservado y disponible (stock − reservas ACTIVE).
+ *
+ * Con `scope=pos` responde además el stock en la ubicación de venta de la
+ * sucursal: el punto de venta despacha de ahí, así que el total de la sucursal
+ * (que suma bodegas) le miente sobre lo que tiene a mano. Si la sucursal no
+ * tiene ubicación de venta configurada, `sales_location.configured` es false y
+ * la caja no debe vender hasta que alguien la configure.
  */
 exports.availability = async (req, res, next) => {
   try {
@@ -508,8 +514,15 @@ exports.availability = async (req, res, next) => {
     if (ids.length > 200) {
       return res.status(400).json({ message: 'Máximo 200 productos por consulta' })
     }
-    const availability = await getAvailabilityBatchWithKits(ids, null, requireBranch(req))
-    res.json({ availability })
+    const branchId = requireBranch(req)
+    const posScope = String(req.query.scope || '') === 'pos'
+    const locationId = posScope ? await salesLocationId(prisma, branchId) : null
+    const availability = await getAvailabilityBatchWithKits(ids, null, branchId, { locationId })
+    if (!posScope) return res.json({ availability })
+    res.json({
+      availability,
+      sales_location: { configured: Boolean(locationId), id: locationId },
+    })
   } catch (e) {
     next(e)
   }

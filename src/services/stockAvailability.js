@@ -100,7 +100,14 @@ async function getAvailability(productId, tx, branchId) {
   return { stock, reserved, available: Math.max(0, stock - reserved) }
 }
 
-async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchId } = {}) {
+/**
+ * Disponibilidad por producto en la sucursal.
+ * @param {string|null} locationId si viene, cada entrada trae además
+ *   `location_stock`: lo que hay en ESA ubicación. El punto de venta lo usa para
+ *   mostrar lo que tiene a mano en vez del total de la sucursal, que suma
+ *   almacenes desde los que no despacha directo.
+ */
+async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchId, locationId = null } = {}) {
   const client = tx || prisma
   const b = requireBranchId(branchId)
   const ids = [...new Set(productIds.filter(Boolean))]
@@ -132,11 +139,30 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
     reservedMap.set(row.product_id, (reservedMap.get(row.product_id) || 0) + Number(row.qty || 0))
   }
 
+  const locationMap = new Map()
+  if (locationId) {
+    const rows = await client.productStockLocation.findMany({
+      where: { product_id: { in: ids }, location_id: String(locationId) },
+      select: { product_id: true, stock: true },
+    })
+    for (const row of rows) locationMap.set(row.product_id, Number(row.stock || 0))
+  }
+
   const out = {}
   for (const p of products) {
     const stock = Number(p.branch_stocks[0]?.stock || 0)
     const reserved = reservedMap.get(p.id) || 0
-    out[p.id] = { stock, reserved, available: Math.max(0, stock - reserved) }
+    const entry = { stock, reserved, available: Math.max(0, stock - reserved) }
+    if (locationId) {
+      // Sin fila en la ubicación son 0, no "desconocido": el producto existe en
+      // la sucursal pero no está en el anaquel de venta.
+      const atLocation = locationMap.get(p.id) || 0
+      // Las reservas son de sucursal, no de ubicación: descontarlas enteras acá
+      // subestimaría. El tope real es lo que hay a mano y lo vendible en total.
+      entry.location_stock = atLocation
+      entry.location_available = Math.min(atLocation, entry.available)
+    }
+    out[p.id] = entry
   }
   return out
 }
