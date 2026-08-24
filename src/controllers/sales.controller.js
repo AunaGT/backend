@@ -13,8 +13,6 @@ const { Prisma } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../utils/getTimezone')
 const { ensureStockAlertsBatch } = require('../services/stockAlerts')
-const { consumeLotsFEFO, restoreLotsFEFO } = require('../services/lots')
-const { dispatchedByRef } = require('../services/stockLocations')
 const { salesOperationLimiter } = require('../utils/concurrencyLimiter')
 const {
   assertPartyAction,
@@ -724,8 +722,6 @@ exports.create = async (req, res, next) => {
         groupId: require('crypto').randomUUID(),
       }
       const updatedProducts = await deductStockMap(tx, stockMap, branchId, saleStockCtx)
-      // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
-      await consumeLotsFEFO(tx, stockMap, branchId, await dispatchedByRef(tx, { groupId: saleStockCtx.groupId }))
       await ensureStockAlertsBatch(tx, updatedProducts, branchId)
 
       // 3) Guardar promociones con descuento efectivo e incrementar solo esos códigos
@@ -882,8 +878,6 @@ exports.updateStatus = async (req, res, next) => {
             groupId: require('crypto').randomUUID(),
           }
           const updatedProducts = await deductStockMap(tx, stockMap, saleBranchId, stockCtx)
-          // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
-          await consumeLotsFEFO(tx, stockMap, saleBranchId, await dispatchedByRef(tx, { groupId: stockCtx.groupId }))
 
           updatedProducts.forEach(p => {
             console.log(`[STOCK ADJUSTMENT] ${p.name}: nuevo stock = ${p.stock}`)
@@ -910,7 +904,6 @@ exports.updateStatus = async (req, res, next) => {
           const updatedProducts = await restoreStockMap(tx, stockMap, saleBranchId, {
             reason: 'SALE_RETURN', refType: 'sale', refId: String(id), userId: req.user?.sub || null,
           })
-          await restoreLotsFEFO(tx, stockMap, saleBranchId) // advisory: devuelve cantidad a los lotes
 
           updatedProducts.forEach(p => {
             console.log(`[STOCK REVERT] ${p.name}: stock restaurado = ${p.stock}`)

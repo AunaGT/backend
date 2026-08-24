@@ -12,7 +12,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { requireBranchId } = require('./stockAvailability')
-const { createAutomaticLots, consumeLotsForLocations } = require('./lots')
+const { createAutomaticLots, consumeLotsForLocations, recreateLotsFromSnapshot } = require('./lots')
 
 /** Orden de despacho: almacén, luego ubicación, luego código (desempate estable). */
 const DISPATCH_ORDER = Prisma.sql`w.dispatch_priority, l.dispatch_priority, l.code`
@@ -415,17 +415,18 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
     branchId: b, reason: 'INTERNAL_MOVE', refType: 'internal_move', groupId, userId, notes,
   })
 
-  // Los lotes se mudan con la mercancía: salen FEFO del origen y se recrean en
-  // el destino. Advisory (nunca lanza), igual que el resto de la capa de lotes.
-  const { consumeLotsFEFO, recreateLotsFromSnapshot } = require('./lots')
-  const stockMap = new Map(rows.map((l) => [l.product_id, l.qty]))
-  const byLocation = new Map(
-    rows.map((l) => [l.product_id, [{ location_id: String(fromLocationId), qty: l.qty }]])
-  )
-  const moved = await consumeLotsFEFO(tx, stockMap, b, byLocation)
+  // Los lotes se mudan con la mercancía dentro de la misma transacción.
+  const moved = await consumeLotsForLocations(tx, b, rows.map((line) => ({
+    product_id: line.product_id,
+    location_id: String(fromLocationId),
+    qty: line.qty,
+  })))
   for (const [productId, snapshot] of moved) {
-    const qty = snapshot.reduce((sum, s) => sum + Number(s.qty || 0), 0)
-    await recreateLotsFromSnapshot(tx, productId, b, snapshot, qty, String(toLocationId))
+    await recreateLotsFromSnapshot(
+      tx, productId, b, snapshot,
+      snapshot.reduce((sum, lot) => sum + Number(lot.qty || 0), 0),
+      String(toLocationId),
+    )
   }
   return groupId
 }

@@ -20,7 +20,7 @@ const { nextDocumentReference } = require('../services/referenceGenerator')
 const { deductStockMap, restoreStockMap, expandLinesToStockMap } = require('../services/bomStock')
 const { assertLinesAvailable } = require('../services/stockAvailability')
 const { ensureStockAlertsBatch } = require('../services/stockAlerts')
-const { consumeLotsFEFO, recreateLotsFromSnapshot } = require('../services/lots')
+const { recreateLotsFromSnapshot } = require('../services/lots')
 const { assertBranchLocations, dispatchedByRef, defaultLocationId } = require('../services/stockLocations')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías: sin esto
@@ -179,20 +179,15 @@ exports.create = async (req, res, next) => {
 
       // Sale del origen ahora; entra al destino al recibir
       const stockMap = await expandLinesToStockMap(tx, lines)
+      const lotSnapshots = new Map()
       const updated = await deductStockMap(tx, stockMap, fromBranchId, {
         reason: 'TRANSFER_OUT', refType: 'transfer', refId: String(transfer.id), userId: req.user.sub,
+        lotSnapshots,
       })
       await ensureStockAlertsBatch(tx, updated, fromBranchId)
 
-      // Los lotes viajan con la mercancía: salen del origen (FEFO dentro de la
-      // ubicación que despachó, según quedó en el libro) y se guardan en la
-      // línea para recrearlos en el destino al recibir.
-      const dispatched = await dispatchedByRef(tx, {
-        refType: 'transfer', refId: String(transfer.id), reason: 'TRANSFER_OUT',
-      })
-      const lotsByProduct = await consumeLotsFEFO(tx, stockMap, fromBranchId, dispatched)
       for (const line of transfer.lines) {
-        const snapshot = lotsByProduct.get(String(line.product_id))
+        const snapshot = lotSnapshots.get(String(line.product_id))
         if (snapshot?.length) {
           await tx.stockTransferLine.update({
             where: { id: line.id },
@@ -306,6 +301,7 @@ exports.receive = async (req, res, next) => {
         const updated = await restoreStockMap(tx, stockMap, branchId, {
           reason: 'TRANSFER_IN', refType: 'transfer', refId: String(transfer.id),
           userId: req.user?.sub || null, locationId: target || undefined,
+          lotsManagedExternally: true,
         })
         await ensureStockAlertsBatch(tx, updated, branchId)
       }
@@ -357,24 +353,36 @@ exports.cancel = async (req, res, next) => {
       const byLocation = new Map()
       for (const line of transfer.lines) {
         const productId = String(line.product_id)
+        const availableLots = (Array.isArray(line.lots_snapshot) ? line.lots_snapshot : [])
+          .map((lot) => ({ ...lot, qty: Number(lot.qty) || 0 }))
         const back = dispatched.get(productId)?.length
           ? dispatched.get(productId)
           : [{ location_id: '', qty: line.qty_sent }]
         for (const d of back) {
-          if (!byLocation.has(d.location_id)) byLocation.set(d.location_id, new Map())
-          const map = byLocation.get(d.location_id)
+          const target = d.location_id || await defaultLocationId(tx, transfer.from_branch_id, { receiving: true })
+          if (!byLocation.has(target)) byLocation.set(target, new Map())
+          const map = byLocation.get(target)
           map.set(productId, (map.get(productId) || 0) + d.qty)
+          let left = Number(d.qty)
+          const snapshot = []
+          for (const lot of availableLots) {
+            if (left <= 0) break
+            if (lot.qty <= 0 || (lot.location_id && lot.location_id !== target)) continue
+            const take = Math.min(left, lot.qty)
+            snapshot.push({ ...lot, qty: take })
+            lot.qty -= take
+            left -= take
+          }
+          await recreateLotsFromSnapshot(
+            tx, productId, transfer.from_branch_id, snapshot, Number(d.qty), target,
+          )
         }
-        // Los lotes que salieron vuelven al origen, cada uno a su anaquel (el
-        // snapshot ya trae de dónde salió).
-        await recreateLotsFromSnapshot(
-          tx, productId, transfer.from_branch_id, line.lots_snapshot, line.qty_sent,
-        )
       }
       for (const [locationId, stockMap] of byLocation) {
         const updated = await restoreStockMap(tx, stockMap, transfer.from_branch_id, {
           reason: 'TRANSFER_CANCEL', refType: 'transfer', refId: String(transfer.id),
           userId: req.user?.sub || null, locationId: locationId || undefined,
+          lotsManagedExternally: true,
         })
         await ensureStockAlertsBatch(tx, updated, transfer.from_branch_id)
       }

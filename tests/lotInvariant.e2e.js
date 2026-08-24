@@ -28,7 +28,7 @@ async function traced(locationId, productId) {
 
 async function main() {
   const { restoreStockMap, deductStockMap } = require('../src/services/bomStock')
-  const { defaultLocationId } = require('../src/services/stockLocations')
+  const { defaultLocationId, moveBetweenLocations } = require('../src/services/stockLocations')
   const suffix = `${Date.now()}${Math.floor(Math.random() * 1000)}`
   const stockStatus = await prisma.stockStatus.upsert({
     where: { name: 'Disponible' }, update: {}, create: { name: 'Disponible' },
@@ -51,6 +51,31 @@ async function main() {
   ))
   assert(await physical(locationId, product.id) === 6, 'physical stock is six')
   assert(await traced(locationId, product.id) === 6, 'automatic lot is also six')
+
+  const warehouse = await prisma.warehouse.create({
+    data: { branch_id: branch.id, name: 'Secondary', code: `S${suffix.slice(-8)}` },
+  })
+  const destinationId = (await prisma.stockLocation.create({
+    data: { warehouse_id: warehouse.id, code: 'SHELF' },
+  })).id
+  const originalLot = await prisma.productLot.findFirst({
+    where: { product_id: product.id, location_id: locationId }, select: { lot_code: true },
+  })
+  await prisma.$transaction((tx) => moveBetweenLocations(tx, {
+    branchId: branch.id, fromLocationId: locationId, toLocationId: destinationId,
+    lines: [{ product_id: product.id, qty: 2 }],
+  }))
+  assert(await physical(locationId, product.id) === 4 && await traced(locationId, product.id) === 4,
+    'internal move keeps source physical and traced stock equal')
+  assert(await physical(destinationId, product.id) === 2 && await traced(destinationId, product.id) === 2,
+    'internal move keeps destination physical and traced stock equal')
+  assert((await prisma.productLot.findFirst({
+    where: { product_id: product.id, location_id: destinationId }, select: { lot_code: true },
+  })).lot_code === originalLot.lot_code, 'internal move preserves lot code')
+  await prisma.$transaction((tx) => moveBetweenLocations(tx, {
+    branchId: branch.id, fromLocationId: destinationId, toLocationId: locationId,
+    lines: [{ product_id: product.id, qty: 2 }],
+  }))
 
   await prisma.productLot.deleteMany({ where: { product_id: product.id, location_id: locationId } })
   const [branchStock, productStock, movementCount] = await Promise.all([

@@ -53,7 +53,7 @@ async function main() {
   }
 
   const { deductStockMap, restoreStockMap } = require('../src/services/bomStock')
-  const { applyLocationDeltas, defaultLocationId } = require('../src/services/stockLocations')
+  const { applyLocationDeltas, defaultLocationId, moveBetweenLocations } = require('../src/services/stockLocations')
 
   console.log('\n== 1. La sucursal nace con su almacén y ubicación por defecto ==')
   const co = await prisma.company.create({ data: { name: 'Bodegas SA', code: `BOD${Date.now() % 100000}` } })
@@ -94,10 +94,10 @@ async function main() {
     data: { warehouse_id: sala.id, code: 'SALA-01', dispatch_priority: 5 },
   })
   // Movimiento interno: cambia las ubicaciones, no el total de la sucursal.
-  await prisma.$transaction((tx) => applyLocationDeltas(tx, [
-    { product_id: ron.id, location_id: generalId, qty: -4 },
-    { product_id: ron.id, location_id: salaLoc.id, qty: 4 },
-  ], { branchId: suc.id, reason: 'INTERNAL_MOVE' }))
+  await prisma.$transaction((tx) => moveBetweenLocations(tx, {
+    branchId: suc.id, fromLocationId: generalId, toLocationId: salaLoc.id,
+    lines: [{ product_id: ron.id, qty: 4 }],
+  }))
   const trasMover = await prisma.productStock.findUnique({
     where: { product_id_branch_id: { product_id: ron.id, branch_id: suc.id } },
   })
@@ -117,10 +117,10 @@ async function main() {
   const cuarentena = await prisma.stockLocation.create({
     data: { warehouse_id: sala.id, code: 'CUAR', pickable: false, dispatch_priority: 1 },
   })
-  await prisma.$transaction((tx) => applyLocationDeltas(tx, [
-    { product_id: ron.id, location_id: generalId, qty: -3 },
-    { product_id: ron.id, location_id: cuarentena.id, qty: 3 },
-  ], { branchId: suc.id, reason: 'INTERNAL_MOVE' }))
+  await prisma.$transaction((tx) => moveBetweenLocations(tx, {
+    branchId: suc.id, fromLocationId: generalId, toLocationId: cuarentena.id,
+    lines: [{ product_id: ron.id, qty: 3 }],
+  }))
   await prisma.$transaction((tx) => deductStockMap(tx, new Map([[ron.id, 2]]), suc.id, { reason: 'SALE' }))
   const trasCuarentena = await stockByLocation(suc.id, ron.id)
   assert(trasCuarentena.CUAR === 3, 'la cuarentena conservó sus 3 unidades')
@@ -445,8 +445,6 @@ async function main() {
     'y las unidades volvieron al anaquel del que salieron, no a la ubicación por defecto')
 
   console.log('\n== 14. Los lotes viven en una ubicación: primero el anaquel, después la caducidad ==')
-  const { consumeLotsFEFO } = require('../src/services/lots')
-  const { dispatchedByRef } = require('../src/services/stockLocations')
   const dias = (n) => new Date(Date.now() + n * 86400000)
   const cerveza = await prisma.product.create({
     data: {
@@ -454,18 +452,21 @@ async function main() {
       status_id: stockStatus.id, price: 20, cost: 10, stock: 0, min_stock: 1, tracks_expiry: true,
     },
   })
-  await prisma.$transaction((tx) => restoreStockMap(tx, new Map([[cerveza.id, 9]]), suc.id, { reason: 'PURCHASE' }))
-  // 5 al anaquel, sin tocar lotes (los coloco a mano para controlar dónde queda cada uno)
-  await prisma.$transaction((tx) => applyLocationDeltas(tx, [
-    { product_id: cerveza.id, location_id: generalId, qty: -5 },
-    { product_id: cerveza.id, location_id: salaLoc.id, qty: 5 },
-  ], { branchId: suc.id, reason: 'INTERNAL_MOVE' }))
-  await prisma.productLot.createMany({
-    data: [
-      { product_id: cerveza.id, branch_id: suc.id, location_id: generalId, lot_code: 'VIEJO', expiry_date: dias(5), qty_received: 4, qty_remaining: 4 },
-      { product_id: cerveza.id, branch_id: suc.id, location_id: salaLoc.id, lot_code: 'MEDIO', expiry_date: dias(10), qty_received: 2, qty_remaining: 2 },
-      { product_id: cerveza.id, branch_id: suc.id, location_id: salaLoc.id, lot_code: 'NUEVO', expiry_date: dias(60), qty_received: 3, qty_remaining: 3 },
-    ],
+  await prisma.$transaction(async (tx) => {
+    await restoreStockMap(tx, new Map([[cerveza.id, 9]]), suc.id, {
+      reason: 'PURCHASE', lotsManagedExternally: true,
+    })
+    await applyLocationDeltas(tx, [
+      { product_id: cerveza.id, location_id: generalId, qty: -5 },
+      { product_id: cerveza.id, location_id: salaLoc.id, qty: 5 },
+    ], { branchId: suc.id, reason: 'INTERNAL_MOVE' })
+    await tx.productLot.createMany({
+      data: [
+        { product_id: cerveza.id, branch_id: suc.id, location_id: generalId, lot_code: 'VIEJO', expiry_date: dias(5), qty_received: 4, qty_remaining: 4 },
+        { product_id: cerveza.id, branch_id: suc.id, location_id: salaLoc.id, lot_code: 'MEDIO', expiry_date: dias(10), qty_received: 2, qty_remaining: 2 },
+        { product_id: cerveza.id, branch_id: suc.id, location_id: salaLoc.id, lot_code: 'NUEVO', expiry_date: dias(60), qty_received: 3, qty_remaining: 3 },
+      ],
+    })
   })
 
   const lotesDe = async () => Object.fromEntries(
@@ -473,15 +474,10 @@ async function main() {
       .map((l) => [`${l.lot_code}@${l.location_id === salaLoc.id ? 'SALA-01' : 'GENERAL'}`, l.qty_remaining])
   )
 
-  await prisma.$transaction(async (tx) => {
-    const ctx = {
-      reason: 'SALE', refType: 'sale', refId: require('crypto').randomUUID(),
-      groupId: require('crypto').randomUUID(),
-    }
-    await deductStockMap(tx, new Map([[cerveza.id, 2]]), suc.id, ctx)
-    await consumeLotsFEFO(tx, new Map([[cerveza.id, 2]]), suc.id,
-      await dispatchedByRef(tx, { groupId: ctx.groupId }))
-  })
+  await prisma.$transaction((tx) => deductStockMap(tx, new Map([[cerveza.id, 2]]), suc.id, {
+    reason: 'SALE', refType: 'sale', refId: require('crypto').randomUUID(),
+    groupId: require('crypto').randomUUID(),
+  }))
   const trasVender = await lotesDe()
   assert(trasVender['VIEJO@GENERAL'] === 4,
     'el lote más próximo a vencer no se tocó: está en otro anaquel')

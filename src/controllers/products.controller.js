@@ -1241,6 +1241,11 @@ exports.updateLot = async (req, res, next) => {
         include: { product: { select: { id: true, stock: true, min_stock: true, tracks_expiry: true } } },
       })
       if (!lot) { const e = new Error('Lote no encontrado'); e.status = 404; throw e }
+      if (!lot.location_id) {
+        const e = new Error('Este lote histórico no tiene ubicación; reconcílialo antes de cambiar su cantidad')
+        e.status = 409
+        throw e
+      }
 
       const data = {}
       let expiryChanged = false
@@ -1260,7 +1265,10 @@ exports.updateLot = async (req, res, next) => {
         if (delta !== 0) {
           // Ajusta la sucursal del lote (y el espejo global) por la diferencia
           const map = new Map([[String(lot.product_id), Math.abs(delta)]])
-          const lotCtx = { reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId), userId: req.user?.sub || null }
+          const lotCtx = {
+            reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId),
+            userId: req.user?.sub || null, locationId: lot.location_id, lotsManagedExternally: true,
+          }
           const [row] = delta > 0
             ? await restoreStockMap(tx, map, lot.branch_id, lotCtx)
             : await deductStockMap(tx, map, lot.branch_id, lotCtx)
@@ -1304,11 +1312,17 @@ exports.deleteLot = async (req, res, next) => {
         include: { product: { select: { id: true, stock: true, min_stock: true } } },
       })
       if (!lot) { const e = new Error('Lote no encontrado'); e.status = 404; throw e }
+      if (!lot.location_id) {
+        const e = new Error('Este lote histórico no tiene ubicación; reconcílialo antes de eliminarlo')
+        e.status = 409
+        throw e
+      }
 
       if (lot.qty_remaining > 0) {
         const map = new Map([[String(lot.product_id), lot.qty_remaining]])
         const [row] = await deductStockMap(tx, map, lot.branch_id, {
-          reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId), userId: req.user?.sub || null,
+          reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId),
+          userId: req.user?.sub || null, locationId: lot.location_id, lotsManagedExternally: true,
         })
         if (row) await ensureStockAlert(tx, row.id, row.stock, row.min_stock, lot.branch_id)
       }
@@ -1343,6 +1357,11 @@ exports.writeOffLots = async (req, res, next) => {
       if (lots.length !== ids.length) {
         const e = new Error('Uno de los lotes no es de esta sucursal'); e.status = 404; throw e
       }
+      if (lots.some((lot) => !lot.location_id)) {
+        const e = new Error('Uno de los lotes históricos no tiene ubicación; reconcílialo antes de darlo de baja')
+        e.status = 409
+        throw e
+      }
       let units = 0
       for (const lot of lots) {
         if (lot.qty_remaining <= 0) continue
@@ -1351,9 +1370,8 @@ exports.writeOffLots = async (req, res, next) => {
           reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lot.id),
           userId: req.user?.sub || null,
           notes: `${reason} (lote ${lot.lot_code || 's/n'})`.slice(0, 300),
-          // Sale del anaquel donde estaba; si el lote no tenía ubicación, del
-          // reparto normal (`adjust` permite tocar las que no despachan).
-          ...(lot.location_id ? { locationId: lot.location_id } : { adjust: true }),
+          locationId: lot.location_id,
+          lotsManagedExternally: true,
         })
         if (row) await ensureStockAlert(tx, row.id, row.stock, row.min_stock, branchId)
         units += lot.qty_remaining
@@ -1700,6 +1718,9 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 
         const quantity = Number(item.quantity)
         const unitCost = Number(item.unit_cost)
+        const lotCodeInput = item.lot_code != null ? String(item.lot_code).trim().slice(0, 60) : ''
+        const hasExpiry = item.expiry_date != null && item.expiry_date !== ''
+        const hasExplicitLot = Boolean(hasExpiry || lotCodeInput)
 
         // Costo promedio ponderado, ANTES de sumar lo que entra: mezcla lo que
         // ya había al costo viejo con lo que llega al costo nuevo. Sin esto el
@@ -1713,6 +1734,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         const [updated] = await restoreStockMap(tx, new Map([[String(product.id), quantity]]), branchId, {
           reason: merchandiseSource, refType: 'incoming_merchandise', refId: String(incomingMerchandise.id),
           userId: registered_by, locationId: lotLocationId,
+          lotsManagedExternally: hasExplicitLot,
         })
         updatedProducts.push(updated)
 
@@ -1740,9 +1762,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         })
 
         // Lote con caducidad (trazabilidad). Solo si el item trae datos de lote.
-        const lotCodeInput = item.lot_code != null ? String(item.lot_code).trim().slice(0, 60) : ''
-        const hasExpiry = item.expiry_date != null && item.expiry_date !== ''
-        if (hasExpiry || lotCodeInput) {
+        if (hasExplicitLot) {
           // Sin código de lote ingresado: comparte el auto-generado de esta entrada.
           const lotCode = lotCodeInput || autoLotCode
           await tx.productLot.create({

@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const {
   planConsume, planConsumeStrict, planRestore, fefoSort,
-  createAutomaticLots, consumeLotsForLocations,
+  createAutomaticLots, consumeLotsForLocations, recreateLotsFromSnapshot,
 } = require('../src/services/lots')
 
 // fefoSort: caducidad más próxima primero, sin fecha al final, desempate por recepción
@@ -125,6 +125,24 @@ async function strictLocationHelpersSelfCheck() {
     () => consumeLotsForLocations(null, 'branch', []),
     (error) => error.code === 'LOT_TRANSACTION_REQUIRED',
     'location consumption requires a transaction client before work'
+  )
+
+  const recreated = []
+  await recreateLotsFromSnapshot({
+    productLot: { create: async ({ data }) => recreated.push(data) },
+  }, 'p', 'branch', [{ lot_code: 'SUP-1', expiry_date: '2026-12-31', qty: 2 }], 3, 'destination')
+  assert.deepStrictEqual(recreated.map(({ lot_code, location_id, qty_remaining, is_system_generated }) => ({
+    lot_code, location_id, qty_remaining, is_system_generated,
+  })), [
+    { lot_code: 'SUP-1', location_id: 'destination', qty_remaining: 2, is_system_generated: false },
+    { lot_code: recreated[1].lot_code, location_id: 'destination', qty_remaining: 1, is_system_generated: true },
+  ], 'transfer recreation preserves traced metadata and auto-fills only a legacy shortfall')
+  assert.match(recreated[1].lot_code, /^AUTO-/)
+
+  await assert.rejects(
+    () => recreateLotsFromSnapshot(null, 'p', 'branch', [], 1, 'destination'),
+    (error) => error.code === 'LOT_TRANSACTION_REQUIRED',
+    'snapshot recreation requires the caller transaction'
   )
 }
 

@@ -203,18 +203,27 @@ async function main() {
 
   // Los lotes viajan con la mercancía: salen del origen y se recrean en destino
   console.log('\n== 6b. Lotes en traslados ==')
-  const { consumeLotsFEFO, recreateLotsFromSnapshot } = require('../src/services/lots')
+  const { consumeLotsForLocations, recreateLotsFromSnapshot } = require('../src/services/lots')
+  const { defaultLocationId } = require('../src/services/stockLocations')
   const lotProd = await mk('Leche', acme, catA, supA, 'LECHE-1')
   await setStock(lotProd, acmeCentro, 20)
-  await prisma.productLot.createMany({
-    data: [
-      { product_id: lotProd.id, branch_id: acmeCentro.id, lot_code: 'L-VIEJO', expiry_date: new Date('2026-09-01'), qty_received: 8, qty_remaining: 8 },
-      { product_id: lotProd.id, branch_id: acmeCentro.id, lot_code: 'L-NUEVO', expiry_date: new Date('2026-12-01'), qty_received: 12, qty_remaining: 12 },
-    ],
+  const [centroLocation, norteLocation] = await prisma.$transaction(async (tx) => [
+    await defaultLocationId(tx, acmeCentro.id), await defaultLocationId(tx, acmeNorte.id),
+  ])
+  await prisma.$transaction(async (tx) => {
+    await tx.productLot.deleteMany({ where: { product_id: lotProd.id, branch_id: acmeCentro.id } })
+    await tx.productLot.createMany({
+      data: [
+        { product_id: lotProd.id, branch_id: acmeCentro.id, location_id: centroLocation, lot_code: 'L-VIEJO', expiry_date: new Date('2026-09-01'), qty_received: 8, qty_remaining: 8 },
+        { product_id: lotProd.id, branch_id: acmeCentro.id, location_id: centroLocation, lot_code: 'L-NUEVO', expiry_date: new Date('2026-12-01'), qty_received: 12, qty_remaining: 12 },
+      ],
+    })
   })
 
   const snapshot = await prisma.$transaction(async (tx) => {
-    const consumed = await consumeLotsFEFO(tx, new Map([[lotProd.id, 10]]), acmeCentro.id)
+    const consumed = await consumeLotsForLocations(tx, acmeCentro.id, [
+      { product_id: lotProd.id, location_id: centroLocation, qty: 10 },
+    ])
     return consumed.get(lotProd.id)
   })
   assert(snapshot.length === 2 && snapshot[0].lot_code === 'L-VIEJO' && snapshot[0].qty === 8,
@@ -229,7 +238,7 @@ async function main() {
 
   // Llegan 9 de 10: el faltante sale del último lote del snapshot
   await prisma.$transaction((tx) =>
-    recreateLotsFromSnapshot(tx, lotProd.id, acmeNorte.id, snapshot, 9))
+    recreateLotsFromSnapshot(tx, lotProd.id, acmeNorte.id, snapshot, 9, norteLocation))
   const norteLots = await prisma.productLot.findMany({
     where: { product_id: lotProd.id, branch_id: acmeNorte.id }, orderBy: { lot_code: 'asc' },
   })
