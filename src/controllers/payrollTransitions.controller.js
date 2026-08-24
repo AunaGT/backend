@@ -27,6 +27,7 @@ const { prismaTransaction } = require('../models/prisma')
 const { requireCompany } = require('../middlewares/tenant')
 const { fail, toUuid } = require('./hrEmployees.controller')
 const { RUN_INCLUDE, TX_OPTIONS } = require('./payroll.controller')
+const { postPayrollRun, postPayrollPayment, reversePayrollRun } = require('../services/payroll/posting')
 
 /** Lee la corrida de la empresa del request o falla con 404. */
 async function loadRun(tx, req) {
@@ -77,7 +78,7 @@ exports.confirm = async (req, res, next) => {
         }
       }
 
-      // fase 3: await postPayrollRun(tx, { run, userId: req.user?.sub })
+      await postPayrollRun(tx, { run, userId: req.user?.sub })
 
       return tx.payrollRun.findUnique({ where: { id: run.id }, include: RUN_INCLUDE })
     }, TX_OPTIONS)
@@ -101,7 +102,7 @@ exports.pay = async (req, res, next) => {
       })
       if (claim.count !== 1) fail(409, 'La planilla ya fue pagada')
 
-      // fase 3: await postPayrollPayment(tx, { run, userId: req.user?.sub })
+      await postPayrollPayment(tx, { run, userId: req.user?.sub })
 
       return tx.payrollRun.findUnique({ where: { id: run.id }, include: RUN_INCLUDE })
     }, TX_OPTIONS)
@@ -137,7 +138,7 @@ exports.cancel = async (req, res, next) => {
             })
           }
         }
-        // fase 3: await reversePayrollRun(tx, { run, userId: req.user?.sub })
+        await reversePayrollRun(tx, { run, userId: req.user?.sub })
       }
 
       return tx.payrollRun.findUnique({ where: { id: run.id }, include: RUN_INCLUDE })

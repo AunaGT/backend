@@ -20,6 +20,7 @@
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { requireCompany, targetBranch, branchWhere } = require('../middlewares/tenant')
 const { fail, toDate, toMoney, trim, toEnum } = require('./hrEmployees.controller')
+const { postAdvance, reverseAdvance } = require('../services/payroll/posting')
 
 const ADVANCE_STATUSES = ['PENDIENTE', 'PAGADO', 'CANCELADO']
 
@@ -84,7 +85,7 @@ exports.create = async (req, res, next) => {
         },
         include: ADVANCE_INCLUDE,
       })
-      // fase 3: await postAdvance(tx, { advance, userId: req.user?.sub })
+      await postAdvance(tx, { advance, userId: req.user?.sub })
       return advance
     }, TX_OPTIONS)
 
@@ -112,7 +113,7 @@ exports.cancel = async (req, res, next) => {
         data: { status: 'CANCELADO', balance: 0 },
       })
       if (claim.count !== 1) fail(409, 'El anticipo cambió antes de completarse la cancelación, intenta de nuevo')
-      // fase 3: await reverseAdvance(tx, { advance: current, userId: req.user?.sub })
+      await reverseAdvance(tx, { advance: current, userId: req.user?.sub })
       return tx.employeeAdvance.findUnique({ where: { id: current.id }, include: ADVANCE_INCLUDE })
     }, TX_OPTIONS)
 
