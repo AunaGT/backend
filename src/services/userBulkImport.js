@@ -146,64 +146,20 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
         }
     }
 
-    // Optional: is_employee (boolean)
+    // "es_empleado" ya no se importa: ser empleado es tener ficha en RRHH, no una
+    // casilla. Se acepta la columna en el archivo y se ignora, para que a nadie se
+    // le caiga una plantilla vieja; se avisa para que sepan dónde cargarlo.
     const isEmployeeStr = String(normalizedRow.is_employee || '').trim().toLowerCase()
     if (isEmployeeStr) {
-        if (isEmployeeStr === 'sí' || isEmployeeStr === 'si' || isEmployeeStr === 'yes' || isEmployeeStr === 'true' || isEmployeeStr === '1') {
-            data.is_employee = true
-        } else if (isEmployeeStr === 'no' || isEmployeeStr === 'false' || isEmployeeStr === '0') {
-            data.is_employee = false
-        } else {
-            errors.push(`Valor inválido para "es_empleado": "${isEmployeeStr}". Use "Sí" o "No"`)
+        {
+            // Se ignora en silencio: no es un error del archivo, es una columna que
+            // dejó de aplicar. Rechazar la fila por esto sería peor que ignorarla.
         }
     }
 
-    // Optional: phone
-    const phone = String(normalizedRow.phone || '').trim()
-    if (phone) {
-        if (phone.length > 50) {
-            errors.push('El teléfono no puede exceder 50 caracteres')
-        } else {
-            data.phone = phone
-        }
-    }
-
-    // Optional: address
-    const address = String(normalizedRow.address || '').trim()
-    if (address) {
-        data.address = address
-    }
-
-    // Optional: hire_date
-    const hireDateStr = String(normalizedRow.hire_date || '').trim()
-    if (hireDateStr) {
-        let hireDate = null
-
-        // Detectar posibles fechas en formato serial de Excel (solo dígitos)
-        if (/^\d+(\.\d+)?$/.test(hireDateStr)) {
-            const serial = Number(hireDateStr)
-            if (!isNaN(serial)) {
-                const excelEpoch = new Date(Date.UTC(1899, 11, 30)) // base Excel
-                hireDate = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000)
-            }
-        } else {
-            const parsed = new Date(hireDateStr)
-            if (!isNaN(parsed.getTime())) {
-                hireDate = parsed
-            }
-        }
-
-        if (!hireDate || isNaN(hireDate.getTime())) {
-            errors.push(`Fecha de contratación inválida: "${hireDateStr}". Use formato YYYY-MM-DD o una fecha válida.`)
-        } else {
-            const year = hireDate.getUTCFullYear()
-            if (year < 1900 || year > 2100) {
-                errors.push(`Fecha de contratación fuera de rango válido (1900-2100): "${hireDateStr}".`)
-            } else {
-                data.hire_date = hireDate
-            }
-        }
-    }
+    // "telefono"/"direccion"/"fecha_contratacion" ya no se importan al usuario: viven
+    // en la ficha de empleado (RRHH). Igual que es_empleado, se aceptan si vienen en
+    // el archivo y se ignoran, para no romper plantillas viejas.
 
     return {
         valid: errors.length === 0,
@@ -343,10 +299,9 @@ async function bulkCreateUsers(validRows) {
                     email: d.email,
                     password: hashedPassword,
                     role_id: d.role_id,
-                    is_employee: d.is_employee || false,
-                    ...(d.phone && { phone: d.phone }),
-                    ...(d.address && { address: d.address }),
-                    ...(d.hire_date && { hire_date: d.hire_date }),
+                    // Sin datos de RRHH: la importación crea CUENTAS. La ficha de
+                    // empleado (teléfono, dirección, ingreso) se carga en RRHH, que es
+                    // donde la planilla la lee.
                 },
             })
             created++

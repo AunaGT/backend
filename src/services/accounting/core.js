@@ -23,6 +23,21 @@ const DEFAULT_ACCOUNT_KEYS = [
   'currentEarnings', 'retainedEarnings',
 ]
 
+/**
+ * Cuentas que necesita el posteo de nómina. Deliberadamente separadas de
+ * DEFAULT_ACCOUNT_KEYS: getDefaultAccounts revienta si falta CUALQUIER clave de
+ * esa lista, así que meterlas ahí dejaría sin postear ventas y compras a toda
+ * empresa que todavía no las tenga configuradas. Si faltan, falla el posteo de
+ * nómina y nada más.
+ */
+const PAYROLL_ACCOUNT_KEYS = [
+  'cash', 'bank',
+  'payrollAdvances', 'payrollIgssPayable', 'payrollIsrPayable',
+  'payrollProvisionsPayable', 'payrollWagesPayable',
+  'payrollWagesExpense', 'payrollBonificacion', 'payrollEmployerCost',
+  'payrollProvisionsExpense',
+]
+
 class AccountingError extends Error {
   constructor(message) {
     super(message)
@@ -163,16 +178,47 @@ async function getDefaultAccounts(tx, companyId) {
   return result
 }
 
+/** Igual que getDefaultAccounts pero para la nómina, y con su propio 422. */
+async function getPayrollAccounts(tx, companyId) {
+  const setting = await tx.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: companyId } })
+  let map = {}
+  if (setting) {
+    try { map = JSON.parse(setting.value) } catch { map = {} }
+  }
+  const codes = PAYROLL_ACCOUNT_KEYS.map((k) => map[k]).filter(Boolean)
+  const accounts = await tx.account.findMany({
+    where: { code: { in: codes }, active: true, is_group: false, company_id: companyId },
+  })
+  const byCode = new Map(accounts.map((a) => [a.code, a]))
+
+  const result = {}
+  const missing = []
+  for (const key of PAYROLL_ACCOUNT_KEYS) {
+    const code = map[key]
+    const account = code ? byCode.get(code) : null
+    if (!account) { missing.push(code ? `${key} (${code})` : key); continue }
+    result[key] = account
+  }
+  if (missing.length > 0) {
+    const err = new Error(`Falta configurar las cuentas contables de nómina: ${missing.join(', ')}`)
+    err.status = 422
+    throw err
+  }
+  return result
+}
+
 module.exports = {
   AccountingError,
   GT_ZONE,
   SETTING_KEY,
   DEFAULT_ACCOUNT_KEYS,
+  PAYROLL_ACCOUNT_KEYS,
   toEntryDate,
   periodKeyForDate,
   assertPeriodOpen,
   nextEntryNumber,
   createEntry,
   getDefaultAccounts,
+  getPayrollAccounts,
   getTaxConfig,
 }

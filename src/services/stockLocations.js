@@ -321,6 +321,17 @@ async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
       location_id: locationId,
       qty: Number(qty),
     }))
+    // Entradas que no traen lote propio (ajuste, saldo inicial, carga masiva).
+    // Es opt-in a propósito: quien ya crea su lote —ingreso de mercancía,
+    // devolución de venta, traslado— NO pasa la bandera y no duplica. Si algún
+    // día se olvida en una vía nueva, el resultado es un faltante que el reporte
+    // detecta, no un lote fantasma que infla la trazabilidad.
+    if (ctx.autoLotForTracked) {
+      const { ensureLotForIncrease } = require('./lots')
+      for (const [id, qty] of entries) {
+        await ensureLotForIncrease(tx, { productId: id, branchId: b, locationId, qty })
+      }
+    }
   }
   return applyLocationDeltas(tx, deltas, { ...ctx, branchId: b, negativosPermitidos })
 }
@@ -490,6 +501,7 @@ async function clearBranchLocations(tx, productId, branchId) {
 
 module.exports = {
   defaultLocationId,
+  salesLocationId,
   assertBranchLocations,
   dispatchedByRef,
   planDispatch,

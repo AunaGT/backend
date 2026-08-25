@@ -8,6 +8,8 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
+// El .env no se carga solo cuando esto corre con `node` (index.js sí lo hace).
+require('dotenv/config')
 const { PrismaClient } = require('@prisma/client')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 const prisma = new PrismaClient()
@@ -115,6 +117,23 @@ async function main() {
     { code: 'stock_moves.view', name: 'Ver movimientos', description: 'Puede ver movimientos internos y kardex' },
     { code: 'stock_moves.create', name: 'Mover mercancía', description: 'Puede mover mercancía entre ubicaciones' },
     { code: 'stock_moves.adjust', name: 'Ajustar existencias', description: 'Puede corregir existencias sin documento (merma, daño)' },
+
+    // RRHH
+    { code: 'hr.employees.view', name: 'Ver empleados', description: 'Puede ver el expediente de los empleados' },
+    { code: 'hr.employees.create', name: 'Crear empleados', description: 'Puede dar de alta empleados' },
+    { code: 'hr.employees.edit', name: 'Editar empleados', description: 'Puede editar el expediente de los empleados' },
+    { code: 'hr.employees.delete', name: 'Dar de baja empleados', description: 'Puede dar de baja empleados' },
+    { code: 'hr.attendance.view', name: 'Ver asistencia', description: 'Puede consultar el registro de asistencia' },
+    { code: 'hr.attendance.manage', name: 'Registrar asistencia', description: 'Puede marcar entradas, salidas y horas extra' },
+    { code: 'hr.advances.view', name: 'Ver anticipos', description: 'Puede consultar los anticipos de sueldo' },
+    { code: 'hr.advances.manage', name: 'Gestionar anticipos', description: 'Puede otorgar y cancelar anticipos de sueldo' },
+
+    // Nómina
+    { code: 'payroll.view', name: 'Ver planillas', description: 'Puede ver las planillas y sus recibos' },
+    { code: 'payroll.create', name: 'Generar planillas', description: 'Puede generar y recalcular planillas en borrador' },
+    { code: 'payroll.confirm', name: 'Confirmar planillas', description: 'Puede confirmar una planilla y descontar anticipos' },
+    { code: 'payroll.pay', name: 'Pagar planillas', description: 'Puede marcar una planilla como pagada' },
+    { code: 'payroll.cancel', name: 'Anular planillas', description: 'Puede anular una planilla en borrador o confirmada' },
 
     // Productos e inventario
     { code: 'products.view', name: 'Ver productos', description: 'Puede ver el catálogo de productos' },

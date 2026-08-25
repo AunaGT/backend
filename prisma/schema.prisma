@@ -48,6 +48,10 @@ model Company {
   accounts           Account[]
   accounting_periods AccountingPeriod[]
   journal_entries    JournalEntry[]
+  employees          Employee[]
+  attendance         Attendance[]
+  employee_advances  EmployeeAdvance[]
+  payroll_runs       PayrollRun[]
 
   @@map("companies")
 }
@@ -106,6 +110,10 @@ model Branch {
   promotions               PromotionBranch[]
   warehouses               Warehouse[]
   stock_movements          StockMovement[]
+  employees                Employee[]
+  attendance               Attendance[]
+  employee_advances        EmployeeAdvance[]
+  payroll_runs             PayrollRun[]
 
   @@unique([company_id, code])
   @@map("branches")
@@ -580,7 +588,9 @@ model Product {
   @@map("products")
 }
 
-/// Lote de producto con caducidad. Capa advisory: `Product.stock` sigue siendo la
+/// Lote de producto con caducidad. Para productos con `tracks_expiry` la suma de
+/// `qty_remaining` debe igualar la existencia; para el resto la cobertura es parcial
+/// a propósito. `Product.stock` sigue siendo la
 /// verdad para vender; los lotes se descuentan FEFO en segundo plano (trazabilidad + alertas).
 model ProductLot {
   id                      String    @id @default(uuid()) @db.Uuid
@@ -597,7 +607,7 @@ model ProductLot {
   /// Obligatoria vía API si product.tracks_expiry
   expiry_date             DateTime? @db.Date
   qty_received            Int
-  /// Restante según consumo FEFO; advisory, se reconcilia por reporte
+  /// Restante según consumo FEFO. Con tracks_expiry es obligatorio que cuadre.
   qty_remaining           Int
   unit_cost               Decimal?  @db.Decimal(12, 2)
   supplier_id             String?   @db.Uuid
@@ -688,6 +698,11 @@ model User {
   commercial_documents_created           CommercialDocument[]              @relation("CommercialDocCreatedBy")
   accounting_periods_closed              AccountingPeriod[]                @relation("PeriodClosedBy")
   journal_entries_created                JournalEntry[]                    @relation("JournalCreatedBy")
+  employee_record                        Employee?                         @relation("EmployeeUser")
+  employee_advances_created              EmployeeAdvance[]                 @relation("AdvanceCreatedBy")
+  payroll_runs_created                   PayrollRun[]                      @relation("PayrollCreatedBy")
+  payroll_runs_confirmed                 PayrollRun[]                      @relation("PayrollConfirmedBy")
+  payroll_runs_cancelled                 PayrollRun[]                      @relation("PayrollCancelledBy")
 
   // Multi-empresa / sucursales
   user_companies     UserCompany[]
@@ -699,12 +714,10 @@ model User {
   transfers_received StockTransfer[] @relation("TransferReceivedBy")
   stock_movements    StockMovement[]
 
-  // Campos de empleado
-  is_employee Boolean   @default(false)
+  // phone/address/hire_date/is_employee viven únicamente en Employee (RRHH);
+  // ver [[employee_record]]. photo_url sí se queda: es el avatar de la cuenta,
+  // no la foto de la ficha de empleado.
   photo_url   String?   @db.VarChar(500)
-  phone       String?   @db.VarChar(50)
-  address     String?   @db.Text
-  hire_date   DateTime? // Fecha de contratación
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
 
@@ -1569,6 +1582,11 @@ enum JournalSourceType {
   /// Ajustes de inventario: manuales, diferencias de conteo y bajas de lote.
   /// Va al final: ADD VALUE lo agrega ahí y el orden del enum es el de la base.
   STOCK_ADJUSTMENT
+  /// Nómina: devengo de la planilla al confirmarla, su pago, y los anticipos.
+  /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
+  PAYROLL
+  PAYROLL_PAYMENT
+  PAYROLL_ADVANCE
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.
@@ -1649,4 +1667,275 @@ model JournalLine {
   @@index([entry_id])
   @@index([account_id])
   @@map("journal_lines")
+}
+
+// ========================================
+// RRHH (expediente, asistencia, anticipos)
+// ========================================
+
+enum EmployeeStatus {
+  ACTIVO
+  SUSPENDIDO
+  BAJA
+}
+
+enum ContractType {
+  INDEFINIDO
+  PLAZO_FIJO
+  POR_OBRA
+}
+
+enum PayFrequency {
+  MENSUAL
+  QUINCENAL
+}
+
+enum AttendanceStatus {
+  PRESENTE
+  TARDE
+  AUSENTE
+  VACACIONES
+  INCAPACIDAD
+  PERMISO
+  ASUETO
+}
+
+enum AdvanceStatus {
+  PENDIENTE
+  PAGADO
+  CANCELADO
+}
+
+/// Expediente laboral. `user_id` es opcional: no todo empleado tiene login, y
+/// borrar el login no borra el expediente.
+model Employee {
+  id                     String         @id @default(uuid()) @db.Uuid
+  company_id             String         @db.Uuid
+  company                Company        @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id              String         @db.Uuid
+  branch                 Branch         @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  code                   String         @db.VarChar(20)
+  /// Separados porque la planilla del IGSS los pide así
+  first_name             String         @db.VarChar(100)
+  last_name              String         @db.VarChar(100)
+  dpi                    String?        @db.VarChar(20)
+  nit                    String?        @db.VarChar(20)
+  igss_number            String?        @db.VarChar(20)
+  birth_date             DateTime?      @db.Date
+  phone                  String?        @db.VarChar(50)
+  email                  String?        @db.VarChar(150)
+  address                String?        @db.Text
+  photo_url              String?        @db.VarChar(500)
+  position               String?        @db.VarChar(100)
+  department             String?        @db.VarChar(100)
+  hire_date              DateTime       @db.Date
+  termination_date       DateTime?      @db.Date
+  contract_type          ContractType   @default(INDEFINIDO)
+  pay_frequency          PayFrequency   @default(MENSUAL)
+  base_salary            Decimal        @default(0) @db.Decimal(12, 2)
+  /// Decreto 78-89: no es salario para IGSS, indemnización, aguinaldo ni bono 14
+  bonificacion_incentivo Decimal        @default(250) @db.Decimal(12, 2)
+  bank_account           String?        @db.VarChar(50)
+  status                 EmployeeStatus @default(ACTIVO)
+  user_id                String?        @unique @db.Uuid
+  user                   User?          @relation("EmployeeUser", fields: [user_id], references: [id], onDelete: SetNull)
+  created_at             DateTime       @default(now())
+  updated_at             DateTime       @updatedAt
+
+  attendance Attendance[]
+  advances   EmployeeAdvance[]
+  payslips Payslip[]
+
+  @@unique([company_id, code])
+  @@index([branch_id])
+  @@index([status])
+  @@map("employees")
+}
+
+/// Marcaje diario. Informativo: no descuenta días del sueldo; su único efecto
+/// sobre la nómina es pre-llenar las horas extra sugeridas del período.
+model Attendance {
+  id             String           @id @default(uuid()) @db.Uuid
+  company_id     String           @db.Uuid
+  company        Company          @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id      String           @db.Uuid
+  branch         Branch           @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  employee_id    String           @db.Uuid
+  employee       Employee         @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  work_date      DateTime         @db.Date
+  check_in       String?          @db.VarChar(5)
+  check_out      String?          @db.VarChar(5)
+  hours          Decimal?         @db.Decimal(5, 2)
+  overtime_hours Decimal          @default(0) @db.Decimal(5, 2)
+  status         AttendanceStatus @default(PRESENTE)
+  notes          String?          @db.Text
+  created_at     DateTime         @default(now())
+  updated_at     DateTime         @updatedAt
+
+  @@unique([employee_id, work_date])
+  @@index([company_id, work_date])
+  @@map("attendance")
+}
+
+/// Anticipo de sueldo. `balance` baja con cada cuota descontada en planilla y
+/// se restituye exacto si la planilla se anula.
+model EmployeeAdvance {
+  id          String        @id @default(uuid()) @db.Uuid
+  company_id  String        @db.Uuid
+  company     Company       @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id   String        @db.Uuid
+  branch      Branch        @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  employee_id String        @db.Uuid
+  employee    Employee      @relation(fields: [employee_id], references: [id], onDelete: Restrict)
+  date        DateTime      @db.Date
+  amount      Decimal       @db.Decimal(12, 2)
+  /// Cuota a descontar por planilla ordinaria
+  installment Decimal       @db.Decimal(12, 2)
+  /// Saldo pendiente; arranca en `amount`
+  balance     Decimal       @db.Decimal(12, 2)
+  reason      String?       @db.Text
+  status      AdvanceStatus @default(PENDIENTE)
+  created_by  String?       @db.Uuid
+  createdBy   User?         @relation("AdvanceCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @updatedAt
+
+  payslip_lines PayslipLine[]
+
+  @@index([employee_id, status])
+  @@index([company_id, status])
+  @@map("employee_advances")
+}
+
+
+// ========================================
+// Nómina (planillas, recibos y conceptos)
+// ========================================
+
+enum PayrollType {
+  ORDINARIA
+  AGUINALDO
+  BONO14
+}
+
+enum PayrollStatus {
+  BORRADOR
+  CONFIRMADA
+  PAGADA
+  ANULADA
+}
+
+enum PayslipLineType {
+  DEVENGO
+  DEDUCCION
+  COSTO_PATRONAL
+}
+
+enum PayrollConcept {
+  SUELDO_ORDINARIO
+  BONIFICACION_INCENTIVO
+  HORAS_EXTRA
+  AGUINALDO
+  BONO14
+  OTRO_DEVENGO
+  IGSS_LABORAL
+  ISR_RETENIDO
+  ANTICIPO
+  OTRA_DEDUCCION
+  IGSS_PATRONAL
+  IRTRA
+  INTECAP
+  PROVISION_AGUINALDO
+  PROVISION_BONO14
+  PROVISION_VACACIONES
+  PROVISION_INDEMNIZACION
+}
+
+/// Corrida de planilla. Los totales están denormalizados para no recorrer los
+/// recibos en cada listado.
+model PayrollRun {
+  id                  String        @id @default(uuid()) @db.Uuid
+  company_id          String        @db.Uuid
+  company             Company       @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id           String        @db.Uuid
+  branch              Branch        @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  /// Correlativo por empresa y mes: NOM-2026-08-001
+  code                String        @db.VarChar(20)
+  name                String        @db.VarChar(150)
+  type                PayrollType   @default(ORDINARIA)
+  period_start        DateTime      @db.Date
+  period_end          DateTime      @db.Date
+  pay_date            DateTime      @db.Date
+  status              PayrollStatus @default(BORRADOR)
+  total_earnings      Decimal       @default(0) @db.Decimal(14, 2)
+  total_deductions    Decimal       @default(0) @db.Decimal(14, 2)
+  total_net           Decimal       @default(0) @db.Decimal(14, 2)
+  total_employer_cost Decimal       @default(0) @db.Decimal(14, 2)
+  notes               String?       @db.Text
+  created_by          String?       @db.Uuid
+  createdBy           User?         @relation("PayrollCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+  confirmed_by        String?       @db.Uuid
+  confirmedBy         User?         @relation("PayrollConfirmedBy", fields: [confirmed_by], references: [id], onDelete: SetNull)
+  cancelled_by        String?       @db.Uuid
+  cancelledBy         User?         @relation("PayrollCancelledBy", fields: [cancelled_by], references: [id], onDelete: SetNull)
+  confirmed_at        DateTime?
+  paid_at             DateTime?
+  cancelled_at        DateTime?
+  created_at          DateTime      @default(now())
+  updated_at          DateTime      @updatedAt
+
+  payslips Payslip[]
+
+  @@unique([company_id, code])
+  @@index([branch_id, status])
+  @@index([company_id, pay_date])
+  @@map("payroll_runs")
+}
+
+/// Recibo de un empleado en una corrida. Congela el cálculo: subirle el sueldo
+/// a alguien no cambia una planilla ya emitida.
+model Payslip {
+  id               String     @id @default(uuid()) @db.Uuid
+  run_id           String     @db.Uuid
+  run              PayrollRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  employee_id      String     @db.Uuid
+  employee         Employee   @relation(fields: [employee_id], references: [id], onDelete: Restrict)
+  /// Snapshot del sueldo al momento de calcular
+  base_salary      Decimal    @db.Decimal(12, 2)
+  /// Días de mes comercial (30) que corresponden al tramo contratado
+  days_worked      Decimal    @db.Decimal(5, 2)
+  /// Bases para la planilla del IGSS y el reporte de retenciones de la SAT
+  igss_base        Decimal    @default(0) @db.Decimal(12, 2)
+  isr_base         Decimal    @default(0) @db.Decimal(12, 2)
+  total_earnings   Decimal    @default(0) @db.Decimal(12, 2)
+  total_deductions Decimal    @default(0) @db.Decimal(12, 2)
+  net_pay          Decimal    @default(0) @db.Decimal(12, 2)
+  employer_cost    Decimal    @default(0) @db.Decimal(12, 2)
+
+  lines PayslipLine[]
+
+  @@unique([run_id, employee_id])
+  @@index([employee_id])
+  @@map("payslips")
+}
+
+/// Desglose auditable del recibo. El signo lo da `type`, el importe siempre es
+/// positivo.
+model PayslipLine {
+  id          String           @id @default(uuid()) @db.Uuid
+  payslip_id  String           @db.Uuid
+  payslip     Payslip          @relation(fields: [payslip_id], references: [id], onDelete: Cascade)
+  concept     PayrollConcept
+  type        PayslipLineType
+  description String           @db.VarChar(150)
+  quantity    Decimal?         @db.Decimal(10, 2)
+  amount      Decimal          @db.Decimal(12, 2)
+  /// Si es cuota de anticipo: permite restituir el saldo EXACTO al anular
+  advance_id  String?          @db.Uuid
+  advance     EmployeeAdvance? @relation(fields: [advance_id], references: [id], onDelete: SetNull)
+  sort_order  Int              @default(0)
+
+  @@index([payslip_id])
+  @@index([advance_id])
+  @@map("payslip_lines")
 }
