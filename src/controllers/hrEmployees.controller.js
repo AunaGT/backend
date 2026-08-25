@@ -193,6 +193,23 @@ exports.getById = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+/**
+ * GET /api/hr/employees/me - la ficha del propio usuario.
+ *
+ * Sin permisos de RRHH a propósito: un cajero no puede ver el expediente de
+ * nadie, pero sí el suyo. `user_id` es único, así que hay una ficha o ninguna.
+ */
+exports.mine = async (req, res, next) => {
+  try {
+    const employee = await prisma.employee.findFirst({
+      where: { user_id: req.user.sub },
+      include: EMPLOYEE_INCLUDE,
+    })
+    if (!employee) fail(404, 'No tenés ficha de empleado')
+    res.json(employee)
+  } catch (e) { next(e) }
+}
+
 /** POST /api/hr/employees */
 exports.create = async (req, res, next) => {
   try {
