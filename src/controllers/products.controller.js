@@ -42,6 +42,9 @@ async function setBranchStock(tx, productId, branchId, { stock, minStock }, ctx 
       // sale primero de la menos accesible.
       await applyBranchDelta(tx, [[String(productId), Math.abs(delta)]], branchId, Math.sign(delta), {
         reason: 'MANUAL_ADJUST', refType: 'product', refId: String(productId), adjust: true, ...ctx,
+        // Un ajuste que sube existencia no trae lote. Se excluye refType
+        // 'product_lot': ahí el lote es justamente lo que se está editando.
+        autoLotForTracked: ctx.refType !== 'product_lot',
       })
     }
   }

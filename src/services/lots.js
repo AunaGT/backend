@@ -175,6 +175,36 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
 }
 
 /**
+ * Abre un lote para unidades que entran SIN lote propio (ajuste manual, saldo
+ * inicial, carga masiva) cuando el producto controla caducidad.
+ *
+ * Sin esto, hacer estricto el consumo bloquearía la venta: el ajuste sube la
+ * existencia, los lotes no, y el siguiente despacho no encuentra de dónde sacar.
+ * Va sin caducidad a propósito — nadie la declaró — y queda de primero en FEFO
+ * para que alguien la corrija mirando el producto físico.
+ */
+async function ensureLotForIncrease(tx, { productId, branchId, locationId, qty }) {
+  const client = tx || prisma
+  const cantidad = Number(qty) || 0
+  if (cantidad <= 0 || !branchId) return null
+  const product = await client.product.findUnique({
+    where: { id: String(productId) },
+    select: { tracks_expiry: true },
+  })
+  if (!product?.tracks_expiry) return null
+  return client.productLot.create({
+    data: {
+      product_id: String(productId),
+      branch_id: branchId,
+      location_id: locationId || null,
+      lot_code: `AJUSTE-${generateLotCode().slice(2)}`,
+      qty_received: cantidad,
+      qty_remaining: cantidad,
+    },
+  })
+}
+
+/**
  * Recrea en `branchId` los lotes que viajaron en un traslado, hasta cubrir
  * `qty` (lo efectivamente recibido puede ser menor a lo enviado). Los lotes se
  * toman en el orden del snapshot, que ya viene FEFO. Best-effort: nunca lanza.
@@ -389,6 +419,7 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 
 module.exports = {
   planConsume, planRestore, fefoSort, consumeLotsFEFO, restoreLotsFEFO, generateLotCode,
+  ensureLotForIncrease,
   recreateLotsFromSnapshot,
   syncLotExpiryAlerts,
 }
