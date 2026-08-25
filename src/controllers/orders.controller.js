@@ -6,8 +6,6 @@
 
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { Prisma } = require('@prisma/client')
-const { DateTime } = require('luxon')
-const { getTimezone } = require('../utils/getTimezone')
 const { ensureStockAlertsBatch } = require('../services/stockAlerts')
 const { expandLinesToStockMap, deductStockMap } = require('../services/bomStock')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../services/priceResolution')
@@ -225,13 +223,24 @@ async function requireCashSession(tx, user, explicitRegisterId, branchId) {
   }
   const openSess = await tx.cashRegisterSession.findFirst({
     where: { cash_register_id: register.id, status: 'OPEN' },
+    select: { id: true, opened_by_id: true, openedBy: { select: { name: true } } },
   })
-  if (!openSess && !isAdmin) {
+  if (openSess) {
+    // Mismo control que en sales.controller.js: el turno abierto en la caja
+    // resuelta tiene que ser del vendedor actual, no de quien sea que la
+    // haya dejado abierta.
+    if (!isAdmin && String(openSess.opened_by_id) !== String(user.sub)) {
+      const err = new Error('CASH_SESSION_OTHER_USER')
+      err.status = 403
+      err.openedByName = openSess.openedBy?.name || 'otro usuario'
+      throw err
+    }
+    cashSessionIdForSale = openSess.id
+  } else if (!isAdmin) {
     const err = new Error('CASH_SESSION_REQUIRED')
     err.status = 403
     throw err
   }
-  if (openSess) cashSessionIdForSale = openSess.id
   return cashSessionIdForSale
 }
 
@@ -643,17 +652,9 @@ exports.convertToSale = async (req, res, next) => {
       const completadaStatus = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
       if (!completadaStatus) throw new Error("No existe el estado 'Completada'")
 
-      const tz = await getTimezone(prisma, req.companyId)
-      const nowGt = DateTime.now().setZone(tz)
-      const saleDate = DateTime.utc(
-        nowGt.year,
-        nowGt.month,
-        nowGt.day,
-        nowGt.hour,
-        nowGt.minute,
-        nowGt.second,
-        nowGt.millisecond
-      ).toJSDate()
+      // Instante real de la venta, en UTC de verdad — mismo arreglo que en
+      // sales.controller.js (antes reetiquetaba la hora de Guatemala como UTC).
+      const saleDate = new Date()
 
       const totalItems = fulfillments.reduce((acc, f) => acc + f.qty, 0)
       const subtotal = Math.round(
@@ -758,6 +759,12 @@ exports.convertToSale = async (req, res, next) => {
   } catch (e) {
     if (e.message === 'CASH_SESSION_REQUIRED') {
       return res.status(403).json({ message: 'Debe abrir la caja antes de registrar la venta' })
+    }
+    if (e.message === 'CASH_SESSION_OTHER_USER') {
+      return res.status(403).json({
+        code: 'CASH_SESSION_OTHER_USER',
+        message: `Esta caja ya tiene un turno abierto por ${e.openedByName}. Debe cerrar ese turno o utilizar una caja asignada.`
+      })
     }
     if (e.message === 'NO_CASH_REGISTER') {
       return res.status(503).json({ message: 'No hay caja registradora configurada' })
