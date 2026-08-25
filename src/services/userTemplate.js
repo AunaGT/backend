@@ -30,22 +30,14 @@ async function generateUserTemplate() {
         'nombre',
         'email',
         'password',
-        'rol',
-        'es_empleado',
-        'telefono',
-        'direccion',
-        'fecha_contratacion'
+        'rol'
     ]
 
     const example = [
         'Juan Pérez',
         'juan.perez@ejemplo.com',
         'Password123!',
-        roles[0]?.name || 'admin',
-        'Sí',
-        '+502 5555-1234',
-        'Zona 10, Ciudad de Guatemala',
-        '2024-01-15'
+        roles[0]?.name || 'admin'
     ]
 
     const workbook = XLSX.utils.book_new()
@@ -57,10 +49,6 @@ async function generateUserTemplate() {
         { wch: 30 }, // email
         { wch: 20 }, // password
         { wch: 15 }, // rol
-        { wch: 15 }, // es_empleado
-        { wch: 18 }, // telefono
-        { wch: 35 }, // direccion
-        { wch: 20 }, // fecha_contratacion
     ]
 
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Usuarios')

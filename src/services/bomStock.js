@@ -76,7 +76,7 @@ function computeKitAvailableFromBom(bomLines, availabilityMap) {
   return Number.isFinite(min) ? Math.max(0, min) : 0
 }
 
-async function getAvailabilityBatchWithKits(productIds, tx, branchId) {
+async function getAvailabilityBatchWithKits(productIds, tx, branchId, { locationId = null } = {}) {
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return {}
 
@@ -92,8 +92,16 @@ async function getAvailabilityBatchWithKits(productIds, tx, branchId) {
 
   const allIds = [...new Set([...ids, ...componentIds])]
   const { getAvailabilityBatch } = require('./stockAvailability')
-  const base = await getAvailabilityBatch(allIds, tx, { branchId })
+  const base = await getAvailabilityBatch(allIds, tx, { branchId, locationId })
   const out = { ...base }
+
+  // Un kit sin armar vale lo que alcance su componente más escaso. Para la
+  // ubicación se repite el mismo cálculo mirando solo lo que hay ahí.
+  const byLocation = locationId
+    ? Object.fromEntries(
+        Object.entries(base).map(([id, v]) => [id, { ...v, available: v.location_available ?? 0 }])
+      )
+    : null
 
   for (const id of ids) {
     const p = prodMap.get(id)
@@ -104,6 +112,11 @@ async function getAvailabilityBatchWithKits(productIds, tx, branchId) {
       reserved: 0,
       available: kitAvailable,
       is_kit: true,
+    }
+    if (byLocation) {
+      const atLocation = computeKitAvailableFromBom(p.kit_components, byLocation)
+      out[id].location_stock = atLocation
+      out[id].location_available = atLocation
     }
   }
   return out

@@ -19,7 +19,7 @@ const { ensureStockAlert } = require('../services/stockAlerts')
 const { requireBranch, branchWhere } = require('../middlewares/tenant')
 const { ensureBranchStockRows } = require('../services/stockAvailability')
 const {
-  applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId,
+  applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId, salesLocationId,
 } = require('../services/stockLocations')
 
 /**
@@ -42,6 +42,9 @@ async function setBranchStock(tx, productId, branchId, { stock, minStock }, ctx 
       // sale primero de la menos accesible.
       await applyBranchDelta(tx, [[String(productId), Math.abs(delta)]], branchId, Math.sign(delta), {
         reason: 'MANUAL_ADJUST', refType: 'product', refId: String(productId), adjust: true, ...ctx,
+        // Un ajuste que sube existencia no trae lote. Se excluye refType
+        // 'product_lot': ahí el lote es justamente lo que se está editando.
+        autoLotForTracked: ctx.refType !== 'product_lot',
       })
     }
   }
@@ -492,8 +495,14 @@ exports.assembleKit = async (req, res, next) => {
 }
 
 /**
- * GET /api/products/availability?ids=uuid1,uuid2
+ * GET /api/products/availability?ids=uuid1,uuid2[&scope=pos]
  * Stock físico, reservado y disponible (stock − reservas ACTIVE).
+ *
+ * Con `scope=pos` responde además el stock en la ubicación de venta de la
+ * sucursal: el punto de venta despacha de ahí, así que el total de la sucursal
+ * (que suma bodegas) le miente sobre lo que tiene a mano. Si la sucursal no
+ * tiene ubicación de venta configurada, `sales_location.configured` es false y
+ * la caja no debe vender hasta que alguien la configure.
  */
 exports.availability = async (req, res, next) => {
   try {
@@ -508,8 +517,15 @@ exports.availability = async (req, res, next) => {
     if (ids.length > 200) {
       return res.status(400).json({ message: 'Máximo 200 productos por consulta' })
     }
-    const availability = await getAvailabilityBatchWithKits(ids, null, requireBranch(req))
-    res.json({ availability })
+    const branchId = requireBranch(req)
+    const posScope = String(req.query.scope || '') === 'pos'
+    const locationId = posScope ? await salesLocationId(prisma, branchId) : null
+    const availability = await getAvailabilityBatchWithKits(ids, null, branchId, { locationId })
+    if (!posScope) return res.json({ availability })
+    res.json({
+      availability,
+      sales_location: { configured: Boolean(locationId), id: locationId },
+    })
   } catch (e) {
     next(e)
   }
@@ -1212,15 +1228,50 @@ exports.critical = async (req, res, next) => {
 exports.getLots = async (req, res, next) => {
   try {
     const { id } = req.params
+    const scope = req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }
     const lots = await prisma.productLot.findMany({
-      where: {
-        product_id: id,
-        qty_remaining: { gt: 0 },
-        ...(req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }),
+      where: { product_id: id, qty_remaining: { gt: 0 }, ...scope },
+      // La ubicación evita que tres lotes del mismo código parezcan duplicados.
+      include: {
+        location: {
+          select: { id: true, code: true, warehouse: { select: { id: true, name: true } } },
+        },
       },
       orderBy: [{ expiry_date: { sort: 'asc', nulls: 'last' } }, { received_at: 'asc' }],
     })
-    res.json({ lots })
+
+    // Reconciliación: la ficha mostraba las dos sumas por separado y el usuario
+    // tenía que restarlas de cabeza para descubrir que no cuadraban.
+    const product = await prisma.product.findFirst({
+      where: { id, company_id: req.companyId },
+      select: { tracks_expiry: true },
+    })
+    const stocks = await prisma.productStockLocation.findMany({
+      where: {
+        product_id: id,
+        location: {
+          warehouse: req.branchId
+            ? { branch_id: req.branchId }
+            : { branch: { company_id: req.companyId } },
+        },
+      },
+      select: { stock: true },
+    })
+    const physical = stocks.reduce((s, r) => s + Number(r.stock || 0), 0)
+    const lotted = lots.reduce((s, l) => s + Number(l.qty_remaining || 0), 0)
+
+    res.json({
+      lots,
+      reconciliation: {
+        physical,
+        lotted,
+        unlotted: physical - lotted,
+        tracks_expiry: Boolean(product?.tracks_expiry),
+        // Con tracks_expiry cualquier diferencia es un descuadre que hay que
+        // corregir; sin él, lo no lotificado es esperado y no es un error.
+        balanced: physical === lotted,
+      },
+    })
   } catch (e) { next(e) }
 }
 

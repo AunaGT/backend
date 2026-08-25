@@ -9,9 +9,19 @@
  */
 
 // Consumo/restauración de lotes FEFO (first-expired-first-out).
-// Capa ADVISORY: Product.stock sigue siendo la verdad para vender. Un descuadre
-// de lotes nunca debe abortar una venta, por eso las funciones de escritura
-// atrapan y solo loguean. // ponytail: lotes advisory, se reconcilian por reporte
+//
+// Dos regímenes, según product.tracks_expiry:
+//   - tracks_expiry = true  -> los lotes son la verdad. Si no alcanzan para cubrir
+//     la salida, la operación falla: un producto con caducidad que se despacha sin
+//     lote es justo lo que la trazabilidad tiene que impedir.
+//   - tracks_expiry = false -> cobertura parcial esperada. El stock que entró sin
+//     lote (saldos iniciales, ajustes) no tiene por qué tenerlo, y consumir de menos
+//     es correcto, no un error.
+//
+// Estas funciones NO atrapan errores de base. Antes lo hacían "best effort", pero
+// era ficticio: corren dentro de una transacción interactiva, y en Postgres
+// cualquier error la envenena — el catch lo tragaba y la consulta siguiente moría
+// con 25P02, revirtiendo igual la venta, pero con un error incomprensible.
 
 const crypto = require('crypto')
 const { prisma } = require('../models/prisma')
@@ -43,8 +53,9 @@ function planConsume(lots, qty) {
       left -= take
     }
   }
-  // Si left > 0 los lotes no cubren el stock vendido (stock viejo sin lote): se ignora.
-  return plan
+  // `short` > 0 = los lotes no cubren lo que sale. Para un producto con caducidad
+  // eso es un error; para el resto es stock sin lote y se consume de menos.
+  return { plan, short: left }
 }
 
 /**
@@ -88,18 +99,27 @@ function fefoSort(a, b) {
  *   el lote. Sin esto, FEFO de toda la sucursal (comportamiento viejo).
  * @returns {Promise<Map<string, Array<object>>>} product_id -> lotes consumidos
  *   [{ lot_code, expiry_date, unit_cost, supplier_id, location_id, qty }], en orden FEFO.
- *   Vacío si algo falló: quien lo use debe tolerarlo (los lotes son advisory).
+ *   Para productos con tracks_expiry cubre siempre el total o lanza; para el resto
+ *   puede quedar corto (stock que entró sin lote) y eso es correcto.
  */
 async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
   const consumed = new Map()
-  try {
+  {
     const client = tx || prisma
     const productIds = Array.from(stockMap.keys())
     if (productIds.length === 0) return consumed
     if (!branchId) {
-      console.error('[lots] consumeLotsFEFO sin branchId; omitido')
-      return consumed
+      const err = new Error('No se pudo determinar la sucursal para descontar los lotes')
+      err.status = 400
+      throw err
     }
+    // Solo los productos con caducidad exigen cobertura total de lotes.
+    const tracked = new Set(
+      (await client.product.findMany({
+        where: { id: { in: productIds }, tracks_expiry: true },
+        select: { id: true },
+      })).map((p) => p.id)
+    )
     const lots = await client.productLot.findMany({
       where: { product_id: { in: productIds }, branch_id: branchId, qty_remaining: { gt: 0 } },
       select: {
@@ -118,8 +138,11 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
           }))
         : [{ lots: productLots, qty }]
 
+      let short = 0
       for (const chunk of plan) {
-        for (const { lotId, take } of planConsume(chunk.lots.slice().sort(fefoSort), chunk.qty)) {
+        const { plan: takes, short: falta } = planConsume(chunk.lots.slice().sort(fefoSort), chunk.qty)
+        short += falta
+        for (const { lotId, take } of takes) {
           await client.productLot.update({
             where: { id: lotId },
             data: { qty_remaining: { decrement: take } },
@@ -137,11 +160,48 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
           })
         }
       }
+      if (short > 0 && tracked.has(productId)) {
+        const prod = await client.product.findUnique({ where: { id: productId }, select: { name: true } })
+        const err = new Error(
+          `${prod?.name || 'El producto'} controla caducidad y faltan ${short} unidad(es) con lote asignado. ` +
+          'Registrá el ingreso con su lote antes de despachar.'
+        )
+        err.status = 409
+        throw err
+      }
     }
-  } catch (e) {
-    console.error('[lots] consumeLotsFEFO (advisory) falló:', e.message)
   }
   return consumed
+}
+
+/**
+ * Abre un lote para unidades que entran SIN lote propio (ajuste manual, saldo
+ * inicial, carga masiva) cuando el producto controla caducidad.
+ *
+ * Sin esto, hacer estricto el consumo bloquearía la venta: el ajuste sube la
+ * existencia, los lotes no, y el siguiente despacho no encuentra de dónde sacar.
+ * Va sin caducidad a propósito — nadie la declaró — y queda de primero en FEFO
+ * para que alguien la corrija mirando el producto físico.
+ */
+async function ensureLotForIncrease(tx, { productId, branchId, locationId, qty }) {
+  const client = tx || prisma
+  const cantidad = Number(qty) || 0
+  if (cantidad <= 0 || !branchId) return null
+  const product = await client.product.findUnique({
+    where: { id: String(productId) },
+    select: { tracks_expiry: true },
+  })
+  if (!product?.tracks_expiry) return null
+  return client.productLot.create({
+    data: {
+      product_id: String(productId),
+      branch_id: branchId,
+      location_id: locationId || null,
+      lot_code: `AJUSTE-${generateLotCode().slice(2)}`,
+      qty_received: cantidad,
+      qty_remaining: cantidad,
+    },
+  })
 }
 
 /**
@@ -152,7 +212,9 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
  * @param {string} [locationId] anaquel donde quedan; si no viene, el que traía el snapshot
  */
 async function recreateLotsFromSnapshot(tx, productId, branchId, snapshot, qty, locationId) {
-  try {
+  {
+    // Snapshot vacío = el origen no tenía lotes que mover. Para un producto con
+    // caducidad eso no puede pasar: consumeLotsFEFO ya habría fallado en el origen.
     if (!branchId || !Array.isArray(snapshot) || snapshot.length === 0) return
     const client = tx || prisma
     let left = Number(qty) || 0
@@ -175,8 +237,6 @@ async function recreateLotsFromSnapshot(tx, productId, branchId, snapshot, qty, 
         },
       })
     }
-  } catch (e) {
-    console.error('[lots] recreateLotsFromSnapshot (advisory) falló:', e.message)
   }
 }
 
@@ -189,14 +249,21 @@ async function recreateLotsFromSnapshot(tx, productId, branchId, snapshot, qty, 
  * @param {Map<string, number>} stockMap product_id -> qty restaurada
  */
 async function restoreLotsFEFO(tx, stockMap, branchId) {
-  try {
+  {
     const client = tx || prisma
     const productIds = Array.from(stockMap.keys())
     if (productIds.length === 0) return
     if (!branchId) {
-      console.error('[lots] restoreLotsFEFO sin branchId; omitido')
-      return
+      const err = new Error('No se pudo determinar la sucursal para devolver los lotes')
+      err.status = 400
+      throw err
     }
+    const tracked = new Set(
+      (await client.product.findMany({
+        where: { id: { in: productIds }, tracks_expiry: true },
+        select: { id: true },
+      })).map((p) => p.id)
+    )
     const lots = await client.productLot.findMany({
       where: { product_id: { in: productIds }, branch_id: branchId },
       select: {
@@ -208,15 +275,30 @@ async function restoreLotsFEFO(tx, stockMap, branchId) {
       const productLots = lots
         .filter((l) => l.product_id === productId)
         .sort((a, b) => fefoSort(b, a)) // más nuevos primero
+      let left = Number(qty) || 0
       for (const { lotId, give } of planRestore(productLots, qty)) {
         await client.productLot.update({
           where: { id: lotId },
           data: { qty_remaining: { increment: give } },
         })
+        left -= give
+      }
+      // Si los lotes originales ya no tienen espacio, lo devuelto quedaría sin lote.
+      // A un producto con caducidad no se le puede rechazar la devolución por eso,
+      // pero tampoco puede perder la trazabilidad: se abre un lote de retorno.
+      // Va sin caducidad porque genuinamente no se sabe cuál era.
+      if (left > 0 && tracked.has(productId)) {
+        await client.productLot.create({
+          data: {
+            product_id: productId,
+            branch_id: branchId,
+            lot_code: `DEV-${generateLotCode().slice(2)}`,
+            qty_received: left,
+            qty_remaining: left,
+          },
+        })
       }
     }
-  } catch (e) {
-    console.error('[lots] restoreLotsFEFO (advisory) falló:', e.message)
   }
 }
 
@@ -337,6 +419,7 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 
 module.exports = {
   planConsume, planRestore, fefoSort, consumeLotsFEFO, restoreLotsFEFO, generateLotCode,
+  ensureLotForIncrease,
   recreateLotsFromSnapshot,
   syncLotExpiryAlerts,
 }

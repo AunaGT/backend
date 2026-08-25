@@ -491,7 +491,7 @@ async function bulkCreateProducts(validRows, ctx = {}) {
                 })
                 // El stock inicial también aterriza en una ubicación real.
                 await applyBranchDelta(prisma, [[prod.id, initialStock]], branchId, 1, {
-                    reason: 'INITIAL', refType: 'product', refId: prod.id,
+                    reason: 'INITIAL', refType: 'product', refId: prod.id, autoLotForTracked: true,
                     ...(locationId ? { locationId } : {}),
                 })
             }
@@ -530,7 +530,7 @@ async function adoptIntoBranch(productId, branchId, stock, minStock, locationId)
     await prisma.productStock.update({ where: key, data: { stock } })
     await prisma.product.update({ where: { id: productId }, data: { stock: { increment: delta } } })
     await applyBranchDelta(prisma, [[productId, Math.abs(delta)]], branchId, Math.sign(delta), {
-        reason: 'INITIAL', refType: 'product', refId: productId, adjust: true,
+        reason: 'INITIAL', refType: 'product', refId: productId, adjust: true, autoLotForTracked: true,
         ...(locationId ? { locationId } : {}),
     })
 }
