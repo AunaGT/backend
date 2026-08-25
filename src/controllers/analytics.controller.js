@@ -57,8 +57,11 @@ exports.summary = async (req, res, next) => {
       ? DateTime.fromObject({ year: now.year, month: 12, day: 31, hour: 23, minute: 59, second: 59, millisecond: 999 }, { zone: 'America/Guatemala' })
       : DateTime.fromObject({ year, month: 12, day: 31, hour: 23, minute: 59, second: 59, millisecond: 999 }, { zone: 'America/Guatemala' })
 
-    const startUtc = new Date(Date.UTC(start.year, start.month - 1, start.day, start.hour, start.minute, start.second, start.millisecond))
-    const endUtc = new Date(Date.UTC(end.year, end.month - 1, end.day, end.hour, end.minute, end.second, end.millisecond))
+    // `.toJSDate()` convierte la zona correctamente al instante UTC real;
+    // reconstruir con Date.UTC a partir de los números de la zona los
+    // reetiquetaba como si ya fueran UTC (mismo bug que en sales.controller.js).
+    const startUtc = start.toJSDate()
+    const endUtc = end.toJSDate()
 
     // Load sale items joined with sales and products within year range
     const saleItems = await prisma.saleItem.findMany({
