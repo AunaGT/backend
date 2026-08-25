@@ -146,15 +146,14 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
         }
     }
 
-    // Optional: is_employee (boolean)
+    // "es_empleado" ya no se importa: ser empleado es tener ficha en RRHH, no una
+    // casilla. Se acepta la columna en el archivo y se ignora, para que a nadie se
+    // le caiga una plantilla vieja; se avisa para que sepan dónde cargarlo.
     const isEmployeeStr = String(normalizedRow.is_employee || '').trim().toLowerCase()
     if (isEmployeeStr) {
-        if (isEmployeeStr === 'sí' || isEmployeeStr === 'si' || isEmployeeStr === 'yes' || isEmployeeStr === 'true' || isEmployeeStr === '1') {
-            data.is_employee = true
-        } else if (isEmployeeStr === 'no' || isEmployeeStr === 'false' || isEmployeeStr === '0') {
-            data.is_employee = false
-        } else {
-            errors.push(`Valor inválido para "es_empleado": "${isEmployeeStr}". Use "Sí" o "No"`)
+        {
+            // Se ignora en silencio: no es un error del archivo, es una columna que
+            // dejó de aplicar. Rechazar la fila por esto sería peor que ignorarla.
         }
     }
 
@@ -343,10 +342,9 @@ async function bulkCreateUsers(validRows) {
                     email: d.email,
                     password: hashedPassword,
                     role_id: d.role_id,
-                    is_employee: d.is_employee || false,
-                    ...(d.phone && { phone: d.phone }),
-                    ...(d.address && { address: d.address }),
-                    ...(d.hire_date && { hire_date: d.hire_date }),
+                    // Sin datos de RRHH: la importación crea CUENTAS. La ficha de
+                    // empleado (teléfono, dirección, ingreso) se carga en RRHH, que es
+                    // donde la planilla la lee.
                 },
             })
             created++

@@ -38,6 +38,10 @@ const userWithPerms = {
       branch: { select: { id: true, company_id: true, name: true, code: true, active: true, is_default: true } },
     },
   },
+  // La ficha de RRHH manda: `is_employee` se deriva de acá, no de una casilla.
+  employee_record: {
+    select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+  },
 }
 
 function serializeUser(user) {
@@ -47,9 +51,15 @@ function serializeUser(user) {
     email: user.email,
     role_id: user.role_id,
     role: user.role || null,
-    is_employee: user.is_employee || false,
+    // Derivado: si tiene ficha de empleado, es empleado. Una casilla aparte podía
+    // decir lo contrario que la realidad, y decía.
+    is_employee: Boolean(user.employee_record),
+    employee: user.employee_record || null,
     photo_url: user.photo_url,
-    phone: user.phone,
+    // phone/address/hire_date viven en la ficha de empleado. Se siguen devolviendo
+    // desde el usuario mientras existan las columnas, para no romper pantallas
+    // viejas, pero ya no se aceptan al crear ni al editar.
+    phone: user.employee_record?.phone ?? user.phone,
     address: user.address,
     hire_date: user.hire_date,
     cash_register_id: user.cash_register_id,
@@ -141,6 +151,9 @@ exports.list = async (req, res, next) => {
           select: { branch: { select: { id: true, name: true, code: true, active: true } } },
         },
         user_companies: { select: { company_id: true } },
+        employee_record: {
+          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+        },
       },
       orderBy: { name: 'asc' },
       skip: (safePage - 1) * pageSize,
@@ -157,9 +170,10 @@ exports.list = async (req, res, next) => {
         email: u.email,
         role_id: u.role_id,
         role: u.role,
-        is_employee: u.is_employee || false,
+        is_employee: Boolean(u.employee_record),
+        employee: u.employee_record || null,
         photo_url: u.photo_url,
-        phone: u.phone,
+        phone: u.employee_record?.phone ?? u.phone,
         address: u.address,
         hire_date: u.hire_date,
         cash_register_id: u.cash_register_id,
@@ -184,7 +198,10 @@ exports.list = async (req, res, next) => {
 
 exports.register = async (req, res, next) => {
   try {
-    const { name, email, password, role_id, is_employee, photo_url, phone, address, hire_date } = req.body || {}
+    // phone, address, hire_date y is_employee ya no se aceptan acá: son datos de la
+    // ficha de empleado (RRHH). Se ignoran en silencio si llegan, para no romper
+    // clientes viejos que todavía los manden.
+    const { name, email, password, role_id, photo_url } = req.body || {}
     if (!name || !email || !password || !role_id) {
       return res.status(400).json({ message: 'name, email, password y role_id son requeridos' })
     }
@@ -199,11 +216,7 @@ exports.register = async (req, res, next) => {
       email, 
       password: hash, 
       role_id,
-      is_employee: is_employee || false,
       ...(photo_url && { photo_url }),
-      ...(phone && { phone }),
-      ...(address && { address }),
-      ...(hire_date && { hire_date: new Date(hire_date) })
     }
     const user = await prisma.user.create({
       data: userData,
@@ -233,7 +246,7 @@ exports.register = async (req, res, next) => {
         email: user.email,
         role_id: user.role_id,
         role: user.role || null,
-        is_employee: user.is_employee || false,
+        is_employee: Boolean(user.employee_record),
         photo_url: user.photo_url,
         phone: user.phone,
         address: user.address,
@@ -329,6 +342,9 @@ exports.getById = async (req, res, next) => {
         user_companies: {
           select: { company: { select: { id: true, name: true, code: true } } },
         },
+        employee_record: {
+          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+        },
       }
     })
 
@@ -342,9 +358,10 @@ exports.getById = async (req, res, next) => {
       email: user.email,
       role_id: user.role_id,
       role: user.role,
-      is_employee: user.is_employee || false,
+      is_employee: Boolean(user.employee_record),
+      employee: user.employee_record || null,
       photo_url: user.photo_url,
-      phone: user.phone,
+      phone: user.employee_record?.phone ?? user.phone,
       address: user.address,
       hire_date: user.hire_date,
       cash_register_id: user.cash_register_id,
@@ -362,7 +379,8 @@ exports.getById = async (req, res, next) => {
 exports.update = async (req, res, next) => {
   try {
     const { id } = req.params
-    const { name, email, role_id, password, is_employee, photo_url, phone, address, hire_date, cash_register_id } = req.body || {}
+    // Ver nota en register: los datos de RRHH se editan en la ficha de empleado.
+    const { name, email, role_id, password, photo_url, cash_register_id } = req.body || {}
 
     // Validar que el usuario existe y pertenece a la empresa activa
     const existingUser = await prisma.user.findFirst({
@@ -385,11 +403,7 @@ exports.update = async (req, res, next) => {
     if (name) updateData.name = name
     if (email) updateData.email = email
     if (role_id !== undefined) updateData.role_id = Number(role_id)
-    if (is_employee !== undefined) updateData.is_employee = Boolean(is_employee)
     if (photo_url !== undefined) updateData.photo_url = photo_url || null
-    if (phone !== undefined) updateData.phone = phone || null
-    if (address !== undefined) updateData.address = address || null
-    if (hire_date !== undefined) updateData.hire_date = hire_date ? new Date(hire_date) : null
     if (cash_register_id !== undefined) {
       if (cash_register_id) {
         const register = await prisma.cashRegister.findFirst({
@@ -413,7 +427,7 @@ exports.update = async (req, res, next) => {
     const updatedUser = await prisma.user.update({
       where: { id },
       data: updateData,
-      include: { role: true, cashRegister: { select: { id: true, name: true, code: true, active: true } } }
+      include: { role: true, cashRegister: { select: { id: true, name: true, code: true, active: true } }, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
     })
 
     res.json({
@@ -422,7 +436,7 @@ exports.update = async (req, res, next) => {
       email: updatedUser.email,
       role_id: updatedUser.role_id,
       role: updatedUser.role,
-      is_employee: updatedUser.is_employee || false,
+      is_employee: Boolean(updatedUser.employee_record),
       photo_url: updatedUser.photo_url,
       phone: updatedUser.phone,
       address: updatedUser.address,
@@ -752,7 +766,7 @@ exports.validateAdmin = async (req, res, next) => {
     // Buscar usuario por email (usamos email como username)
     const user = await prisma.user.findUnique({ 
       where: { email: username }, 
-      include: { role: true } 
+      include: { role: true, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
     })
 
     if (!user) {
@@ -861,7 +875,7 @@ exports.uploadPhoto = async (req, res, next) => {
     const updatedUser = await prisma.user.update({
       where: { id },
       data: { photo_url: urlData.publicUrl },
-      include: { role: true }
+      include: { role: true, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
     })
 
     res.json({
@@ -870,7 +884,7 @@ exports.uploadPhoto = async (req, res, next) => {
       email: updatedUser.email,
       role_id: updatedUser.role_id,
       role: updatedUser.role,
-      is_employee: updatedUser.is_employee || false,
+      is_employee: Boolean(updatedUser.employee_record),
       photo_url: updatedUser.photo_url,
       phone: updatedUser.phone,
       address: updatedUser.address,
