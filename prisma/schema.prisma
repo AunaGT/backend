@@ -714,12 +714,10 @@ model User {
   transfers_received StockTransfer[] @relation("TransferReceivedBy")
   stock_movements    StockMovement[]
 
-  // Campos de empleado
-  is_employee Boolean   @default(false)
+  // phone/address/hire_date/is_employee viven únicamente en Employee (RRHH);
+  // ver [[employee_record]]. photo_url sí se queda: es el avatar de la cuenta,
+  // no la foto de la ficha de empleado.
   photo_url   String?   @db.VarChar(500)
-  phone       String?   @db.VarChar(50)
-  address     String?   @db.Text
-  hire_date   DateTime? // Fecha de contratación
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
 

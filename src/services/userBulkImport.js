@@ -157,52 +157,9 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
         }
     }
 
-    // Optional: phone
-    const phone = String(normalizedRow.phone || '').trim()
-    if (phone) {
-        if (phone.length > 50) {
-            errors.push('El teléfono no puede exceder 50 caracteres')
-        } else {
-            data.phone = phone
-        }
-    }
-
-    // Optional: address
-    const address = String(normalizedRow.address || '').trim()
-    if (address) {
-        data.address = address
-    }
-
-    // Optional: hire_date
-    const hireDateStr = String(normalizedRow.hire_date || '').trim()
-    if (hireDateStr) {
-        let hireDate = null
-
-        // Detectar posibles fechas en formato serial de Excel (solo dígitos)
-        if (/^\d+(\.\d+)?$/.test(hireDateStr)) {
-            const serial = Number(hireDateStr)
-            if (!isNaN(serial)) {
-                const excelEpoch = new Date(Date.UTC(1899, 11, 30)) // base Excel
-                hireDate = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000)
-            }
-        } else {
-            const parsed = new Date(hireDateStr)
-            if (!isNaN(parsed.getTime())) {
-                hireDate = parsed
-            }
-        }
-
-        if (!hireDate || isNaN(hireDate.getTime())) {
-            errors.push(`Fecha de contratación inválida: "${hireDateStr}". Use formato YYYY-MM-DD o una fecha válida.`)
-        } else {
-            const year = hireDate.getUTCFullYear()
-            if (year < 1900 || year > 2100) {
-                errors.push(`Fecha de contratación fuera de rango válido (1900-2100): "${hireDateStr}".`)
-            } else {
-                data.hire_date = hireDate
-            }
-        }
-    }
+    // "telefono"/"direccion"/"fecha_contratacion" ya no se importan al usuario: viven
+    // en la ficha de empleado (RRHH). Igual que es_empleado, se aceptan si vienen en
+    // el archivo y se ignoran, para no romper plantillas viejas.
 
     return {
         valid: errors.length === 0,

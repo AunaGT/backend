@@ -40,7 +40,7 @@ const userWithPerms = {
   },
   // La ficha de RRHH manda: `is_employee` se deriva de acá, no de una casilla.
   employee_record: {
-    select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+    select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true },
   },
 }
 
@@ -56,12 +56,10 @@ function serializeUser(user) {
     is_employee: Boolean(user.employee_record),
     employee: user.employee_record || null,
     photo_url: user.photo_url,
-    // phone/address/hire_date viven en la ficha de empleado. Se siguen devolviendo
-    // desde el usuario mientras existan las columnas, para no romper pantallas
-    // viejas, pero ya no se aceptan al crear ni al editar.
-    phone: user.employee_record?.phone ?? user.phone,
-    address: user.address,
-    hire_date: user.hire_date,
+    // phone/address/hire_date viven únicamente en la ficha de empleado (RRHH).
+    phone: user.employee_record?.phone ?? null,
+    address: user.employee_record?.address ?? null,
+    hire_date: user.employee_record?.hire_date ?? null,
     cash_register_id: user.cash_register_id,
     cash_register: user.cashRegister || null,
     companies: Array.isArray(user.user_companies)
@@ -152,7 +150,7 @@ exports.list = async (req, res, next) => {
         },
         user_companies: { select: { company_id: true } },
         employee_record: {
-          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true },
         },
       },
       orderBy: { name: 'asc' },
@@ -173,9 +171,9 @@ exports.list = async (req, res, next) => {
         is_employee: Boolean(u.employee_record),
         employee: u.employee_record || null,
         photo_url: u.photo_url,
-        phone: u.employee_record?.phone ?? u.phone,
-        address: u.address,
-        hire_date: u.hire_date,
+        phone: u.employee_record?.phone ?? null,
+        address: u.employee_record?.address ?? null,
+        hire_date: u.employee_record?.hire_date ?? null,
         cash_register_id: u.cash_register_id,
         cash_register: u.cashRegister,
         default_branch_id: u.default_branch_id,
@@ -246,11 +244,11 @@ exports.register = async (req, res, next) => {
         email: user.email,
         role_id: user.role_id,
         role: user.role || null,
-        is_employee: Boolean(user.employee_record),
+        is_employee: false,
         photo_url: user.photo_url,
-        phone: user.phone,
-        address: user.address,
-        hire_date: user.hire_date,
+        phone: null,
+        address: null,
+        hire_date: null,
         permissions: expandPermissions(
           Array.isArray(user.role?.permissions)
             ? user.role.permissions.map((rp) => rp.permission?.code).filter(Boolean)
@@ -343,7 +341,7 @@ exports.getById = async (req, res, next) => {
           select: { company: { select: { id: true, name: true, code: true } } },
         },
         employee_record: {
-          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true },
+          select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true },
         },
       }
     })
@@ -361,9 +359,9 @@ exports.getById = async (req, res, next) => {
       is_employee: Boolean(user.employee_record),
       employee: user.employee_record || null,
       photo_url: user.photo_url,
-      phone: user.employee_record?.phone ?? user.phone,
-      address: user.address,
-      hire_date: user.hire_date,
+      phone: user.employee_record?.phone ?? null,
+      address: user.employee_record?.address ?? null,
+      hire_date: user.employee_record?.hire_date ?? null,
       cash_register_id: user.cash_register_id,
       cash_register: user.cashRegister,
       default_branch_id: user.default_branch_id,
@@ -427,7 +425,7 @@ exports.update = async (req, res, next) => {
     const updatedUser = await prisma.user.update({
       where: { id },
       data: updateData,
-      include: { role: true, cashRegister: { select: { id: true, name: true, code: true, active: true } }, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
+      include: { role: true, cashRegister: { select: { id: true, name: true, code: true, active: true } }, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true } } }
     })
 
     res.json({
@@ -438,9 +436,9 @@ exports.update = async (req, res, next) => {
       role: updatedUser.role,
       is_employee: Boolean(updatedUser.employee_record),
       photo_url: updatedUser.photo_url,
-      phone: updatedUser.phone,
-      address: updatedUser.address,
-      hire_date: updatedUser.hire_date,
+      phone: updatedUser.employee_record?.phone ?? null,
+      address: updatedUser.employee_record?.address ?? null,
+      hire_date: updatedUser.employee_record?.hire_date ?? null,
       cash_register_id: updatedUser.cash_register_id,
       cash_register: updatedUser.cashRegister,
       created_at: updatedUser.created_at,
@@ -875,7 +873,7 @@ exports.uploadPhoto = async (req, res, next) => {
     const updatedUser = await prisma.user.update({
       where: { id },
       data: { photo_url: urlData.publicUrl },
-      include: { role: true, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
+      include: { role: true, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true } } }
     })
 
     res.json({
@@ -886,9 +884,9 @@ exports.uploadPhoto = async (req, res, next) => {
       role: updatedUser.role,
       is_employee: Boolean(updatedUser.employee_record),
       photo_url: updatedUser.photo_url,
-      phone: updatedUser.phone,
-      address: updatedUser.address,
-      hire_date: updatedUser.hire_date,
+      phone: updatedUser.employee_record?.phone ?? null,
+      address: updatedUser.employee_record?.address ?? null,
+      hire_date: updatedUser.employee_record?.hire_date ?? null,
       created_at: updatedUser.created_at,
       updated_at: updatedUser.updated_at
     })
