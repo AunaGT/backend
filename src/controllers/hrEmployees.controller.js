@@ -15,6 +15,11 @@
 
 const { prisma } = require('../models/prisma')
 const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../middlewares/tenant')
+const { uploadImageBuffer, removePublicObject } = require('../services/supabaseStorage')
+
+// Mismo bucket que las fotos de usuario: un empleado y su cuenta de acceso
+// (si la tiene) son la misma persona, así que comparten galería de fotos.
+const EMPLOYEE_PHOTOS_BUCKET = 'perfil-usuarios'
 
 /** Error de negocio con status HTTP; lo traduce el error handler global. */
 function fail(status, message) {
@@ -53,6 +58,7 @@ const trim = (v, max) => (v == null || String(v).trim() === '' ? null : String(v
 const CONTRACT_TYPES = ['INDEFINIDO', 'PLAZO_FIJO', 'POR_OBRA']
 const PAY_FREQUENCIES = ['MENSUAL', 'QUINCENAL']
 const EMPLOYEE_STATUSES = ['ACTIVO', 'SUSPENDIDO', 'BAJA']
+const PAYMENT_METHODS = ['EFECTIVO', 'TRANSFERENCIA', 'CHEQUE']
 
 /** Valida contra la lista de valores del enum; null, '' o basura dan 400 en español. */
 function toEnum(value, allowed, message) {
@@ -193,6 +199,23 @@ exports.getById = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+/**
+ * GET /api/hr/employees/me - la ficha del propio usuario.
+ *
+ * Sin permisos de RRHH a propósito: un cajero no puede ver el expediente de
+ * nadie, pero sí el suyo. `user_id` es único, así que hay una ficha o ninguna.
+ */
+exports.mine = async (req, res, next) => {
+  try {
+    const employee = await prisma.employee.findFirst({
+      where: { user_id: req.user.sub },
+      include: EMPLOYEE_INCLUDE,
+    })
+    if (!employee) fail(404, 'No tenés ficha de empleado')
+    res.json(employee)
+  } catch (e) { next(e) }
+}
+
 /** POST /api/hr/employees */
 exports.create = async (req, res, next) => {
   try {
@@ -220,6 +243,8 @@ exports.create = async (req, res, next) => {
       pay_frequency: b.pay_frequency ? toEnum(b.pay_frequency, PAY_FREQUENCIES, 'La frecuencia de pago no es válida') : undefined,
       base_salary: toMoney(b.base_salary, 'El sueldo base', { required: true }),
       bonificacion_incentivo: toMoney(b.bonificacion_incentivo, 'La bonificación incentivo') ?? 250,
+      payment_method: b.payment_method ? toEnum(b.payment_method, PAYMENT_METHODS, 'La forma de pago no es válida') : undefined,
+      bank_name: trim(b.bank_name, 100),
       bank_account: trim(b.bank_account, 50),
       user_id: await resolveUserLink(prisma, companyId, b.user_id),
     }
@@ -278,6 +303,8 @@ exports.update = async (req, res, next) => {
     if (b.pay_frequency !== undefined) setIf('pay_frequency', toEnum(b.pay_frequency, PAY_FREQUENCIES, 'La frecuencia de pago no es válida'))
     if (b.base_salary !== undefined) setIf('base_salary', toMoney(b.base_salary, 'El sueldo base', { required: true }))
     if (b.bonificacion_incentivo !== undefined) setIf('bonificacion_incentivo', toMoney(b.bonificacion_incentivo, 'La bonificación incentivo', { required: true }))
+    if (b.payment_method !== undefined) setIf('payment_method', toEnum(b.payment_method, PAYMENT_METHODS, 'La forma de pago no es válida'))
+    if (b.bank_name !== undefined) setIf('bank_name', trim(b.bank_name, 100))
     if (b.bank_account !== undefined) setIf('bank_account', trim(b.bank_account, 50))
     if (b.status !== undefined) setIf('status', toEnum(b.status, EMPLOYEE_STATUSES, 'El estado del empleado no es válido'))
     if (b.user_id !== undefined) {
@@ -288,6 +315,32 @@ exports.update = async (req, res, next) => {
     const updated = await prisma.employee.update({
       where: { id: current.id },
       data,
+      include: EMPLOYEE_INCLUDE,
+    })
+    res.json(updated)
+  } catch (e) { next(e) }
+}
+
+/** POST /api/hr/employees/:id/photo */
+exports.uploadPhoto = async (req, res, next) => {
+  try {
+    const companyId = requireCompany(req)
+    const current = await prisma.employee.findFirst({
+      where: { id: req.params.id, company_id: companyId, branch_id: requireBranch(req) },
+    })
+    if (!current) fail(404, 'Empleado no encontrado')
+    if (!req.file) fail(400, 'No se proporcionó ningún archivo')
+
+    const publicUrl = await uploadImageBuffer({
+      bucket: EMPLOYEE_PHOTOS_BUCKET,
+      file: req.file,
+      pathPrefix: 'employee-photos',
+    })
+    if (current.photo_url) await removePublicObject(current.photo_url, EMPLOYEE_PHOTOS_BUCKET)
+
+    const updated = await prisma.employee.update({
+      where: { id: current.id },
+      data: { photo_url: publicUrl },
       include: EMPLOYEE_INCLUDE,
     })
     res.json(updated)

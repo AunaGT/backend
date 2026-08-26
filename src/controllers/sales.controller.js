@@ -137,24 +137,12 @@ exports.list = async (req, res, next) => {
       }
 
       if (startGt && endGt) {
-        startDate = new Date(Date.UTC(
-          startGt.year,
-          startGt.month - 1,
-          startGt.day,
-          startGt.hour,
-          startGt.minute,
-          startGt.second,
-          startGt.millisecond
-        ))
-        endDate = new Date(Date.UTC(
-          endGt.year,
-          endGt.month - 1,
-          endGt.day,
-          endGt.hour,
-          endGt.minute,
-          endGt.second,
-          endGt.millisecond
-        ))
+        // `.toJSDate()` ya hace la conversión de zona correcta (instante UTC
+        // real de ese momento zonificado). Reconstruirlo a mano con Date.UTC
+        // a partir de los números de la zona los reetiquetaba como si fueran
+        // UTC — mismo bug que en la creación de la venta, ver más abajo.
+        startDate = startGt.toJSDate()
+        endDate = endGt.toJSDate()
       }
     }
 
@@ -404,9 +392,20 @@ exports.create = async (req, res, next) => {
         throw err
       }
       const openSess = await tx.cashRegisterSession.findFirst({
-        where: { cash_register_id: register.id, status: 'OPEN' }
+        where: { cash_register_id: register.id, status: 'OPEN' },
+        select: { id: true, opened_by_id: true, openedBy: { select: { name: true } } },
       })
       if (openSess) {
+        // El turno abierto en la caja resuelta (predeterminada o asignada) no es
+        // automáticamente "mío": si lo abrió otra persona, un no-admin no puede
+        // vender con él encima — antes se colaba porque solo se miraba la caja,
+        // nunca de quién era el turno.
+        if (!isAdmin && String(openSess.opened_by_id) !== String(user.sub)) {
+          const err = new Error('CASH_SESSION_OTHER_USER')
+          err.status = 403
+          err.openedByName = openSess.openedBy?.name || 'otro usuario'
+          throw err
+        }
         cashSessionIdForSale = openSess.id
       } else if (!isAdmin) {
         const err = new Error('CASH_SESSION_REQUIRED')
@@ -652,23 +651,11 @@ exports.create = async (req, res, next) => {
       const completadaStatus = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
       if (!completadaStatus) throw new Error("No existe el estado 'Completada'")
 
-      const tz = await getTimezone(prisma, req.companyId)
-      const nowGt = DateTime.now().setZone(tz);
-
-      // Create UTC Date with Guatemala's time values
-      // This "tricks" PostgreSQL into storing Guatemala time as UTC
-      const saleDate = DateTime.utc(
-        nowGt.year,
-        nowGt.month,
-        nowGt.day,
-        nowGt.hour,
-        nowGt.minute,
-        nowGt.second,
-        nowGt.millisecond
-      ).toJSDate();
-
-      console.log('[SALE DATE] Guatemala local time:', nowGt.toFormat('yyyy-MM-dd HH:mm:ss'));
-      console.log('[SALE DATE] Will be stored in DB as:', DateTime.fromJSDate(saleDate).toUTC().toFormat('yyyy-MM-dd HH:mm:ss'));
+      // Instante real de la venta, en UTC de verdad. Antes esto "truqueaba" a
+      // Postgres guardando la hora de Guatemala reetiquetada como UTC — corría
+      // el dato guardado el offset de la zona (6h). La pantalla convierte a la
+      // zona configurada al mostrarlo; acá no hay que convertir nada.
+      const saleDate = new Date()
 
       const nextRef = await nextDocumentReference(tx, 'V', branch)
 
@@ -794,6 +781,12 @@ exports.create = async (req, res, next) => {
         message: 'Debe abrir la caja (turno) antes de registrar ventas.'
       })
     }
+    if (e && e.message === 'CASH_SESSION_OTHER_USER') {
+      return res.status(403).json({
+        code: 'CASH_SESSION_OTHER_USER',
+        message: `Esta caja ya tiene un turno abierto por ${e.openedByName}. Debe cerrar ese turno o utilizar una caja asignada.`
+      })
+    }
     if (e && e.message === 'NO_CASH_REGISTER') {
       return res.status(503).json({
         code: 'NO_CASH_REGISTER',
@@ -878,7 +871,10 @@ exports.updateStatus = async (req, res, next) => {
             current.sale_items.map((si) => ({ product_id: si.product_id, qty: si.qty }))
           )
           const stockCtx = {
-            reason: 'SALE', refType: 'sale', refId: String(id), userId: req.user?.sub || null,
+            // `id` es lo que mandó el cliente: puede ser la referencia legible
+            // (V-MIXCO-000005), no el UUID. ref_id es una columna uuid — hay
+            // que usar el id real de la fila ya resuelta.
+            reason: 'SALE', refType: 'sale', refId: String(current.id), userId: req.user?.sub || null,
             groupId: require('crypto').randomUUID(),
           }
           const updatedProducts = await deductStockMap(tx, stockMap, saleBranchId, stockCtx)
@@ -908,7 +904,7 @@ exports.updateStatus = async (req, res, next) => {
             .filter((l) => l.qty > 0)
           const stockMap = await expandLinesToStockMap(tx, porDevolver)
           const updatedProducts = await restoreStockMap(tx, stockMap, saleBranchId, {
-            reason: 'SALE_RETURN', refType: 'sale', refId: String(id), userId: req.user?.sub || null,
+            reason: 'SALE_RETURN', refType: 'sale', refId: String(current.id), userId: req.user?.sub || null,
           })
           await restoreLotsFEFO(tx, stockMap, saleBranchId) // devuelve cantidad a los lotes
 

@@ -14,7 +14,7 @@ const { prisma } = require('../models/prisma')
 const { round2 } = require('../services/accounting/logic')
 const {
   AccountingError, createEntry, getDefaultAccounts, periodKeyForDate,
-  DEFAULT_ACCOUNT_KEYS, SETTING_KEY,
+  DEFAULT_ACCOUNT_KEYS, OPTIONAL_ACCOUNT_KEYS, SETTING_KEY,
 } = require('../services/accounting/core')
 const { postPendingOperations } = require('../services/accounting/postingEngine')
 
@@ -133,17 +133,31 @@ exports.getConfig = async (req, res, next) => {
     const setting = await prisma.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: req.companyId } })
     let defaults = {}
     try { defaults = setting ? JSON.parse(setting.value) : {} } catch { defaults = {} }
-    res.json({ defaults, keys: DEFAULT_ACCOUNT_KEYS })
+    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS] })
   } catch (e) { next(e) }
 }
 
 exports.updateConfig = async (req, res, next) => {
   try {
     const incoming = req.body?.defaults || {}
+    let current = {}
+    const existing = await prisma.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: req.companyId } })
+    if (existing) {
+      try { current = JSON.parse(existing.value) } catch { current = {} }
+    }
     const defaults = {}
     for (const key of DEFAULT_ACCOUNT_KEYS) {
       const code = incoming[key]
       if (!code) return res.status(400).json({ error: `Falta la cuenta para «${key}»` })
+      const acc = await prisma.account.findFirst({ where: { code: String(code), company_id: req.companyId } })
+      if (!acc || !acc.active || acc.is_group) {
+        return res.status(400).json({ error: `Cuenta ${code} inválida para «${key}» (debe existir, activa y no agrupadora)` })
+      }
+      defaults[key] = String(code)
+    }
+    for (const key of OPTIONAL_ACCOUNT_KEYS) {
+      const code = incoming[key] || current[key]
+      if (!code) continue
       const acc = await prisma.account.findFirst({ where: { code: String(code), company_id: req.companyId } })
       if (!acc || !acc.active || acc.is_group) {
         return res.status(400).json({ error: `Cuenta ${code} inválida para «${key}» (debe existir, activa y no agrupadora)` })
@@ -155,7 +169,7 @@ exports.updateConfig = async (req, res, next) => {
       update: { value: JSON.stringify(defaults) },
       create: { company_id: req.companyId, key: SETTING_KEY, type: 'json', value: JSON.stringify(defaults), description: 'Mapeo de cuentas por defecto para asientos automáticos' },
     })
-    res.json({ defaults, keys: DEFAULT_ACCOUNT_KEYS })
+    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS] })
   } catch (e) { next(e) }
 }
 

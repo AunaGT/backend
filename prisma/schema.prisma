@@ -1587,6 +1587,9 @@ enum JournalSourceType {
   PAYROLL
   PAYROLL_PAYMENT
   PAYROLL_ADVANCE
+  /// Diferencia de arqueo (sobrante/faltante) al aprobar un cierre de caja.
+  /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
+  CASH_CLOSURE
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.
@@ -1690,6 +1693,12 @@ enum PayFrequency {
   QUINCENAL
 }
 
+enum EmployeePaymentMethod {
+  EFECTIVO
+  TRANSFERENCIA
+  CHEQUE
+}
+
 enum AttendanceStatus {
   PRESENTE
   TARDE
@@ -1735,6 +1744,8 @@ model Employee {
   base_salary            Decimal        @default(0) @db.Decimal(12, 2)
   /// Decreto 78-89: no es salario para IGSS, indemnización, aguinaldo ni bono 14
   bonificacion_incentivo Decimal        @default(250) @db.Decimal(12, 2)
+  payment_method         EmployeePaymentMethod @default(EFECTIVO)
+  bank_name              String?        @db.VarChar(100)
   bank_account           String?        @db.VarChar(50)
   status                 EmployeeStatus @default(ACTIVO)
   user_id                String?        @unique @db.Uuid

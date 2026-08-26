@@ -80,6 +80,23 @@ async function resolveRegister (client, explicitId, userId, branchId) {
     return client.cashRegister.findFirst({ where: { id: String(explicitId), active: true, branch_id: branchId } })
   }
   if (userId) {
+    // Antes de caer en "mi caja asignada" o la de la sucursal, buscar dónde
+    // el usuario tiene trabajo real pendiente (turno abierto, o cerrado sin
+    // arqueo todavía) — así una caja ad hoc (no asignada, no default) se
+    // sigue encontrando después de cerrar el turno, en vez de perderse.
+    const ownWork = await client.cashRegisterSession.findFirst({
+      where: {
+        opened_by_id: String(userId),
+        cashRegister: { branch_id: branchId, active: true },
+        OR: [{ status: 'OPEN' }, { status: 'CLOSED', cash_closure_id: null }],
+      },
+      orderBy: [{ opened_at: 'desc' }],
+      select: {
+        cashRegister: { select: { id: true, name: true, code: true, is_default: true, active: true, branch_id: true } },
+      },
+    })
+    if (ownWork?.cashRegister) return ownWork.cashRegister
+
     const user = await client.user.findUnique({
       where: { id: String(userId) },
       select: { cashRegister: { select: { id: true, name: true, code: true, is_default: true, active: true, branch_id: true } } }
