@@ -356,17 +356,12 @@ exports.create = async (req, res, next) => {
           throw new Error('supplier_id required when initial stock > 0')
         }
 
-        const tz = await getTimezone(prisma, req.companyId)
-        const nowGt = DateTime.now().setZone(tz)
-        const dateAsUtcWithGtClock = new Date(Date.UTC(
-          nowGt.year,
-          nowGt.month - 1,
-          nowGt.day,
-          nowGt.hour,
-          nowGt.minute,
-          nowGt.second,
-          nowGt.millisecond
-        ))
+        // Instante real del evento: se guarda en UTC de verdad, tal cual lo da
+        // `new Date()`. Convertir a la zona configurada y volver a etiquetar
+        // esos números como si fueran UTC (como hacía este bloque antes) corre
+        // la marca de tiempo el offset de la zona — 6h en Guatemala — un bug
+        // de dato guardado, no solo de cómo se muestra.
+        const now = new Date()
 
         // Stock inicial de un producto nuevo = apertura, nunca una compra
         // operativa del período (mismo criterio que 'INITIAL' en stock_movements).
@@ -376,7 +371,7 @@ exports.create = async (req, res, next) => {
             supplier_id: supplierId,
             qty: stock,
             cost: cost,
-            date: dateAsUtcWithGtClock,
+            date: now,
             source: 'INITIAL',
           },
         })
@@ -386,7 +381,7 @@ exports.create = async (req, res, next) => {
         await tx.supplier.update({
           where: { id: supplierId },
           data: {
-            last_order: dateAsUtcWithGtClock,
+            last_order: now,
           }
         })
       }
@@ -721,17 +716,6 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const tz = await getTimezone(prisma, req.companyId)
-    const nowGt = DateTime.now().setZone(tz)
-    const dateAsUtcWithGtClock = new Date(Date.UTC(
-      nowGt.year,
-      nowGt.month - 1,
-      nowGt.day,
-      nowGt.hour,
-      nowGt.minute,
-      nowGt.second,
-      nowGt.millisecond
-    ))
 
     const owned = await prisma.product.findFirst({
       where: { id: req.params.id, company_id: req.companyId },
@@ -776,7 +760,7 @@ exports.remove = async (req, res, next) => {
       })
     }
 
-    await prisma.product.update({ where: { id: req.params.id }, data: { deleted: true, deleted_at: dateAsUtcWithGtClock } })
+    await prisma.product.update({ where: { id: req.params.id }, data: { deleted: true, deleted_at: new Date() } })
     res.json({ ok: true })
   } catch (e) { next(e) }
 }
@@ -1562,6 +1546,10 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 
     const tz = await getTimezone(prisma, req.companyId)
     const nowGt = DateTime.now().setZone(tz)
+    // Empaquetado deliberado: SOLO sirve para leer año/mes/día de "hoy" en la
+    // zona configurada (código de lote, vencimiento por término de pago). No
+    // es un instante real — sus horas/minutos no deben guardarse como si lo
+    // fueran. Para el momento real del registro, usar `now` más abajo.
     const dateAsUtcWithGtClock = new Date(Date.UTC(
       nowGt.year,
       nowGt.month - 1,
@@ -1571,6 +1559,9 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
       nowGt.second,
       nowGt.millisecond
     ))
+    // Instante real del registro, en UTC de verdad — esto es lo que se guarda
+    // en cualquier columna que represente "cuándo pasó esto".
+    const now = new Date()
 
     const payment_status = body.payment_status === 'PAID' ? 'PAID' : 'PENDING'
     let payment_term_id = null
@@ -1605,7 +1596,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         }
         paid_at = p
       } else {
-        paid_at = dateAsUtcWithGtClock
+        paid_at = now
       }
     }
 
@@ -1703,7 +1694,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           branch_id: branchId,
           supplier_id,
           registered_by,
-          date: dateAsUtcWithGtClock,
+          date: now,
           notes: notes || null,
           source: merchandiseSource,
           payment_term_id,
@@ -1712,7 +1703,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           payment_reference: payment_reference || null,
           due_date,
           payment_updated_by: registered_by,
-          payment_updated_at: dateAsUtcWithGtClock,
+          payment_updated_at: now,
         },
       })
 
@@ -1774,7 +1765,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
             supplier_id,
             qty: quantity,
             cost: unitCost,
-            date: dateAsUtcWithGtClock,
+            date: now,
             source: merchandiseSource,
           }
         })
@@ -1808,7 +1799,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
               unit_cost: unitCost,
               supplier_id,
               incoming_merchandise_id: incomingMerchandise.id,
-              received_at: dateAsUtcWithGtClock,
+              received_at: now,
             }
           })
           lotsCreated++
@@ -1825,7 +1816,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         where: { id: supplier_id },
         data: {
           ...(merchandiseSource === 'PURCHASE' ? { total_purchases: { increment: totalPurchaseValue } } : {}),
-          last_order: dateAsUtcWithGtClock,
+          last_order: now,
         }
       })
 

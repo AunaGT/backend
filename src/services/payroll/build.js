@@ -48,6 +48,10 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
   }
 
   const baseSalary = Number(employee.base_salary)
+  // Sin número de IGSS no está afiliado, así que no va en la planilla del IGSS:
+  // ni cuota laboral, ni patronal, ni IRTRA, ni INTECAP (esas dos se pagan por
+  // la misma planilla). Las provisiones sí siguen: son del Código de Trabajo.
+  const afiliadoIgss = Boolean(String(employee.igss_number ?? '').trim())
   const days = proratedDays({
     periodStart: run.period_start,
     periodEnd: run.period_end,
@@ -67,7 +71,7 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
     push('BONIFICACION_INCENTIVO', 'DEVENGO', 'Bonificación incentivo', bonificacion)
     push('HORAS_EXTRA', 'DEVENGO', 'Horas extra', overtime, { quantity: round2(overtimeHours) })
 
-    igss_base = igssBase({ ordinary, overtime })
+    igss_base = afiliadoIgss ? igssBase({ ordinary, overtime }) : 0
     isr_base = round2(ordinary + bonificacion + overtime)
 
     const igssEmp = igssEmployee(igss_base, rates)
@@ -98,6 +102,7 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
       disponible = round2(disponible - cuota)
     }
 
+    // Con igss_base en 0 los tres salen en 0 y `push` no los agrega.
     const employer = employerCost(igss_base, rates)
     push('IGSS_PATRONAL', 'COSTO_PATRONAL', 'IGSS cuota patronal', employer.igss)
     push('IRTRA', 'COSTO_PATRONAL', 'IRTRA', employer.irtra)

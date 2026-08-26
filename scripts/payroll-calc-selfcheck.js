@@ -119,7 +119,7 @@ assert.strictEqual(bonusTaxableExcess(3500, 3500), 0)
 assert.strictEqual(bonusTaxableExcess(5000, 3500), 1500)
 
 // ---- Recibo completo ----
-const empleado = { base_salary: 3500, bonificacion_incentivo: 250, hire_date: d('2020-01-01'), termination_date: null }
+const empleado = { base_salary: 3500, bonificacion_incentivo: 250, hire_date: d('2020-01-01'), termination_date: null, igss_number: '123456' }
 
 {
   const ordinaria = buildPayslip({
@@ -174,6 +174,39 @@ const empleado = { base_salary: 3500, bonificacion_incentivo: 250, hire_date: d(
   assert.strictEqual(aguinaldo.isr_base, 0, 'un aguinaldo de un sueldo está exento')
   assert.strictEqual(aguinaldo.employer_cost, 0, 'las provisiones son solo de la corrida ordinaria')
   assert.ok(!aguinaldo.lines.some((l) => l.concept === 'ANTICIPO'), 'los anticipos solo se descuentan en la ordinaria')
+}
+
+{
+  // Sin número de IGSS no está afiliado: fuera de la planilla del IGSS por completo.
+  const sinIgss = buildPayslip({
+    employee: { ...empleado, igss_number: null },
+    run: { type: 'ORDINARIA', period_start: d('2026-08-01'), period_end: d('2026-08-31'), pay_date: d('2026-08-31') },
+    rates: R, overtimeHours: 4, advances: [], ytd: { taxable: 0, igss: 0, isr: 0 },
+  })
+  const concepto = (c) => sinIgss.lines.find((l) => l.concept === c)
+
+  assert.strictEqual(sinIgss.igss_base, 0, 'sin afiliación no hay base afecta')
+  assert.ok(!concepto('IGSS_LABORAL'), 'no se le retiene la cuota laboral')
+  assert.ok(!concepto('IGSS_PATRONAL'), 'la empresa no paga cuota patronal por él')
+  assert.ok(!concepto('IRTRA'), 'IRTRA se paga por la planilla del IGSS')
+  assert.ok(!concepto('INTECAP'), 'INTECAP se paga por la planilla del IGSS')
+
+  // Cobra completo: los devengos no cambian, solo desaparece la deducción.
+  assert.strictEqual(sinIgss.total_earnings, 3837.5)
+  assert.strictEqual(sinIgss.total_deductions, 0)
+  assert.strictEqual(sinIgss.net_pay, 3837.5)
+
+  // Las provisiones son del Código de Trabajo, no del IGSS: siguen intactas.
+  assert.strictEqual(sinIgss.employer_cost, provisions(3500, R).total)
+  assert.ok(concepto('PROVISION_INDEMNIZACION'), 'la indemnización se provisiona igual')
+
+  // Un espacio en blanco tampoco es un número de afiliación.
+  const enBlanco = buildPayslip({
+    employee: { ...empleado, igss_number: '   ' },
+    run: { type: 'ORDINARIA', period_start: d('2026-08-01'), period_end: d('2026-08-31'), pay_date: d('2026-08-31') },
+    rates: R, overtimeHours: 0, advances: [], ytd: { taxable: 0, igss: 0, isr: 0 },
+  })
+  assert.strictEqual(enBlanco.igss_base, 0)
 }
 
 console.log('payroll-calc-selfcheck OK')

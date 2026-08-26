@@ -37,7 +37,7 @@ const RUN_INCLUDE = {
   confirmedBy: { select: { id: true, name: true } },
   payslips: {
     include: {
-      employee: { select: { id: true, code: true, first_name: true, last_name: true, position: true, igss_number: true } },
+      employee: { select: { id: true, code: true, first_name: true, last_name: true, position: true, igss_number: true, payment_method: true, bank_name: true, bank_account: true } },
       lines: { orderBy: { sort_order: 'asc' } },
     },
     orderBy: { employee: { last_name: 'asc' } },

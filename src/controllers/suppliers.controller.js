@@ -494,19 +494,7 @@ exports.remove = async (req, res, next) => {
       return res.status(err.statusCode || 403).json({ message: err.message })
     }
 
-    const tz = await getTimezone(prisma, req.companyId)
-    const nowGt = DateTime.now().setZone(tz)
-    const dateAsUtcWithGtClock = new Date(Date.UTC(
-      nowGt.year,
-      nowGt.month - 1,
-      nowGt.day,
-      nowGt.hour,
-      nowGt.minute,
-      nowGt.second,
-      nowGt.millisecond
-    ))
-
-    await prisma.supplier.update({ where: { id: req.params.id }, data: { deleted: true, deleted_at: dateAsUtcWithGtClock } })
+    await prisma.supplier.update({ where: { id: req.params.id }, data: { deleted: true, deleted_at: new Date() } })
     res.json({ ok: true })
   } catch (e) { next(e) }
 }

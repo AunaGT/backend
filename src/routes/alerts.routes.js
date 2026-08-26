@@ -57,6 +57,12 @@ const router = Router()
  */
 router.get('/', Auth, hasPermission('alerts.view', 'alerts.manage'), Alerts.list)
 
+// Catálogos y usuarios asignables para "Nueva Alerta" / reasignar. Antes de
+// cualquier ruta con :id, si no colisionan con ella.
+router.get('/types', Auth, hasPermission('alerts.view', 'alerts.manage'), Alerts.types)
+router.get('/priorities', Auth, hasPermission('alerts.view', 'alerts.manage'), Alerts.priorities)
+router.get('/assignable-users', Auth, hasPermission('alerts.manage'), Alerts.assignableUsers)
+
 /**
  * @openapi
  * /alerts:

@@ -237,9 +237,11 @@ exports.calculateTheoretical = async (req, res, next) => {
 
     /**
      * Mi cierre con sesión: NO filtrar por sold_at/date entre opened_at y closed_at.
-     * Las ventas guardan sold_at con convención «hora local como UTC» (sales.controller);
-     * la sesión usa timestamps UTC reales → el rango excluye todas las ventas del turno.
-     * Basta cash_register_session_id = turno. Legado: sin sesión, sí período + created_by.
+     * Ventas de antes de la corrección del guardado de fechas (ver sales.controller.js)
+     * tienen sold_at con la hora local reetiquetada como UTC, corrida contra los
+     * timestamps UTC reales de la sesión → el rango las excluye. cash_register_session_id
+     * no depende de esto y sigue siendo la fuente confiable. Legado: sin sesión, sí
+     * período + created_by (ahí periodOr ya compara correctamente en ventas nuevas).
      */
     let salesWhere
     if (isOwn && cashRegisterSessionId) {
