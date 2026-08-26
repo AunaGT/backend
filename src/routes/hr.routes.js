@@ -9,11 +9,14 @@
  */
 
 const { Router } = require('express')
+const multer = require('multer')
 const router = Router()
 const { Auth, hasPermission } = require('../middlewares/autenticacion')
 const Employees = require('../controllers/hrEmployees.controller')
 const Attendance = require('../controllers/hrAttendance.controller')
 const Advances = require('../controllers/hrAdvances.controller')
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } })
 
 // Empleados
 router.get('/employees', Auth, hasPermission('hr.employees.view'), Employees.list)
@@ -24,6 +27,7 @@ router.get('/employees/me', Auth, Employees.mine)
 router.post('/employees', Auth, hasPermission('hr.employees.create'), Employees.create)
 router.get('/employees/:id', Auth, hasPermission('hr.employees.view'), Employees.getById)
 router.put('/employees/:id', Auth, hasPermission('hr.employees.edit'), Employees.update)
+router.post('/employees/:id/photo', Auth, hasPermission('hr.employees.edit'), upload.single('file'), Employees.uploadPhoto)
 router.delete('/employees/:id', Auth, hasPermission('hr.employees.delete'), Employees.remove)
 
 // Asistencia
