@@ -16,7 +16,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { splitIva, round2 } = require('./logic')
-const { createEntry, getDefaultAccounts, getTaxConfig, AccountingError } = require('./core')
+const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, AccountingError } = require('./core')
 
 /**
  * Cuántas operaciones sin contabilizar se procesan por corrida. Antes se traían
@@ -416,10 +416,61 @@ async function postPendingOperations(prisma, userId, companyId) {
     track(label, reason)
   }
 
+  // ---- Diferencias de arqueo (cierres de caja aprobados) ----
+  // Cuentas propias (getCashClosureAccounts) y por eso se resuelven DENTRO de
+  // cada tryPost, no una vez arriba como `defaults`: si una empresa no las
+  // configuró, que se omitan solo estas líneas — no el resto de la corrida,
+  // que ya pudo haber contabilizado ventas y compras antes de llegar aquí.
+  const pendingClosures = await pendingIds(prisma, 'CASH_CLOSURE', companyId, Prisma.sql`
+    SELECT cc.id::text AS id, cc.date AS ord
+    FROM cash_closures cc
+    JOIN branches b ON b.id = cc.branch_id
+    WHERE b.company_id = ${companyId}::uuid AND cc.status = 'Aprobado'
+  `)
+  const closures = await prisma.cashClosure.findMany({
+    where: { id: { in: pendingClosures } },
+    select: { id: true, closure_number: true, branch_id: true, date: true, difference: true },
+    orderBy: { date: 'asc' },
+  })
+  for (const closure of closures) {
+    const label = `Arqueo #${closure.closure_number}`
+    const diff = round2(Number(closure.difference))
+    if (diff === 0) { track(label, 'diferencia 0'); continue }
+    const monto = Math.abs(diff)
+    const reason = await tryPost(prisma, async (tx) => {
+      const acc = await getCashClosureAccounts(tx, companyId)
+      // Sobrante (actual > teórico): entra más efectivo del que dice el libro.
+      // Faltante: al revés. En ambos casos la contrapartida es la cuenta de
+      // diferencia de caja (ingreso si sobra, gasto si falta — el signo del
+      // monto en la cuenta lo distingue en el estado de resultados).
+      const lines = diff > 0
+        ? [
+            { account_id: acc.cash.id, debit: monto, credit: 0 },
+            { account_id: acc.cashOverShort.id, debit: 0, credit: monto },
+          ]
+        : [
+            { account_id: acc.cashOverShort.id, debit: monto, credit: 0 },
+            { account_id: acc.cash.id, debit: 0, credit: monto },
+          ]
+      return {
+        company_id: companyId,
+        branch_id: closure.branch_id,
+        date: closure.date,
+        description: `Diferencia de arqueo — ${label}`,
+        source_type: 'CASH_CLOSURE',
+        source_id: closure.id,
+        created_by: userId,
+        lines,
+      }
+    })
+    track(label, reason)
+  }
+
   // Una tanda llena significa que quedaron operaciones sin contabilizar: la
   // siguiente corrida las toma, en vez de que una sola muera por timeout.
   const hasMore = [
     pendingSales, pendingReturns, pendingPurchases, pendingSynthPayments, pendingPayments, adjustments,
+    pendingClosures,
   ].some((a) => a.length >= BATCH)
 
   return { posted, skipped, hasMore }

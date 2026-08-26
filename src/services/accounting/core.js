@@ -38,6 +38,14 @@ const PAYROLL_ACCOUNT_KEYS = [
   'payrollProvisionsExpense',
 ]
 
+/**
+ * Cuentas para la diferencia de arqueo (sobrante/faltante de caja). Misma
+ * razón que PAYROLL_ACCOUNT_KEYS: separadas de DEFAULT_ACCOUNT_KEYS para que
+ * una empresa sin `cashOverShort` configurada siga posteando ventas y compras
+ * con normalidad — solo se queda sin postear la diferencia de caja.
+ */
+const CASH_CLOSURE_ACCOUNT_KEYS = ['cash', 'cashOverShort']
+
 class AccountingError extends Error {
   constructor(message) {
     super(message)
@@ -207,12 +215,46 @@ async function getPayrollAccounts(tx, companyId) {
   return result
 }
 
+/**
+ * Igual que getPayrollAccounts pero para la diferencia de arqueo, y con su
+ * propio AccountingError — así postPendingOperations la atrapa vía tryPost y
+ * solo omite ESA operación (en vez de abortar la corrida completa, que es lo
+ * que pasaría con el 422 llano que usa nómina fuera de tryPost).
+ */
+async function getCashClosureAccounts(tx, companyId) {
+  const setting = await tx.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: companyId } })
+  let map = {}
+  if (setting) {
+    try { map = JSON.parse(setting.value) } catch { map = {} }
+  }
+  const codes = CASH_CLOSURE_ACCOUNT_KEYS.map((k) => map[k]).filter(Boolean)
+  const accounts = await tx.account.findMany({
+    where: { code: { in: codes }, active: true, is_group: false, company_id: companyId },
+  })
+  const byCode = new Map(accounts.map((a) => [a.code, a]))
+
+  const result = {}
+  const missing = []
+  for (const key of CASH_CLOSURE_ACCOUNT_KEYS) {
+    const code = map[key]
+    const account = code ? byCode.get(code) : null
+    if (!account) { missing.push(code ? `${key} (${code})` : key); continue }
+    result[key] = account
+  }
+  if (missing.length > 0) {
+    throw new AccountingError(`Falta configurar las cuentas contables de arqueo: ${missing.join(', ')}`)
+  }
+  return result
+}
+
 module.exports = {
   AccountingError,
   GT_ZONE,
   SETTING_KEY,
   DEFAULT_ACCOUNT_KEYS,
   PAYROLL_ACCOUNT_KEYS,
+  CASH_CLOSURE_ACCOUNT_KEYS,
+  getCashClosureAccounts,
   toEntryDate,
   periodKeyForDate,
   assertPeriodOpen,
