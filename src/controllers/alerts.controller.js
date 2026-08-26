@@ -54,10 +54,59 @@ exports.list = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { requireBranch } = require('../middlewares/tenant')
+    const { type_id, priority_id, title, product_id } = req.body || {}
+    if (!type_id || !priority_id || !title || !product_id) {
+      return res.status(400).json({ message: 'type_id, priority_id, title y product_id son requeridos' })
+    }
+    // Una alerta creada a mano nace Activa; status_id no es algo que quien
+    // reporta el problema deba conocer o elegir.
+    let status_id = req.body?.status_id
+    if (!status_id) {
+      const statusActiva = await prisma.status.findFirst({ where: { name: 'Activa' } })
+      status_id = statusActiva?.id
+    }
     const created = await prisma.alert.create({
-      data: { ...req.body, branch_id: requireBranch(req) },
+      data: { ...req.body, status_id, resolved: 0, branch_id: requireBranch(req) },
+      include: {
+        type: true,
+        priority: true,
+        product: { include: { category: true } },
+        status: true,
+        assignedTo: true
+      }
     })
     res.status(201).json(created)
+  } catch (e) { next(e) }
+}
+
+/** Catálogos para el formulario de "Nueva Alerta". */
+exports.types = async (req, res, next) => {
+  try {
+    res.json(await prisma.alertType.findMany({ orderBy: { name: 'asc' } }))
+  } catch (e) { next(e) }
+}
+
+exports.priorities = async (req, res, next) => {
+  try {
+    res.json(await prisma.alertPriority.findMany({ orderBy: { id: 'asc' } }))
+  } catch (e) { next(e) }
+}
+
+/**
+ * Usuarios a quienes se les puede asignar una alerta. Pide alerts.manage, no
+ * users.view — reasignar una alerta no debería exigir ver el padrón completo
+ * de usuarios del sistema.
+ */
+exports.assignableUsers = async (req, res, next) => {
+  try {
+    const { requireCompany } = require('../middlewares/tenant')
+    const companyId = requireCompany(req)
+    const users = await prisma.user.findMany({
+      where: { user_companies: { some: { company_id: companyId } } },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    })
+    res.json(users)
   } catch (e) { next(e) }
 }
 
@@ -80,15 +129,20 @@ exports.assign = async (req, res, next) => {
 exports.resolve = async (req, res, next) => {
   try {
     const { id } = req.params
+    // `resolved` es lo que list() filtra; `status_id` es lo que la pantalla
+    // muestra como insignia. syncLotExpiryAlerts ya actualiza los dos juntos
+    // al autorresolver — acá solo faltaba el segundo, y la alerta quedaba
+    // marcada resolved=1 pero con status "Activa" pegado.
+    const statusResuelta = await prisma.status.findFirst({ where: { name: 'Resuelta' } })
     const updated = await prisma.alert.update({
       where: { id },
-      data: { resolved: 1 },
-      include: { 
-        type: true, 
-        priority: true, 
-        product: { include: { category: true } }, 
-        status: true, 
-        assignedTo: true 
+      data: { resolved: 1, ...(statusResuelta ? { status_id: statusResuelta.id } : {}) },
+      include: {
+        type: true,
+        priority: true,
+        product: { include: { category: true } },
+        status: true,
+        assignedTo: true
       }
     })
     res.json(updated)
