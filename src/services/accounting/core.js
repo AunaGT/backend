@@ -23,6 +23,10 @@ const DEFAULT_ACCOUNT_KEYS = [
   'currentEarnings', 'retainedEarnings',
 ]
 
+// Opcionales: no deben volver obligatoria su configuración para operaciones
+// que no los utilizan.
+const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort']
+
 /**
  * Cuentas que necesita el posteo de nómina. Deliberadamente separadas de
  * DEFAULT_ACCOUNT_KEYS: getDefaultAccounts revienta si falta CUALQUIER clave de
@@ -252,6 +256,7 @@ module.exports = {
   GT_ZONE,
   SETTING_KEY,
   DEFAULT_ACCOUNT_KEYS,
+  OPTIONAL_ACCOUNT_KEYS,
   PAYROLL_ACCOUNT_KEYS,
   CASH_CLOSURE_ACCOUNT_KEYS,
   getCashClosureAccounts,
