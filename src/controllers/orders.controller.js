@@ -8,6 +8,8 @@ const { prisma, prismaTransaction } = require('../models/prisma')
 const { Prisma } = require('@prisma/client')
 const { ensureStockAlertsBatch } = require('../services/stockAlerts')
 const { expandLinesToStockMap, deductStockMap } = require('../services/bomStock')
+const { consumeLotsFEFO } = require('../services/lots')
+const { dispatchedByRef } = require('../services/stockLocations')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../services/priceResolution')
 const { nextDocumentReference } = require('../services/referenceGenerator')
 const { targetBranch, branchWhere } = require('../middlewares/tenant')
@@ -711,9 +713,13 @@ exports.convertToSale = async (req, res, next) => {
         tx,
         fulfillments.map(({ line, qty }) => ({ product_id: line.product_id, qty }))
       )
-      const updatedProducts = await deductStockMap(tx, stockMap, order.branch_id, {
+      const orderStockCtx = {
         reason: 'ORDER_FULFILL', refType: 'commercial_document', refId: String(order.id), userId: user.sub,
-      })
+        groupId: require('crypto').randomUUID(),
+      }
+      const updatedProducts = await deductStockMap(tx, stockMap, order.branch_id, orderStockCtx)
+      // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
+      await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId: orderStockCtx.groupId }))
       await ensureStockAlertsBatch(tx, updatedProducts, order.branch_id)
 
       await consumePartialByDocument(
