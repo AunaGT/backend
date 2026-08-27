@@ -75,6 +75,8 @@ router.use('/accounting', require('./accounting.routes'))
 router.use('/hr', require('./hr.routes'))
 // Nómina (planillas y recibos)
 router.use('/payroll', require('./payroll.routes'))
+// Cartera (cuentas por cobrar de clientes)
+router.use('/receivables', require('./receivables.routes'))
 
 
 module.exports = router

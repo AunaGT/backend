@@ -28,7 +28,8 @@ const {
 } = require('../services/saleSearch')
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../services/bomStock')
 const { nextDocumentReference } = require('../services/referenceGenerator')
-const { requireBranch, branchWhere } = require('../middlewares/tenant')
+const { requireBranch, branchWhere, hasPerm } = require('../middlewares/tenant')
+const { checkCredit, lockCustomer } = require('../services/receivables')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -657,6 +658,77 @@ exports.create = async (req, res, next) => {
       // zona configurada al mostrarlo; acá no hay que convertir nada.
       const saleDate = new Date()
 
+      // ---- Venta al crédito (cuentas por cobrar) ----
+      // Con un método marcado is_credit no entra dinero: queda un saldo por
+      // cobrar a nombre del cliente, con vencimiento y sujeto a su límite.
+      const paymentMethod = await tx.paymentMethod.findUnique({
+        where: { id: Number(saleData.payment_method_id) },
+        select: { id: true, name: true, is_credit: true },
+      })
+      if (!paymentMethod) {
+        const err = new Error('Método de pago inválido')
+        err.status = 400
+        throw err
+      }
+      let creditDueDate = null
+      let salePaymentStatus = 'PAID'
+      if (paymentMethod.is_credit) {
+        if (!customerContactId) {
+          const err = new Error('Una venta al crédito requiere elegir al cliente')
+          err.status = 400
+          throw err
+        }
+        const customer = await tx.supplier.findFirst({
+          where: { id: customerContactId, company_id: req.companyId },
+          select: {
+            id: true, name: true, credit_limit: true,
+            supplier_payment_terms: {
+              where: { is_default: true },
+              select: { payment_term: { select: { net_days: true } } },
+              take: 1,
+            },
+          },
+        })
+        if (!customer) {
+          const err = new Error('Cliente no encontrado')
+          err.status = 404
+          throw err
+        }
+
+        // Vencimiento: el que mande el POS, o el plazo por defecto del cliente.
+        if (saleData.due_date != null && String(saleData.due_date).trim() !== '') {
+          const d = new Date(saleData.due_date)
+          if (Number.isNaN(d.getTime())) {
+            const err = new Error('La fecha de vencimiento es inválida')
+            err.status = 400
+            throw err
+          }
+          creditDueDate = d
+        } else {
+          const netDays = customer.supplier_payment_terms[0]?.payment_term?.net_days
+          if (netDays != null) {
+            creditDueDate = new Date(saleDate.getTime() + Number(netDays) * 86400000)
+          }
+        }
+
+        // Sin esto dos cajeros vendiéndole al mismo cliente a la vez leen el
+        // mismo saldo y ambos pasan el límite. Se libera al commitear.
+        await lockCustomer(tx, customer.id)
+        const check = await checkCredit(tx, customer, total, { branch_id: branchId })
+        if (!check.ok) {
+          // Quien tenga el permiso puede pasarla igual, pero explícitamente:
+          // el override viaja en el cuerpo, no se asume por tener el permiso.
+          const authorized = saleData.credit_override === true && hasPerm(user, 'sales.credit.override')
+          if (!authorized) {
+            const err = new Error(check.motivo || 'El cliente no puede llevar esta venta al crédito')
+            err.status = 409
+            err.details = { ...check, requiere_permiso: 'sales.credit.override' }
+            throw err
+          }
+        }
+        salePaymentStatus = 'PENDING'
+      }
+
       const nextRef = await nextDocumentReference(tx, 'V', branch)
 
       const sale = await tx.sale.create({
@@ -683,6 +755,8 @@ exports.create = async (req, res, next) => {
           created_by: user.sub,
           cash_register_session_id: cashSessionIdForSale || undefined,
           idempotency_key: idempotencyKey,
+          payment_status: salePaymentStatus,
+          due_date: creditDueDate,
         },
       })
 

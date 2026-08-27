@@ -75,14 +75,23 @@ async function main() {
   const statuses = ['Activa', 'Resuelta', 'Pendiente']
   const stockStatuses = ['Disponible', 'Bajo', 'Agotado']
   const saleStatuses = ['Completada', 'Cancelada']
-  const paymentMethods = ['Efectivo', 'Tarjeta', 'Transferencia']
+  // is_credit marca los que generan cuenta por cobrar en vez de entrar a caja
+  const paymentMethods = [
+    { name: 'Efectivo', is_credit: false },
+    { name: 'Tarjeta', is_credit: false },
+    { name: 'Transferencia', is_credit: false },
+    { name: 'Crédito', is_credit: true },
+  ]
   const alertTypes = ['Stock Bajo', 'Sin Stock', 'Vencimiento', 'Precio']
   const alertPriorities = ['Baja', 'Media', 'Alta', 'Crítica']
   const returnStatuses = ['Pendiente', 'Aprobada', 'Rechazada', 'Completada']
 
   await prisma.status.createMany({ data: statuses.map(name => ({ name })), skipDuplicates: true })
   await prisma.stockStatus.createMany({ data: stockStatuses.map(name => ({ name })), skipDuplicates: true })
-  await prisma.paymentMethod.createMany({ data: paymentMethods.map(name => ({ name })), skipDuplicates: true })
+  await prisma.paymentMethod.createMany({ data: paymentMethods, skipDuplicates: true })
+  // skipDuplicates deja intacto un «Crédito» preexistente sin la bandera, que es
+  // justo el caso de las empresas que ya lo habían creado a mano.
+  await prisma.paymentMethod.updateMany({ where: { name: 'Crédito' }, data: { is_credit: true } })
   await prisma.saleStatus.createMany({ data: saleStatuses.map(name => ({ name })), skipDuplicates: true })
   await prisma.alertType.createMany({ data: alertTypes.map(name => ({ name })), skipDuplicates: true })
   await prisma.alertPriority.createMany({ data: alertPriorities.map(name => ({ name })), skipDuplicates: true })
@@ -134,6 +143,11 @@ async function main() {
     { code: 'payroll.confirm', name: 'Confirmar planillas', description: 'Puede confirmar una planilla y descontar anticipos' },
     { code: 'payroll.pay', name: 'Pagar planillas', description: 'Puede marcar una planilla como pagada' },
     { code: 'payroll.cancel', name: 'Anular planillas', description: 'Puede anular una planilla en borrador o confirmada' },
+
+    // Cuentas por cobrar (cartera)
+    { code: 'receivables.view', name: 'Ver cartera', description: 'Puede ver la cartera, el estado de cuenta y la antigüedad de saldos' },
+    { code: 'receivables.manage', name: 'Registrar cobros', description: 'Puede registrar y eliminar cobros de clientes' },
+    { code: 'sales.credit.override', name: 'Autorizar crédito excedido', description: 'Puede autorizar una venta al crédito que excede el límite del cliente o que tiene facturas vencidas' },
 
     // Productos e inventario
     { code: 'products.view', name: 'Ver productos', description: 'Puede ver el catálogo de productos' },

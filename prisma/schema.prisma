@@ -104,6 +104,7 @@ model Branch {
   inventory_count_sessions InventoryCountSession[]
   cash_registers           CashRegister[]
   cash_closures            CashClosure[]
+  customer_payments        CustomerPayment[]
   transfers_out            StockTransfer[]         @relation("TransferFromBranch")
   transfers_in             StockTransfer[]         @relation("TransferToBranch")
   journal_entries          JournalEntry[]
@@ -375,10 +376,23 @@ enum ReturnType {
 model PaymentMethod {
   id                    Int                  @id @default(autoincrement())
   name                  String               @unique @db.VarChar(50)
+  /// Venta a crédito: no entra dinero al cobrar, genera cuenta por cobrar.
+  /// Es bandera y no un match por nombre porque «Crédito 30d» o un typo
+  /// mandaban la venta a Bancos en silencio (ver cashOrBank en postingEngine).
+  is_credit             Boolean              @default(false)
   sales                 Sale[]
+  customer_payments     CustomerPayment[]
   cash_closure_payments CashClosurePayment[] // Relación para saber qué método de pago se usó en cada línea del cierre
 
   @@map("payment_methods")
+}
+
+/// Estado de cobro de una venta al crédito (cuentas por cobrar)
+enum SalePaymentStatus {
+  PENDING
+  /// Hay abonos pero aún no cubren el total
+  PARTIAL
+  PAID
 }
 
 model SaleStatus {
@@ -494,8 +508,11 @@ model Supplier {
   deleted_at             DateTime?
   /// Precio por defecto si no hay regla `CustomerPriceRule` que aplique (solo clientes).
   default_price_tier     PriceTier             @default(LIST)
+  /// Tope de saldo al crédito (solo clientes). null = sin límite.
+  credit_limit           Decimal?              @db.Decimal(12, 2)
   customer_price_rules   CustomerPriceRule[]
   linked_sales           Sale[]                @relation("SaleCustomerContact")
+  customer_payments      CustomerPayment[]
   commercial_documents   CommercialDocument[]  @relation("CommercialDocCustomer")
 
   /// Listado de contactos: party_type + orden por nombre (reemplaza índice solo party_type)
@@ -593,27 +610,27 @@ model Product {
 /// a propósito. `Product.stock` sigue siendo la
 /// verdad para vender; los lotes se descuentan FEFO en segundo plano (trazabilidad + alertas).
 model ProductLot {
-  id                      String    @id @default(uuid()) @db.Uuid
-  product_id              String    @db.Uuid
-  product                 Product   @relation(fields: [product_id], references: [id])
-  branch_id               String    @db.Uuid
-  branch                  Branch    @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  id                      String         @id @default(uuid()) @db.Uuid
+  product_id              String         @db.Uuid
+  product                 Product        @relation(fields: [product_id], references: [id])
+  branch_id               String         @db.Uuid
+  branch                  Branch         @relation(fields: [branch_id], references: [id], onDelete: Restrict)
   /// Anaquel donde está el lote. Null = sin ubicación conocida (lote heredado):
   /// sigue contando para caducidad y puede despachar desde cualquiera.
-  location_id             String?   @db.Uuid
+  location_id             String?        @db.Uuid
   location                StockLocation? @relation(fields: [location_id], references: [id], onDelete: SetNull)
   /// Nº de lote del proveedor (opcional)
-  lot_code                String?   @db.VarChar(60)
+  lot_code                String?        @db.VarChar(60)
   /// Obligatoria vía API si product.tracks_expiry
-  expiry_date             DateTime? @db.Date
+  expiry_date             DateTime?      @db.Date
   qty_received            Int
   /// Restante según consumo FEFO. Con tracks_expiry es obligatorio que cuadre.
   qty_remaining           Int
-  unit_cost               Decimal?  @db.Decimal(12, 2)
-  supplier_id             String?   @db.Uuid
+  unit_cost               Decimal?       @db.Decimal(12, 2)
+  supplier_id             String?        @db.Uuid
   /// Ingreso de mercancía que originó el lote (auditoría)
-  incoming_merchandise_id String?   @db.Uuid
-  received_at             DateTime  @default(now())
+  incoming_merchandise_id String?        @db.Uuid
+  received_at             DateTime       @default(now())
 
   @@index([product_id, expiry_date])
   @@index([product_id, location_id, expiry_date])
@@ -681,6 +698,8 @@ model User {
   incoming_merchandise_payment_updates   IncomingMerchandise[]             @relation("MerchandisePaymentAudit")
   /// Abonos parciales registrados en ingresos de mercancía
   merchandise_payment_entries_registered IncomingMerchandisePaymentEntry[] @relation("MerchandisePaymentEntryRegisteredBy")
+  /// Cobros a clientes registrados (cuentas por cobrar)
+  customer_payments_registered           CustomerPayment[]                 @relation("CustomerPaymentRegisteredBy")
   sales_created                          Sale[]                            @relation("SaleCreatedBy")
   cash_closures_as_cashier               CashClosure[]                     @relation("CashClosureCashier")
   cash_closures_as_supervisor            CashClosure[]                     @relation("CashClosureSupervisor")
@@ -717,9 +736,9 @@ model User {
   // phone/address/hire_date/is_employee viven únicamente en Employee (RRHH);
   // ver [[employee_record]]. photo_url sí se queda: es el avatar de la cuenta,
   // no la foto de la ficha de empleado.
-  photo_url   String?   @db.VarChar(500)
-  created_at  DateTime  @default(now())
-  updated_at  DateTime  @updatedAt
+  photo_url  String?  @db.VarChar(500)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   refresh_tokens RefreshToken[]
 
@@ -810,6 +829,13 @@ model Sale {
   /// repite la misma y devuelve la venta que ya existe en vez de crear otra.
   idempotency_key String? @db.VarChar(64)
 
+  /// Cuentas por cobrar. Solo tiene sentido en ventas al crédito; las de contado
+  /// quedan en PAID (el default también deja correcto el histórico, que fue todo
+  /// de contado). El saldo NO se guarda: es adjusted_total − Σ abonos.
+  payment_status SalePaymentStatus  @default(PAID)
+  due_date       DateTime?
+  paymentEntries SalePaymentEntry[]
+
   @@unique([branch_id, reference])
   @@unique([branch_id, idempotency_key])
   @@index([created_by])
@@ -817,6 +843,10 @@ model Sale {
   /// Listados por estado y fecha (p. ej. resumen de cliente, ventas «Completada»)
   @@index([status_id, date(sort: Desc)], map: "idx_sales_status_id_date_desc")
   @@index([branch_id, date(sort: Desc)])
+  /// Estado de cuenta de un cliente y aplicación FIFO de sus abonos
+  @@index([customer_contact_id, payment_status, due_date], map: "idx_sales_customer_payment_status_due")
+  /// Antigüedad de saldos: barre solo lo que sigue abierto
+  @@index([payment_status, due_date], map: "idx_sales_payment_status_due")
   @@map("sales")
 }
 
@@ -1085,6 +1115,62 @@ model IncomingMerchandisePaymentEntry {
   @@map("incoming_merchandise_payment_entries")
 }
 
+// ========================================
+// Cuentas por cobrar (clientes)
+// ========================================
+
+/// Recibo de cobro a un cliente. Se aplica FIFO a sus ventas al crédito abiertas,
+/// generando un SalePaymentEntry por cada venta que alcanza a cubrir.
+/// Espejo de IncomingMerchandisePaymentEntry, pero con un padre porque el cliente
+/// paga «a cuenta» un monto que cruza varias facturas y se le entrega un recibo.
+model CustomerPayment {
+  id          String   @id @default(uuid()) @db.Uuid
+  branch_id   String   @db.Uuid
+  branch      Branch   @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  /// Cliente (Supplier con party_type CUSTOMER)
+  customer_id String   @db.Uuid
+  customer    Supplier @relation(fields: [customer_id], references: [id], onDelete: Restrict)
+  amount      Decimal  @db.Decimal(12, 2)
+  paid_at     DateTime @default(now())
+
+  payment_method_id Int
+  payment_method    PaymentMethod @relation(fields: [payment_method_id], references: [id])
+
+  /// Sesión de caja en la que se cobró. La necesita el arqueo para saber a qué
+  /// turno pertenece el efectivo que entró por cobros y no por ventas.
+  cash_register_session_id String?              @db.Uuid
+  cashRegisterSession      CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: SetNull)
+
+  reference     String?  @db.VarChar(255)
+  notes         String?  @db.Text
+  registered_by String   @db.Uuid
+  registeredBy  User     @relation("CustomerPaymentRegisteredBy", fields: [registered_by], references: [id])
+  created_at    DateTime @default(now())
+
+  applications SalePaymentEntry[]
+
+  @@index([customer_id, paid_at(sort: Desc)])
+  @@index([branch_id, paid_at(sort: Desc)])
+  @@index([cash_register_session_id])
+  @@index([registered_by])
+  @@map("customer_payments")
+}
+
+/// Aplicación de un recibo de cobro contra una venta al crédito concreta.
+model SalePaymentEntry {
+  id                  String          @id @default(uuid()) @db.Uuid
+  sale_id             String          @db.Uuid
+  sale                Sale            @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  customer_payment_id String          @db.Uuid
+  customerPayment     CustomerPayment @relation(fields: [customer_payment_id], references: [id], onDelete: Cascade)
+  amount              Decimal         @db.Decimal(12, 2)
+  created_at          DateTime        @default(now())
+
+  @@index([sale_id])
+  @@index([customer_payment_id])
+  @@map("sale_payment_entries")
+}
+
 model Return {
   id               String       @id @default(uuid()) @db.Uuid
   sale_id          String       @db.Uuid
@@ -1194,7 +1280,8 @@ model CashRegisterSession {
   cash_closure_id String?      @unique @db.Uuid
   cashClosure     CashClosure? @relation(fields: [cash_closure_id], references: [id], onDelete: SetNull)
 
-  sales Sale[]
+  sales             Sale[]
+  customer_payments CustomerPayment[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1590,6 +1677,10 @@ enum JournalSourceType {
   /// Diferencia de arqueo (sobrante/faltante) al aprobar un cierre de caja.
   /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
   CASH_CLOSURE
+  /// Cobro a un cliente: acredita Clientes contra Caja/Bancos. Cierra el
+  /// circuito de la venta al crédito, que ya debitaba Clientes.
+  /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
+  SALE_PAYMENT
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.
@@ -1718,44 +1809,44 @@ enum AdvanceStatus {
 /// Expediente laboral. `user_id` es opcional: no todo empleado tiene login, y
 /// borrar el login no borra el expediente.
 model Employee {
-  id                     String         @id @default(uuid()) @db.Uuid
-  company_id             String         @db.Uuid
-  company                Company        @relation(fields: [company_id], references: [id], onDelete: Restrict)
-  branch_id              String         @db.Uuid
-  branch                 Branch         @relation(fields: [branch_id], references: [id], onDelete: Restrict)
-  code                   String         @db.VarChar(20)
+  id                     String                @id @default(uuid()) @db.Uuid
+  company_id             String                @db.Uuid
+  company                Company               @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id              String                @db.Uuid
+  branch                 Branch                @relation(fields: [branch_id], references: [id], onDelete: Restrict)
+  code                   String                @db.VarChar(20)
   /// Separados porque la planilla del IGSS los pide así
-  first_name             String         @db.VarChar(100)
-  last_name              String         @db.VarChar(100)
-  dpi                    String?        @db.VarChar(20)
-  nit                    String?        @db.VarChar(20)
-  igss_number            String?        @db.VarChar(20)
-  birth_date             DateTime?      @db.Date
-  phone                  String?        @db.VarChar(50)
-  email                  String?        @db.VarChar(150)
-  address                String?        @db.Text
-  photo_url              String?        @db.VarChar(500)
-  position               String?        @db.VarChar(100)
-  department             String?        @db.VarChar(100)
-  hire_date              DateTime       @db.Date
-  termination_date       DateTime?      @db.Date
-  contract_type          ContractType   @default(INDEFINIDO)
-  pay_frequency          PayFrequency   @default(MENSUAL)
-  base_salary            Decimal        @default(0) @db.Decimal(12, 2)
+  first_name             String                @db.VarChar(100)
+  last_name              String                @db.VarChar(100)
+  dpi                    String?               @db.VarChar(20)
+  nit                    String?               @db.VarChar(20)
+  igss_number            String?               @db.VarChar(20)
+  birth_date             DateTime?             @db.Date
+  phone                  String?               @db.VarChar(50)
+  email                  String?               @db.VarChar(150)
+  address                String?               @db.Text
+  photo_url              String?               @db.VarChar(500)
+  position               String?               @db.VarChar(100)
+  department             String?               @db.VarChar(100)
+  hire_date              DateTime              @db.Date
+  termination_date       DateTime?             @db.Date
+  contract_type          ContractType          @default(INDEFINIDO)
+  pay_frequency          PayFrequency          @default(MENSUAL)
+  base_salary            Decimal               @default(0) @db.Decimal(12, 2)
   /// Decreto 78-89: no es salario para IGSS, indemnización, aguinaldo ni bono 14
-  bonificacion_incentivo Decimal        @default(250) @db.Decimal(12, 2)
+  bonificacion_incentivo Decimal               @default(250) @db.Decimal(12, 2)
   payment_method         EmployeePaymentMethod @default(EFECTIVO)
-  bank_name              String?        @db.VarChar(100)
-  bank_account           String?        @db.VarChar(50)
-  status                 EmployeeStatus @default(ACTIVO)
-  user_id                String?        @unique @db.Uuid
-  user                   User?          @relation("EmployeeUser", fields: [user_id], references: [id], onDelete: SetNull)
-  created_at             DateTime       @default(now())
-  updated_at             DateTime       @updatedAt
+  bank_name              String?               @db.VarChar(100)
+  bank_account           String?               @db.VarChar(50)
+  status                 EmployeeStatus        @default(ACTIVO)
+  user_id                String?               @unique @db.Uuid
+  user                   User?                 @relation("EmployeeUser", fields: [user_id], references: [id], onDelete: SetNull)
+  created_at             DateTime              @default(now())
+  updated_at             DateTime              @updatedAt
 
   attendance Attendance[]
   advances   EmployeeAdvance[]
-  payslips Payslip[]
+  payslips   Payslip[]
 
   @@unique([company_id, code])
   @@index([branch_id])
@@ -1817,7 +1908,6 @@ model EmployeeAdvance {
   @@index([company_id, status])
   @@map("employee_advances")
 }
-
 
 // ========================================
 // Nómina (planillas, recibos y conceptos)
