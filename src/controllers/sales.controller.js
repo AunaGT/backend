@@ -711,6 +711,19 @@ exports.create = async (req, res, next) => {
           }
         }
 
+        // Una venta al crédito sin vencimiento no vence nunca: no entra en la
+        // antigüedad de saldos, no cuenta como vencida y nunca bloquea al
+        // cliente por mora. Se exige la fecha en vez de dejarla nula.
+        if (!creditDueDate) {
+          const err = new Error(
+            'La venta al crédito necesita fecha de vencimiento. ' +
+            `Indíquela en la venta o configure un término de pago predeterminado para ${customer.name}.`
+          )
+          err.status = 400
+          err.code = 'CREDIT_SALE_WITHOUT_DUE_DATE'
+          throw err
+        }
+
         // Sin esto dos cajeros vendiéndole al mismo cliente a la vez leen el
         // mismo saldo y ambos pasan el límite. Se libera al commitear.
         await lockCustomer(tx, customer.id)

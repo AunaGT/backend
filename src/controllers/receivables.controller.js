@@ -349,12 +349,33 @@ exports.creditCheck = async (req, res, next) => {
     const companyId = requireCompany(req)
     const customer = await prisma.supplier.findFirst({
       where: { id: req.params.id, company_id: companyId },
-      select: { id: true, name: true, credit_limit: true },
+      select: {
+        id: true, name: true, credit_limit: true,
+        supplier_payment_terms: {
+          where: { is_default: true },
+          select: { payment_term: { select: { name: true, net_days: true } } },
+          take: 1,
+        },
+      },
     })
     if (!customer) fail(404, 'Cliente no encontrado')
     const amount = number(req.query.amount)
     const result = await checkCredit(prisma, customer, amount, branchFilter(req))
-    res.json({ customer_id: customer.id, customer_name: customer.name, ...result })
+
+    // El vencimiento sugerido viaja en la misma consulta para que el POS lo
+    // pueda mostrar. Antes el plazo del cliente solo se aplicaba en el
+    // servidor: el cajero no veía qué fecha iba a quedar, y si el cliente no
+    // tenía plazo la venta salía sin vencimiento sin que nada lo dijera.
+    const term = customer.supplier_payment_terms[0]?.payment_term
+    const netDays = term?.net_days != null ? Number(term.net_days) : null
+    res.json({
+      customer_id: customer.id,
+      customer_name: customer.name,
+      payment_term: term ? { name: term.name, net_days: netDays } : null,
+      due_date_sugerida:
+        netDays != null ? new Date(Date.now() + netDays * 86400000).toISOString() : null,
+      ...result,
+    })
   } catch (e) {
     next(e)
   }
