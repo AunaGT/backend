@@ -25,7 +25,7 @@ const DEFAULT_ACCOUNT_KEYS = [
 
 // Opcionales: no deben volver obligatoria su configuración para operaciones
 // que no los utilizan.
-const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort']
+const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort', 'badDebt']
 
 /**
  * Cuentas que necesita el posteo de nómina. Deliberadamente separadas de
@@ -190,6 +190,22 @@ async function getDefaultAccounts(tx, companyId) {
   return result
 }
 
+/**
+ * Cuenta opcional del mapeo por defecto. Devuelve null si no está configurada
+ * en vez de lanzar: quien la pide decide si puede seguir sin ella.
+ */
+async function getOptionalAccount(tx, companyId, key) {
+  const setting = await tx.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: companyId } })
+  if (!setting) return null
+  let map = {}
+  try { map = JSON.parse(setting.value) } catch { return null }
+  const code = map[key]
+  if (!code) return null
+  return tx.account.findFirst({
+    where: { code, active: true, is_group: false, company_id: companyId },
+  })
+}
+
 /** Igual que getDefaultAccounts pero para la nómina, y con su propio 422. */
 async function getPayrollAccounts(tx, companyId) {
   const setting = await tx.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: companyId } })
@@ -258,6 +274,7 @@ module.exports = {
   DEFAULT_ACCOUNT_KEYS,
   OPTIONAL_ACCOUNT_KEYS,
   PAYROLL_ACCOUNT_KEYS,
+  getOptionalAccount,
   CASH_CLOSURE_ACCOUNT_KEYS,
   getCashClosureAccounts,
   toEntryDate,
