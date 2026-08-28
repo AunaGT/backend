@@ -60,7 +60,7 @@ exports.getPublic = async (req, res, next) => {
       timezone: 'America/Guatemala',
       currency_code: 'GTQ',
       currency_name: 'Quetzal',
-      company_name: 'Deposito',
+      company_name: 'Auna',
       company_logo_url: '',
       date_format: 'dd/MM/yyyy',
       locale: 'es-GT',
@@ -85,12 +85,12 @@ exports.getCompanyName = async (req, res, next) => {
   try {
     // Sin empresa resuelta (login, cotización pública) se responde el default:
     // servir el nombre y logo de una empresa cualquiera sería peor.
-    if (!req.companyId) return res.json({ company_name: 'Deposito', company_logo_url: '' })
+    if (!req.companyId) return res.json({ company_name: 'Auna', company_logo_url: '' })
     const rows = await prisma.systemSetting.findMany({
       where: { key: { in: ['company_name', 'company_logo_url'] }, company_id: req.companyId },
     })
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]))
-    const company_name = (map.company_name && String(map.company_name).trim()) || 'Deposito'
+    const company_name = (map.company_name && String(map.company_name).trim()) || 'Auna'
     const company_logo_url = (map.company_logo_url && String(map.company_logo_url).trim()) || ''
     res.json({ company_name, company_logo_url })
   } catch (e) {

@@ -7,7 +7,12 @@
 const { prisma } = require('../models/prisma')
 
 /** Mismos valores que prisma/seed.js — si la BD nunca se sembró, el listado no puede quedar vacío. */
-const DEFAULT_PAYMENT_METHOD_NAMES = ['Efectivo', 'Tarjeta', 'Transferencia']
+const DEFAULT_PAYMENT_METHODS = [
+  { name: 'Efectivo', is_credit: false },
+  { name: 'Tarjeta', is_credit: false },
+  { name: 'Transferencia', is_credit: false },
+  { name: 'Crédito', is_credit: true },
+]
 
 const MAX_NAME_LEN = 50
 
@@ -15,7 +20,7 @@ async function ensureDefaultPaymentMethods() {
   let paymentMethods = await prisma.paymentMethod.findMany({ orderBy: { id: 'asc' } })
   if (paymentMethods.length === 0) {
     await prisma.paymentMethod.createMany({
-      data: DEFAULT_PAYMENT_METHOD_NAMES.map((name) => ({ name })),
+      data: DEFAULT_PAYMENT_METHODS,
       skipDuplicates: true,
     })
     paymentMethods = await prisma.paymentMethod.findMany({ orderBy: { id: 'asc' } })

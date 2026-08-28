@@ -87,6 +87,14 @@ const IMPLIES = {
   'orders.manage': ['orders.view'],
   'returns.manage': ['returns.view', 'sales.view', 'sales.view_detail', 'products.view'],
 
+  // --- Cartera --------------------------------------------------------------
+  // La cartera es una lista de clientes: sin verlos no se puede navegar a nadie.
+  'receivables.view': ['contacts.clients.view'],
+  'receivables.manage': ['receivables.view', 'contacts.clients.view'],
+  'receivables.adjust': ['receivables.view', 'contacts.clients.view'],
+  // Autorizar por encima del límite implica poder consultarlo.
+  'sales.credit.override': ['receivables.view'],
+
   // --- Caja -----------------------------------------------------------------
   'cashclosure.create': ['cashclosure.view'],
   'cashclosure.create_day': ['cashclosure.view', 'cashclosure.create'],

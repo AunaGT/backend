@@ -271,6 +271,9 @@ exports.calculateTheoretical = async (req, res, next) => {
     // Obtener ventas completadas en el período (opcionalmente filtradas por cajero)
     const { branchWhere } = require('../middlewares/tenant')
     Object.assign(salesWhere, branchWhere(req))
+    // La venta al crédito no entra al arqueo: no hubo dinero que contar. Lo que
+    // sí entra es el cobro posterior, más abajo.
+    salesWhere.payment_method = { is_credit: false }
     const sales = await prisma.sale.findMany({
       where: salesWhere,
       include: {
@@ -320,7 +323,61 @@ exports.calculateTheoretical = async (req, res, next) => {
       })
     }
 
-    let theoreticalTotal = theoreticalSales - theoreticalReturns
+    /**
+     * Cobros de clientes del período: dinero que entró sin ser una venta de hoy
+     * (canceló una venta al crédito anterior). Sin esto el cajero cuadra un
+     * cajón que tiene más efectivo del que el teórico explica, y sale sobrante
+     * cada vez que alguien abona.
+     */
+    let collectionsWhere
+    if (isOwn && cashRegisterSessionId) {
+      collectionsWhere = {
+        OR: [
+          { cash_register_session_id: cashRegisterSessionId },
+          {
+            AND: [
+              { cash_register_session_id: null },
+              ...(cashierId ? [{ registered_by: String(cashierId) }] : []),
+              { paid_at: { gte: start, lte: end } }
+            ]
+          }
+        ]
+      }
+    } else {
+      collectionsWhere = { paid_at: { gte: start, lte: end } }
+      if (cashierId) collectionsWhere.registered_by = String(cashierId)
+    }
+    // Solo cobros de verdad: una nota de crédito o un castigo por incobrable
+    // bajan la deuda pero no meten un centavo al cajón.
+    collectionsWhere.kind = 'PAYMENT'
+    Object.assign(collectionsWhere, branchWhere(req))
+
+    const collections = await prisma.customerPayment.findMany({
+      where: collectionsWhere,
+      include: { payment_method: true, customer: { select: { name: true } } }
+    })
+
+    let theoreticalCollections = 0
+    for (const col of collections) {
+      const amount = number(col.amount)
+      theoreticalCollections += amount
+
+      const methodKey = col.payment_method_id
+      if (!paymentMethodsMap.has(methodKey)) {
+        paymentMethodsMap.set(methodKey, {
+          id: methodKey,
+          name: col.payment_method.name,
+          theoretical_amount: 0,
+          theoretical_count: 0,
+          sales: []
+        })
+      }
+      const method = paymentMethodsMap.get(methodKey)
+      method.theoretical_amount += amount
+      method.theoretical_count += 1
+    }
+
+    let theoreticalTotal = theoreticalSales - theoreticalReturns + theoreticalCollections
 
     const cashDetail = await applyOpeningFloatToCashBreakdown(paymentMethodsMap, sessionOpeningFloat)
     if (cashDetail.openingFloat > 0) {
@@ -349,8 +406,17 @@ exports.calculateTheoretical = async (req, res, next) => {
       theoretical: {
         total_sales: Number(theoreticalSales.toFixed(2)),
         total_returns: Number(theoreticalReturns.toFixed(2)),
+        total_collections: Number(theoreticalCollections.toFixed(2)),
         net_total: Number(theoreticalTotal.toFixed(2))
       },
+      collections: collections.map(c => ({
+        id: c.id,
+        customer: c.customer?.name || null,
+        amount: number(c.amount),
+        payment_method: c.payment_method?.name || null,
+        paid_at: c.paid_at,
+        reference: c.reference
+      })),
       cash_session: cashDetail.openingFloat > 0
         ? {
             opening_float: Number(cashDetail.openingFloat.toFixed(2)),

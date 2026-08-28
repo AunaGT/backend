@@ -16,7 +16,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { splitIva, round2 } = require('./logic')
-const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, AccountingError } = require('./core')
+const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, getOptionalAccount, AccountingError } = require('./core')
 
 /**
  * Cuántas operaciones sin contabilizar se procesan por corrida. Antes se traían
@@ -47,11 +47,18 @@ async function pendingIds(prisma, sourceType, companyId, candidatos) {
   return rows.map((r) => String(r.id))
 }
 
-/** Cuenta de cargo según método de pago: efectivo→Caja, crédito→Clientes, resto→Bancos. */
-function cashOrBank(defaults, paymentMethodName) {
-  const name = String(paymentMethodName || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
+/**
+ * Cuenta de cargo según método de pago: crédito→Clientes, efectivo→Caja, resto→Bancos.
+ *
+ * El crédito se decide por la bandera `is_credit` y no por el nombre: un método
+ * llamado «Crédito 30d» o con un typo caía en Bancos sin que nada lo avisara.
+ * El efectivo sí sigue por nombre porque no tiene bandera propia y el catálogo
+ * lo trae sembrado con ese nombre exacto.
+ */
+function cashOrBank(defaults, paymentMethod) {
+  if (paymentMethod?.is_credit) return defaults.receivables
+  const name = String(paymentMethod?.name || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
   if (name.includes('efectivo')) return defaults.cash
-  if (name.includes('credito')) return defaults.receivables
   return defaults.bank
 }
 
@@ -101,7 +108,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     select: {
       id: true, reference: true, date: true, total: true, customer: true, branch_id: true,
       customerContact: { select: { name: true } },
-      payment_method: { select: { name: true } },
+      payment_method: { select: { name: true, is_credit: true } },
       sale_items: { select: { qty: true, unit_cost: true, product: { select: { cost: true } } } },
     },
     orderBy: { date: 'asc' },
@@ -116,7 +123,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     const cost = costBase(round2(sale.sale_items.reduce(
       (s, i) => s + i.qty * Number(i.unit_cost ?? i.product.cost ?? 0), 0
     )))
-    const chargeAccount = cashOrBank(defaults, sale.payment_method?.name)
+    const chargeAccount = cashOrBank(defaults, sale.payment_method)
     const lines = splitVat
       ? [
           { account_id: chargeAccount.id, debit: total, credit: 0 },
@@ -171,7 +178,7 @@ async function postPendingOperations(prisma, userId, companyId) {
         select: {
           reference: true, customer: true, branch_id: true,
           customerContact: { select: { name: true } },
-          payment_method: { select: { name: true } },
+          payment_method: { select: { name: true, is_credit: true } },
         },
       },
       return_items: {
@@ -193,7 +200,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     const cost = costBase(round2(ret.return_items.reduce(
       (s, i) => s + i.qty_returned * Number(i.sale_item?.unit_cost ?? i.product.cost ?? 0), 0
     )))
-    const refundAccount = cashOrBank(defaults, ret.sale?.payment_method?.name)
+    const refundAccount = cashOrBank(defaults, ret.sale?.payment_method)
     const lines = splitVat
       ? [
           { account_id: defaults.salesReturns.id, debit: base, credit: 0 },
@@ -322,6 +329,91 @@ async function postPendingOperations(prisma, userId, companyId) {
         { account_id: defaults.payables.id, debit: amount, credit: 0 },
         { account_id: defaults.cash.id, debit: 0, credit: amount },
       ],
+    }))
+    track(label, reason)
+  }
+
+  // ---- Cobros de clientes ----
+  // Cierra el circuito de la venta al crédito: esa ya debitaba Clientes, pero
+  // nada lo acreditaba nunca, así que la cuenta solo crecía.
+  const pendingCollections = await pendingIds(prisma, 'SALE_PAYMENT', companyId, Prisma.sql`
+    SELECT cp.id::text AS id, cp.paid_at AS ord
+    FROM customer_payments cp
+    JOIN branches b ON b.id = cp.branch_id
+    WHERE b.company_id = ${companyId}::uuid
+  `)
+  const collections = await prisma.customerPayment.findMany({
+    where: { id: { in: pendingCollections } },
+    select: {
+      id: true, amount: true, paid_at: true, branch_id: true, kind: true,
+      customer: { select: { name: true } },
+      payment_method: { select: { name: true, is_credit: true } },
+    },
+    orderBy: { paid_at: 'asc' },
+  })
+  // Solo se resuelve si aparece un incobrable: es opcional, y exigirla dejaría
+  // sin postear a toda empresa que nunca haya castigado una cuenta.
+  let badDebtAccount
+  for (const col of collections) {
+    const customerName = col.customer?.name || 'cliente'
+    const kind = col.kind || 'PAYMENT'
+    const titulo = kind === 'CREDIT_NOTE'
+      ? `Nota de crédito a ${customerName}`
+      : kind === 'WRITE_OFF'
+        ? `Incobrable de ${customerName}`
+        : `Cobro a ${customerName}`
+    const label = `${titulo} (${col.id.slice(0, 8)})`
+    const amount = round2(col.amount)
+    if (amount <= 0) { track(label, 'monto 0'); continue }
+
+    // Los tres movimientos acreditan Clientes por el mismo monto; lo único que
+    // cambia es contra qué. Un cobro entra a Caja/Bancos, una nota de crédito
+    // va contra devoluciones sobre ventas y un incobrable contra gasto.
+    let lines
+    if (kind === 'CREDIT_NOTE') {
+      const { base, iva } = splitIva(amount, ivaRate)
+      lines = splitVat
+        ? [
+            { account_id: defaults.salesReturns.id, debit: base, credit: 0 },
+            { account_id: defaults.ivaDebit.id, debit: iva, credit: 0 },
+          ]
+        : [{ account_id: defaults.salesReturns.id, debit: amount, credit: 0 }]
+    } else if (kind === 'WRITE_OFF') {
+      if (badDebtAccount === undefined) {
+        badDebtAccount = await getOptionalAccount(prisma, companyId, 'badDebt')
+      }
+      if (!badDebtAccount) {
+        track(label, 'falta configurar la cuenta de cuentas incobrables')
+        continue
+      }
+      // ponytail: se castiga por el bruto, sin recuperar el IVA ya declarado.
+      // Recuperarlo en Guatemala exige el trámite formal de incobrabilidad, así
+      // que el asiento automático no puede asumirlo.
+      lines = [{ account_id: badDebtAccount.id, debit: amount, credit: 0 }]
+    } else {
+      // Un cobro nunca se recibe «al crédito»; si el método viniera marcado así
+      // caería en Clientes y el asiento sería Clientes contra Clientes.
+      const chargeAccount = col.payment_method?.is_credit
+        ? defaults.cash
+        : cashOrBank(defaults, col.payment_method)
+      lines = [{ account_id: chargeAccount.id, debit: amount, credit: 0 }]
+    }
+    lines.push({
+      account_id: defaults.receivables.id,
+      debit: 0,
+      credit: amount,
+      description: `Cliente: ${customerName}`,
+    })
+
+    const reason = await tryPost(prisma, () => ({
+      company_id: companyId,
+      branch_id: col.branch_id,
+      date: col.paid_at,
+      description: titulo,
+      source_type: 'SALE_PAYMENT',
+      source_id: col.id,
+      created_by: userId,
+      lines,
     }))
     track(label, reason)
   }
