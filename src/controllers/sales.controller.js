@@ -906,6 +906,7 @@ exports.updateStatus = async (req, res, next) => {
             status: true,
             sale_items: { include: { return_items: { select: { qty_returned: true } } } },
             cashRegisterSession: { select: { status: true } },
+            paymentEntries: { select: { amount: true } },
           },
         })
         if (!current) throw new Error('Venta no encontrada')
@@ -935,6 +936,20 @@ exports.updateStatus = async (req, res, next) => {
         const wasCompleted = prevStatusName === 'Completada'
         const willBeCompleted = newStatusName === 'Completada'
         const willBeCancelled = newStatusName === 'Cancelada'
+
+        // Una venta al crédito con abonos no se puede anular: la venta saldría
+        // de la cartera pero los abonos seguirían apuntando a ella, y el cobro
+        // dejaría de cuadrar con lo que aplicó. Primero se deshace el cobro.
+        if (willBeCancelled && current.paymentEntries.length > 0) {
+          const abonado = current.paymentEntries.reduce((s, e) => s + Number(e.amount), 0)
+          const err = new Error(
+            `La venta ${current.reference || ''} tiene ${current.paymentEntries.length} abono(s) por ${abonado.toFixed(2)}. `.trim() +
+            'Elimine los cobros aplicados desde la cartera antes de anularla.'
+          )
+          err.status = 409
+          err.code = 'SALE_HAS_PAYMENTS'
+          throw err
+        }
 
         // Transición: otro -> Completada => descontar stock
         if (!wasCompleted && willBeCompleted) {

@@ -66,24 +66,14 @@ function balanceOf(sale) {
  * Reparte `amount` entre las ventas abiertas, de la más vieja a la más nueva.
  * `openSales` debe venir ya ordenada y con `{ id, balance }`.
  *
- * Devuelve `[{ sale_id, amount }]`. Rechaza el sobrepago en vez de inventar un
- * saldo a favor, igual que hace compras con sus abonos.
+ * Lo que sobra queda como `unapplied` (anticipo / saldo a favor del cliente) en
+ * vez de rechazarse: el cajero no puede negarse a recibir un billete de más.
+ * Ese sobrante se aplica después con `applyAvailableCredit`.
  */
 function planFifo(openSales, amount) {
   let remaining = round2(amount)
   if (!Number.isFinite(remaining) || remaining <= 0) {
     throw new ReceivableError('El monto del cobro debe ser mayor a 0')
-  }
-  const deuda = round2(openSales.reduce((s, v) => s + v.balance, 0))
-  if (deuda <= 0) {
-    throw new ReceivableError('El cliente no tiene saldo pendiente')
-  }
-  if (remaining > deuda + ROUND_EPS) {
-    throw new ReceivableError(
-      `El cobro excede el saldo del cliente (pendiente ${deuda.toFixed(2)})`,
-      400,
-      { saldo_pendiente: deuda, monto: remaining }
-    )
   }
 
   const applications = []
@@ -94,7 +84,58 @@ function planFifo(openSales, amount) {
     applications.push({ sale_id: sale.id, amount: take })
     remaining = round2(remaining - take)
   }
-  return applications
+  return { applications, unapplied: round2(Math.max(0, remaining)) }
+}
+
+/**
+ * Aplicación manual: el cajero dice a qué facturas va el dinero («este cheque
+ * es de la factura 120»). Valida contra las ventas abiertas reales, no contra
+ * lo que la UI creía: entre que se dibujó la pantalla y llegó el POST pudo
+ * entrar otro cobro o una devolución.
+ */
+function planManual(openSales, requested, amount) {
+  const total = round2(amount)
+  if (!Number.isFinite(total) || total <= 0) {
+    throw new ReceivableError('El monto del cobro debe ser mayor a 0')
+  }
+  const byId = new Map(openSales.map((s) => [s.id, s]))
+  const applications = []
+  const vistas = new Set()
+  let asignado = 0
+
+  for (const raw of requested) {
+    const saleId = String(raw?.sale_id || '')
+    const monto = round2(Number(raw?.amount))
+    if (!saleId) throw new ReceivableError('Cada aplicación necesita una venta')
+    if (vistas.has(saleId)) {
+      throw new ReceivableError('Una misma venta no puede aparecer dos veces en el cobro')
+    }
+    vistas.add(saleId)
+    if (!Number.isFinite(monto) || monto <= 0) {
+      throw new ReceivableError('El monto aplicado a cada venta debe ser mayor a 0')
+    }
+    const sale = byId.get(saleId)
+    if (!sale) {
+      throw new ReceivableError('Una de las ventas seleccionadas ya no tiene saldo pendiente', 409)
+    }
+    if (monto > sale.balance + ROUND_EPS) {
+      throw new ReceivableError(
+        `El monto aplicado a ${sale.reference || 'la venta'} excede su saldo (${sale.balance.toFixed(2)})`,
+        400,
+        { sale_id: saleId, saldo: sale.balance, monto }
+      )
+    }
+    applications.push({ sale_id: saleId, amount: monto })
+    asignado = round2(asignado + monto)
+  }
+
+  if (asignado > total + ROUND_EPS) {
+    throw new ReceivableError(
+      `Lo aplicado a las facturas (${asignado.toFixed(2)}) excede el monto del cobro (${total.toFixed(2)})`,
+      400
+    )
+  }
+  return { applications, unapplied: round2(Math.max(0, total - asignado)) }
 }
 
 /**
@@ -134,9 +175,48 @@ async function syncSaleStatus(tx, saleId) {
   await tx.sale.update({ where: { id: saleId }, data: { payment_status: status } })
 }
 
-/** Saldo total y vencido de un cliente. */
+/**
+ * Cobros del cliente con dinero todavía sin aplicar a ninguna factura: el saldo
+ * a favor. Se deriva igual que la deuda (`amount − Σ aplicaciones`) para no
+ * tener dos números que puedan desincronizarse.
+ */
+async function unappliedPayments(db, customerId, branchWhereClause = {}) {
+  const payments = await db.customerPayment.findMany({
+    where: { customer_id: customerId, ...branchWhereClause },
+    select: {
+      id: true, amount: true, paid_at: true, kind: true, reference: true,
+      applications: { select: { amount: true } },
+    },
+    orderBy: { paid_at: 'asc' },
+  })
+  return payments
+    .map((p) => ({
+      ...p,
+      unapplied: round2(
+        Number(p.amount) - p.applications.reduce((s, a) => s + Number(a.amount), 0)
+      ),
+    }))
+    .filter((p) => p.unapplied > ROUND_EPS)
+}
+
+/** Saldo a favor total del cliente. */
+async function availableCredit(db, customerId, branchWhereClause = {}) {
+  const credits = await unappliedPayments(db, customerId, branchWhereClause)
+  return round2(credits.reduce((s, c) => s + c.unapplied, 0))
+}
+
+/**
+ * Saldo total, vencido y a favor de un cliente.
+ *
+ * `saldo_neto` es lo que realmente debe: la deuda menos los anticipos que aún
+ * no se han aplicado. Es el número que mira el límite de crédito, porque un
+ * cliente que ya dejó el dinero adelantado no está expuesto.
+ */
 async function customerBalance(db, customerId, branchWhereClause = {}, now = new Date()) {
-  const open = await openSalesOf(db, customerId, branchWhereClause)
+  const [open, credito] = await Promise.all([
+    openSalesOf(db, customerId, branchWhereClause),
+    availableCredit(db, customerId, branchWhereClause),
+  ])
   const saldo = round2(open.reduce((s, v) => s + v.balance, 0))
   const vencidas = open.filter((s) => s.due_date && new Date(s.due_date) < now)
   return {
@@ -144,6 +224,8 @@ async function customerBalance(db, customerId, branchWhereClause = {}, now = new
     vencido: round2(vencidas.reduce((s, v) => s + v.balance, 0)),
     facturas_abiertas: open.length,
     facturas_vencidas: vencidas.length,
+    credito_disponible: credito,
+    saldo_neto: round2(Math.max(0, saldo - credito)),
   }
 }
 
@@ -155,8 +237,9 @@ async function customerBalance(db, customerId, branchWhereClause = {}, now = new
  * tenga `sales.credit.override`.
  */
 async function checkCredit(db, customer, amount, branchWhereClause = {}, now = new Date()) {
-  const { saldo, vencido, facturas_vencidas } = await customerBalance(db, customer.id, branchWhereClause, now)
-  const nuevo = round2(saldo + round2(amount))
+  const { saldo, vencido, facturas_vencidas, credito_disponible, saldo_neto } =
+    await customerBalance(db, customer.id, branchWhereClause, now)
+  const nuevo = round2(saldo_neto + round2(amount))
   const limite = customer.credit_limit == null ? null : round2(Number(customer.credit_limit))
 
   const razones = []
@@ -170,6 +253,8 @@ async function checkCredit(db, customer, amount, branchWhereClause = {}, now = n
   return {
     ok: razones.length === 0,
     saldo_actual: saldo,
+    saldo_neto,
+    credito_disponible,
     saldo_resultante: nuevo,
     limite,
     vencido,
@@ -185,14 +270,42 @@ async function checkCredit(db, customer, amount, branchWhereClause = {}, now = n
  * sin levantar Express: es la secuencia que mueve dinero.
  */
 async function applyPayment(tx, params) {
-  const { customerId, branchId, amount, paidAt, paymentMethodId, cashRegisterSessionId, reference, notes, userId } = params
+  const {
+    customerId, branchId, amount, paidAt, paymentMethodId, cashRegisterSessionId,
+    reference, notes, userId, kind = 'PAYMENT', manualApplications = null,
+    allowAdvance = false,
+  } = params
 
   await lockCustomer(tx, customerId)
 
   // Las ventas se releen dentro de la transacción (y después del lock): el saldo
   // pudo cambiar entre el momento en que la UI lo mostró y este cobro.
   const open = await openSalesOf(tx, customerId, { branch_id: branchId })
-  const applications = planFifo(open, amount)
+  const { applications, unapplied } = manualApplications?.length
+    ? planManual(open, manualApplications, amount)
+    : planFifo(open, amount)
+
+  // Un ajuste no es dinero: no puede quedar como saldo a favor del cliente.
+  // Perdonar más de lo que debe sería regalarle crédito que nadie pagó.
+  if (kind !== 'PAYMENT' && unapplied > ROUND_EPS) {
+    throw new ReceivableError(
+      `El ajuste excede el saldo del cliente (pendiente ${round2(amount - unapplied).toFixed(2)})`,
+      400,
+      { saldo_pendiente: round2(amount - unapplied), monto: round2(amount) }
+    )
+  }
+
+  // Dejar dinero sin aplicar tiene que ser una decisión, no un accidente: casi
+  // siempre es el mismo cobro enviado dos veces, no un anticipo de verdad. Se
+  // rechaza acá dentro para que la transacción no deje el pago a medias.
+  if (kind === 'PAYMENT' && unapplied > ROUND_EPS && !allowAdvance) {
+    throw new ReceivableError(
+      `El cobro excede el saldo del cliente (pendiente ${round2(amount - unapplied).toFixed(2)}). `.trim() +
+      'Confirme que los ' + unapplied.toFixed(2) + ' de más quedan como anticipo.',
+      409,
+      { saldo_pendiente: round2(amount - unapplied), monto: round2(amount), sobrante: unapplied, requiere_anticipo: true }
+    )
+  }
 
   const payment = await tx.customerPayment.create({
     data: {
@@ -200,7 +313,8 @@ async function applyPayment(tx, params) {
       customer_id: customerId,
       amount: round2(amount),
       paid_at: paidAt || new Date(),
-      payment_method_id: paymentMethodId,
+      kind,
+      payment_method_id: paymentMethodId || null,
       cash_register_session_id: cashRegisterSessionId || null,
       reference: reference || null,
       notes: notes || null,
@@ -211,7 +325,41 @@ async function applyPayment(tx, params) {
   })
 
   for (const a of applications) await syncSaleStatus(tx, a.sale_id)
-  return { paymentId: payment.id, applications }
+  return { paymentId: payment.id, applications, unapplied }
+}
+
+/**
+ * Aplica el saldo a favor del cliente a sus facturas abiertas, del anticipo más
+ * viejo a la factura más vieja. No mueve dinero ni genera asiento: ese dinero ya
+ * entró y ya se contabilizó cuando se recibió el cobro; esto solo lo reparte.
+ */
+async function applyAvailableCredit(tx, customerId, branchId) {
+  await lockCustomer(tx, customerId)
+  const [open, credits] = await Promise.all([
+    openSalesOf(tx, customerId, { branch_id: branchId }),
+    unappliedPayments(tx, customerId, { branch_id: branchId }),
+  ])
+
+  const applied = []
+  for (const credit of credits) {
+    let left = credit.unapplied
+    for (const sale of open) {
+      if (left <= ROUND_EPS) break
+      if (sale.balance <= ROUND_EPS) continue
+      const take = round2(Math.min(left, sale.balance))
+      await tx.salePaymentEntry.create({
+        data: { sale_id: sale.id, customer_payment_id: credit.id, amount: take },
+      })
+      sale.balance = round2(sale.balance - take)
+      left = round2(left - take)
+      applied.push({ sale_id: sale.id, payment_id: credit.id, amount: take })
+    }
+  }
+
+  for (const saleId of new Set(applied.map((a) => a.sale_id))) {
+    await syncSaleStatus(tx, saleId)
+  }
+  return applied
 }
 
 /** Rangos de antigüedad de un saldo, en días vencidos. */
@@ -232,11 +380,15 @@ module.exports = {
   paidOf,
   balanceOf,
   planFifo,
+  planManual,
   openSalesOf,
   syncSaleStatus,
   customerBalance,
+  unappliedPayments,
+  availableCredit,
   checkCredit,
   applyPayment,
+  applyAvailableCredit,
   lockCustomer,
   agingBucket,
 }

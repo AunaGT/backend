@@ -48,6 +48,7 @@ const ACCOUNTS_SEED = [
   { code: '6106', name: 'Bonificación Incentivo', type: 'EXPENSE', parent: '6', system: true },
   { code: '6107', name: 'Cuota Patronal (IGSS/IRTRA/INTECAP)', type: 'EXPENSE', parent: '6', system: true },
   { code: '6108', name: 'Provisiones Laborales', type: 'EXPENSE', parent: '6', system: true },
+  { code: '6109', name: 'Cuentas Incobrables', type: 'EXPENSE', parent: '6', system: true },
 ]
 
 const DEFAULT_ACCOUNT_CODES = {
@@ -56,6 +57,9 @@ const DEFAULT_ACCOUNT_CODES = {
   ivaDebit: '2102', ivaCredit: '1104',
   pequenoTax: '2103', pequenoTaxExpense: '6105',
   currentEarnings: '3202', retainedEarnings: '3201',
+  // Opcional (OPTIONAL_ACCOUNT_KEYS): la usa el castigo de una cuenta por
+  // cobrar incobrable. Si falta, solo se queda sin postear ese ajuste.
+  badDebt: '6109',
   // Nómina. Van en este mismo mapeo (el seed hace merge, así que agregarlas es
   // aditivo), pero las resuelve getPayrollAccounts, NO getDefaultAccounts: si
   // entraran en DEFAULT_ACCOUNT_KEYS, una empresa sin ellas dejaría de postear

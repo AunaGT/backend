@@ -395,6 +395,16 @@ enum SalePaymentStatus {
   PAID
 }
 
+/// Tipo de movimiento de cartera. Un cobro entra dinero; los ajustes no: bajan
+/// la deuda contra devoluciones sobre ventas (nota de crédito) o contra gasto
+/// (incobrable). Comparten tabla porque comparten TODO lo demás: aplicación
+/// FIFO a las facturas abiertas, recálculo de estado y borrado en cascada.
+enum CustomerPaymentKind {
+  PAYMENT
+  CREDIT_NOTE
+  WRITE_OFF
+}
+
 model SaleStatus {
   id    Int    @id @default(autoincrement())
   name  String @unique @db.VarChar(50)
@@ -1133,8 +1143,12 @@ model CustomerPayment {
   amount      Decimal  @db.Decimal(12, 2)
   paid_at     DateTime @default(now())
 
-  payment_method_id Int
-  payment_method    PaymentMethod @relation(fields: [payment_method_id], references: [id])
+  kind CustomerPaymentKind @default(PAYMENT)
+
+  /// Opcional: una nota de crédito o un castigo por incobrable no se reciben
+  /// por ningún medio de pago, solo cancelan deuda.
+  payment_method_id Int?
+  payment_method    PaymentMethod? @relation(fields: [payment_method_id], references: [id])
 
   /// Sesión de caja en la que se cobró. La necesita el arqueo para saber a qué
   /// turno pertenece el efectivo que entró por cobros y no por ventas.

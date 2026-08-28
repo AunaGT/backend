@@ -24,6 +24,23 @@ router.get('/customers/:id/credit-check', Auth, hasPermission('sales.create'), R
 
 // Cobros
 router.post('/payments', Auth, hasPermission('receivables.manage'), Receivables.createPayment)
+router.get('/payments/:id', Auth, hasPermission('receivables.view'), Receivables.receipt)
 router.delete('/payments/:id', Auth, hasPermission('receivables.manage'), Receivables.deletePayment)
+router.post(
+  '/customers/:id/apply-credit',
+  Auth,
+  hasPermission('receivables.manage'),
+  Receivables.applyCredit
+)
+router.patch(
+  '/sales/:id/due-date',
+  Auth,
+  hasPermission('receivables.manage'),
+  Receivables.updateDueDate
+)
+
+// Ajustes (nota de crédito, incobrable). Permiso aparte: borran deuda sin que
+// entre dinero, así que no debería poder hacerlo cualquiera que cobre.
+router.post('/adjustments', Auth, hasPermission('receivables.adjust'), Receivables.createAdjustment)
 
 module.exports = router

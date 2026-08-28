@@ -146,7 +146,8 @@ async function main() {
 
     // Cuentas por cobrar (cartera)
     { code: 'receivables.view', name: 'Ver cartera', description: 'Puede ver la cartera, el estado de cuenta y la antigüedad de saldos' },
-    { code: 'receivables.manage', name: 'Registrar cobros', description: 'Puede registrar y eliminar cobros de clientes' },
+    { code: 'receivables.manage', name: 'Registrar cobros', description: 'Puede registrar y eliminar cobros de clientes, aplicar anticipos y prorrogar vencimientos' },
+    { code: 'receivables.adjust', name: 'Ajustar cartera', description: 'Puede emitir notas de crédito y castigar cuentas incobrables' },
     { code: 'sales.credit.override', name: 'Autorizar crédito excedido', description: 'Puede autorizar una venta al crédito que excede el límite del cliente o que tiene facturas vencidas' },
 
     // Productos e inventario

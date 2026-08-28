@@ -104,6 +104,24 @@ function parsePaymentTermsPayload(body) {
   return { ok: false, message: 'payment_terms o payment_terms_id es requerido' }
 }
 
+/**
+ * Límite de crédito de un cliente. Vacío = sin límite (no es lo mismo que 0,
+ * que significa «no se le vende nada al crédito»).
+ */
+function normalizeCreditLimit(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return { ok: true, value: null }
+  }
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, message: 'El límite de crédito debe ser un número mayor o igual a 0' }
+  }
+  if (n > 99999999.99) {
+    return { ok: false, message: 'El límite de crédito excede el máximo permitido' }
+  }
+  return { ok: true, value: Number(n.toFixed(2)) }
+}
+
 function shapeSupplierResponse(s) {
   const links = Array.isArray(s.supplier_payment_terms)
     ? [...s.supplier_payment_terms].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
@@ -121,6 +139,7 @@ function shapeSupplierResponse(s) {
   const { supplier_payment_terms: _omit, ...rest } = s
   return {
     ...rest,
+    credit_limit: rest.credit_limit == null ? null : Number(rest.credit_limit),
     payment_terms,
     payment_terms_id,
     payment_term,
@@ -268,6 +287,11 @@ exports.create = async (req, res, next) => {
     }
     if (data.tax_id !== undefined) {
       createData.tax_id = normalizeTaxId(data.tax_id)
+    }
+    if (partyType === PARTY.CUSTOMER && data.credit_limit !== undefined) {
+      const cl = normalizeCreditLimit(data.credit_limit)
+      if (!cl.ok) return res.status(400).json({ message: cl.message })
+      createData.credit_limit = cl.value
     }
 
     if (partyType === PARTY.SUPPLIER) {
@@ -465,6 +489,15 @@ exports.update = async (req, res, next) => {
     }
     if (data.estado !== undefined && data.estado !== null) {
       updateData.estado = Number(data.estado)
+    }
+    if (effectiveParty === PARTY.CUSTOMER && data.credit_limit !== undefined) {
+      const cl = normalizeCreditLimit(data.credit_limit)
+      if (!cl.ok) return res.status(400).json({ message: cl.message })
+      updateData.credit_limit = cl.value
+    } else if (effectiveParty === PARTY.SUPPLIER && existing.party_type === PARTY.CUSTOMER) {
+      // Dejó de ser cliente: el límite ya no aplica y quedaría de fantasma si
+      // algún día vuelve a serlo.
+      updateData.credit_limit = null
     }
     if (existing.party_type === PARTY.CUSTOMER && data.default_price_tier !== undefined) {
       const t = String(data.default_price_tier || '').toUpperCase()

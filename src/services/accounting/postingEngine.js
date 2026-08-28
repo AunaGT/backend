@@ -16,7 +16,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { splitIva, round2 } = require('./logic')
-const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, AccountingError } = require('./core')
+const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, getOptionalAccount, AccountingError } = require('./core')
 
 /**
  * Cuántas operaciones sin contabilizar se procesan por corrida. Antes se traían
@@ -345,34 +345,75 @@ async function postPendingOperations(prisma, userId, companyId) {
   const collections = await prisma.customerPayment.findMany({
     where: { id: { in: pendingCollections } },
     select: {
-      id: true, amount: true, paid_at: true, branch_id: true,
+      id: true, amount: true, paid_at: true, branch_id: true, kind: true,
       customer: { select: { name: true } },
       payment_method: { select: { name: true, is_credit: true } },
     },
     orderBy: { paid_at: 'asc' },
   })
+  // Solo se resuelve si aparece un incobrable: es opcional, y exigirla dejaría
+  // sin postear a toda empresa que nunca haya castigado una cuenta.
+  let badDebtAccount
   for (const col of collections) {
     const customerName = col.customer?.name || 'cliente'
-    const label = `Cobro a ${customerName} (${col.id.slice(0, 8)})`
+    const kind = col.kind || 'PAYMENT'
+    const titulo = kind === 'CREDIT_NOTE'
+      ? `Nota de crédito a ${customerName}`
+      : kind === 'WRITE_OFF'
+        ? `Incobrable de ${customerName}`
+        : `Cobro a ${customerName}`
+    const label = `${titulo} (${col.id.slice(0, 8)})`
     const amount = round2(col.amount)
     if (amount <= 0) { track(label, 'monto 0'); continue }
-    // Un cobro nunca se recibe «al crédito»; si el método viniera marcado así
-    // caería en Clientes y el asiento sería Clientes contra Clientes.
-    const chargeAccount = col.payment_method?.is_credit
-      ? defaults.cash
-      : cashOrBank(defaults, col.payment_method)
+
+    // Los tres movimientos acreditan Clientes por el mismo monto; lo único que
+    // cambia es contra qué. Un cobro entra a Caja/Bancos, una nota de crédito
+    // va contra devoluciones sobre ventas y un incobrable contra gasto.
+    let lines
+    if (kind === 'CREDIT_NOTE') {
+      const { base, iva } = splitIva(amount, ivaRate)
+      lines = splitVat
+        ? [
+            { account_id: defaults.salesReturns.id, debit: base, credit: 0 },
+            { account_id: defaults.ivaDebit.id, debit: iva, credit: 0 },
+          ]
+        : [{ account_id: defaults.salesReturns.id, debit: amount, credit: 0 }]
+    } else if (kind === 'WRITE_OFF') {
+      if (badDebtAccount === undefined) {
+        badDebtAccount = await getOptionalAccount(prisma, companyId, 'badDebt')
+      }
+      if (!badDebtAccount) {
+        track(label, 'falta configurar la cuenta de cuentas incobrables')
+        continue
+      }
+      // ponytail: se castiga por el bruto, sin recuperar el IVA ya declarado.
+      // Recuperarlo en Guatemala exige el trámite formal de incobrabilidad, así
+      // que el asiento automático no puede asumirlo.
+      lines = [{ account_id: badDebtAccount.id, debit: amount, credit: 0 }]
+    } else {
+      // Un cobro nunca se recibe «al crédito»; si el método viniera marcado así
+      // caería en Clientes y el asiento sería Clientes contra Clientes.
+      const chargeAccount = col.payment_method?.is_credit
+        ? defaults.cash
+        : cashOrBank(defaults, col.payment_method)
+      lines = [{ account_id: chargeAccount.id, debit: amount, credit: 0 }]
+    }
+    lines.push({
+      account_id: defaults.receivables.id,
+      debit: 0,
+      credit: amount,
+      description: `Cliente: ${customerName}`,
+    })
+
     const reason = await tryPost(prisma, () => ({
       company_id: companyId,
       branch_id: col.branch_id,
       date: col.paid_at,
-      description: `Cobro a ${customerName}`,
+      description: titulo,
       source_type: 'SALE_PAYMENT',
       source_id: col.id,
       created_by: userId,
-      lines: [
-        { account_id: chargeAccount.id, debit: amount, credit: 0 },
-        { account_id: defaults.receivables.id, debit: 0, credit: amount, description: `Cliente: ${customerName}` },
-      ],
+      lines,
     }))
     track(label, reason)
   }

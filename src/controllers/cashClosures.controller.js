@@ -347,6 +347,9 @@ exports.calculateTheoretical = async (req, res, next) => {
       collectionsWhere = { paid_at: { gte: start, lte: end } }
       if (cashierId) collectionsWhere.registered_by = String(cashierId)
     }
+    // Solo cobros de verdad: una nota de crédito o un castigo por incobrable
+    // bajan la deuda pero no meten un centavo al cajón.
+    collectionsWhere.kind = 'PAYMENT'
     Object.assign(collectionsWhere, branchWhere(req))
 
     const collections = await prisma.customerPayment.findMany({
