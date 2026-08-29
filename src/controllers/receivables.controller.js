@@ -29,6 +29,7 @@ const {
   checkCredit,
   agingBucket,
   lockCustomer,
+  CUSTOMER_TERM_PICK,
 } = require('../services/receivables')
 
 /** Ajustes que bajan la deuda sin que entre dinero. */
@@ -351,11 +352,7 @@ exports.creditCheck = async (req, res, next) => {
       where: { id: req.params.id, company_id: companyId },
       select: {
         id: true, name: true, credit_limit: true,
-        supplier_payment_terms: {
-          where: { is_default: true },
-          select: { payment_term: { select: { name: true, net_days: true } } },
-          take: 1,
-        },
+        supplier_payment_terms: CUSTOMER_TERM_PICK,
       },
     })
     if (!customer) fail(404, 'Cliente no encontrado')

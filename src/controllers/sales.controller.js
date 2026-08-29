@@ -29,7 +29,7 @@ const {
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../services/bomStock')
 const { nextDocumentReference } = require('../services/referenceGenerator')
 const { requireBranch, branchWhere, hasPerm } = require('../middlewares/tenant')
-const { checkCredit, lockCustomer } = require('../services/receivables')
+const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../services/receivables')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -682,11 +682,7 @@ exports.create = async (req, res, next) => {
           where: { id: customerContactId, company_id: req.companyId },
           select: {
             id: true, name: true, credit_limit: true,
-            supplier_payment_terms: {
-              where: { is_default: true },
-              select: { payment_term: { select: { net_days: true } } },
-              take: 1,
-            },
+            supplier_payment_terms: CUSTOMER_TERM_PICK,
           },
         })
         if (!customer) {
