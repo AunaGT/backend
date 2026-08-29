@@ -230,6 +230,21 @@ async function customerBalance(db, customerId, branchWhereClause = {}, now = new
 }
 
 /**
+ * Término de pago que manda para un cliente: el marcado como predeterminado y,
+ * si ninguno lo está, el primero — igual que la ficha del contacto.
+ *
+ * Vive acá porque lo usan la venta (para calcular el vencimiento) y el POS
+ * (para mostrarlo antes de vender): si difieren, la pantalla promete una fecha
+ * y la venta guarda otra. Antes filtraban por `is_default: true` y un cliente
+ * con término sin marcar quedaba como si no tuviera ninguno.
+ */
+const CUSTOMER_TERM_PICK = {
+  select: { payment_term: { select: { name: true, net_days: true } } },
+  orderBy: [{ is_default: 'desc' }, { sort_order: 'asc' }],
+  take: 1,
+}
+
+/**
  * Verifica si un cliente puede llevarse `amount` al crédito.
  *
  * Bloquea por límite excedido o por tener facturas vencidas. Devuelve siempre
@@ -387,6 +402,7 @@ module.exports = {
   unappliedPayments,
   availableCredit,
   checkCredit,
+  CUSTOMER_TERM_PICK,
   applyPayment,
   applyAvailableCredit,
   lockCustomer,
