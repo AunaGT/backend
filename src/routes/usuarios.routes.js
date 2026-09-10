@@ -13,8 +13,10 @@ const multer = require('multer')
 const rateLimit = require('express-rate-limit')
 const controller = require('../controllers/usuarios.controller')
 const { Auth, hasAnyRole, hasPermission } = require('../middlewares/autenticacion')
+const { requireModule } = require('../modules/platform')
 
 const router = Router()
+const usersModule = requireModule('users')
 
 // Frena fuerza bruta en las rutas que verifican contraseña. 10 intentos / 15 min por IP.
 const loginLimiter = rateLimit({
@@ -84,7 +86,7 @@ const upload = multer({
  *             schema:
  *               $ref: '#/components/schemas/AuthResponse'
  */
-router.post('/register', Auth, hasPermission('users.create'), controller.register)
+router.post('/register', Auth, usersModule, hasPermission('users.create'), controller.register)
 
 /**
  * @openapi
@@ -173,7 +175,7 @@ router.get('/me', Auth, controller.me)
  *       200:
  *         description: OK
  */
-router.get('/users', Auth, hasPermission('users.view'), controller.list)
+router.get('/users', Auth, usersModule, hasPermission('users.view'), controller.list)
 
 /**
  * @openapi
@@ -187,7 +189,7 @@ router.get('/users', Auth, hasPermission('users.view'), controller.list)
  *       200:
  *         description: Archivo Excel descargado
  */
-router.get('/users/template', Auth, hasPermission('users.import'), controller.downloadTemplate)
+router.get('/users/template', Auth, usersModule, hasPermission('users.import'), controller.downloadTemplate)
 
 /**
  * @openapi
@@ -213,7 +215,7 @@ router.get('/users/template', Auth, hasPermission('users.import'), controller.do
  *       200:
  *         description: Resultado de validación
  */
-router.post('/users/validate-import-mapped', Auth, hasPermission('users.import'), controller.validateImportMapped)
+router.post('/users/validate-import-mapped', Auth, usersModule, hasPermission('users.import'), controller.validateImportMapped)
 
 /**
  * @openapi
@@ -239,7 +241,7 @@ router.post('/users/validate-import-mapped', Auth, hasPermission('users.import')
  *       200:
  *         description: Importación completada
  */
-router.post('/users/bulk-import-mapped', Auth, hasPermission('users.import'), controller.bulkImportMapped)
+router.post('/users/bulk-import-mapped', Auth, usersModule, hasPermission('users.import'), controller.bulkImportMapped)
 
 /**
  * @openapi
@@ -260,7 +262,7 @@ router.post('/users/bulk-import-mapped', Auth, hasPermission('users.import'), co
  *       404:
  *         description: Usuario no encontrado
  */
-router.get('/users/:id', Auth, hasPermission('users.view'), controller.getById)
+router.get('/users/:id', Auth, usersModule, hasPermission('users.view'), controller.getById)
 
 /**
  * @openapi
@@ -294,7 +296,7 @@ router.get('/users/:id', Auth, hasPermission('users.view'), controller.getById)
  *       409:
  *         description: Email ya en uso
  */
-router.put('/users/:id', Auth, hasPermission('users.edit'), controller.update)
+router.put('/users/:id', Auth, usersModule, hasPermission('users.edit'), controller.update)
 
 /**
  * @openapi
@@ -317,7 +319,7 @@ router.put('/users/:id', Auth, hasPermission('users.edit'), controller.update)
  *       404:
  *         description: Usuario no encontrado
  */
-router.delete('/users/:id', Auth, hasPermission('users.delete'), controller.delete)
+router.delete('/users/:id', Auth, usersModule, hasPermission('users.delete'), controller.delete)
 
 /**
  * @openapi
@@ -340,7 +342,7 @@ router.delete('/users/:id', Auth, hasPermission('users.delete'), controller.dele
  *                   id: { type: integer }
  *                   name: { type: string }
  */
-router.get('/roles', Auth, hasPermission('roles.view', 'roles.manage'), controller.getRoles)
+router.get('/roles', Auth, usersModule, hasPermission('roles.view', 'roles.manage'), controller.getRoles)
 
 /**
  * @openapi
@@ -354,7 +356,7 @@ router.get('/roles', Auth, hasPermission('roles.view', 'roles.manage'), controll
  *       200:
  *         description: Lista de permisos
  */
-router.get('/permissions', Auth, hasPermission('roles.manage', 'roles.view'), controller.getPermissions)
+router.get('/permissions', Auth, usersModule, hasPermission('roles.manage', 'roles.view'), controller.getPermissions)
 
 /**
  * @openapi
@@ -368,7 +370,7 @@ router.get('/permissions', Auth, hasPermission('roles.manage', 'roles.view'), co
  *       200:
  *         description: Lista de roles con permisos
  */
-router.get('/roles/with-permissions', Auth, hasPermission('roles.manage', 'roles.view'), controller.getRolesWithPermissions)
+router.get('/roles/with-permissions', Auth, usersModule, hasPermission('roles.manage', 'roles.view'), controller.getRolesWithPermissions)
 
 /**
  * @openapi
@@ -389,7 +391,7 @@ router.get('/roles/with-permissions', Auth, hasPermission('roles.manage', 'roles
  *       404:
  *         description: Rol no encontrado
  */
-router.get('/roles/:id/with-permissions', Auth, hasPermission('roles.manage', 'roles.view'), controller.getRoleWithPermissions)
+router.get('/roles/:id/with-permissions', Auth, usersModule, hasPermission('roles.manage', 'roles.view'), controller.getRoleWithPermissions)
 
 /**
  * @openapi
@@ -417,7 +419,7 @@ router.get('/roles/:id/with-permissions', Auth, hasPermission('roles.manage', 'r
  *       201:
  *         description: Rol creado
  */
-router.post('/roles', Auth, hasPermission('roles.manage'), controller.createRole)
+router.post('/roles', Auth, usersModule, hasPermission('roles.manage'), controller.createRole)
 
 /**
  * @openapi
@@ -449,7 +451,7 @@ router.post('/roles', Auth, hasPermission('roles.manage'), controller.createRole
  *       200:
  *         description: Rol actualizado
  */
-router.put('/roles/:id', Auth, hasPermission('roles.manage'), controller.updateRole)
+router.put('/roles/:id', Auth, usersModule, hasPermission('roles.manage'), controller.updateRole)
 
 /**
  * @openapi
@@ -468,7 +470,7 @@ router.put('/roles/:id', Auth, hasPermission('roles.manage'), controller.updateR
  *       200:
  *         description: Rol eliminado
  */
-router.delete('/roles/:id', Auth, hasPermission('roles.manage'), controller.deleteRole)
+router.delete('/roles/:id', Auth, usersModule, hasPermission('roles.manage'), controller.deleteRole)
 
 /**
  * @openapi
@@ -501,6 +503,6 @@ router.delete('/roles/:id', Auth, hasPermission('roles.manage'), controller.dele
  *       404:
  *         description: Usuario no encontrado
  */
-router.post('/users/:id/photo', Auth, hasPermission('users.edit'), upload.single('file'), controller.uploadPhoto)
+router.post('/users/:id/photo', Auth, usersModule, hasPermission('users.edit'), upload.single('file'), controller.uploadPhoto)
 
 module.exports = router

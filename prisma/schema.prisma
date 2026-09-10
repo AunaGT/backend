@@ -52,8 +52,35 @@ model Company {
   attendance         Attendance[]
   employee_advances  EmployeeAdvance[]
   payroll_runs       PayrollRun[]
+  company_modules    CompanyModule[]
 
   @@map("companies")
+}
+
+/// Módulos comerciales habilitados para cada empresa. Los permisos continúan
+/// definiendo qué puede hacer cada usuario dentro de un módulo habilitado.
+enum CompanyModuleStatus {
+  ACTIVE
+  TRIAL
+  SUSPENDED
+  DISABLED
+}
+
+model CompanyModule {
+  company_id    String              @db.Uuid
+  company       Company             @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  module_code   String              @db.VarChar(50)
+  status        CompanyModuleStatus @default(ACTIVE)
+  config        Json?
+  trial_ends_at DateTime?
+  activated_at  DateTime?
+  suspended_at  DateTime?
+  created_at    DateTime            @default(now())
+  updated_at    DateTime            @updatedAt
+
+  @@id([company_id, module_code])
+  @@index([status])
+  @@map("company_modules")
 }
 
 /// Pertenencia usuario ↔ empresa (N a N). El email del usuario es único global.

@@ -11,6 +11,8 @@
 const { Router } = require('express')
 const router = Router()
 const { resolveTenant } = require('../middlewares/tenant')
+const { requireAnyModule, requireModule } = require('../modules/platform')
+const promotionsModule = require('../modules/promotions/manifest')
 
 // Basic ping
 router.get('/', (req, res) => {
@@ -22,61 +24,62 @@ router.use(resolveTenant)
 
 // Empresas y sucursales
 router.use('/companies', require('./companies.routes'))
-router.use('/branches', require('./branches.routes'))
+router.use('/branches', requireModule('branches'), require('./branches.routes'))
+// Contratación/activación de módulos. Siempre queda disponible para poder
+// recuperar una configuración que haya deshabilitado otro módulo.
+router.use('/modules', require('../modules/platform/routes'))
 // Traslados de mercancía entre sucursales
-router.use('/transfers', require('./transfers.routes'))
+router.use('/transfers', requireModule('transfers'), require('./transfers.routes'))
 // Almacenes y ubicaciones dentro de la sucursal
-router.use('/warehouses', require('./warehouses.routes'))
+router.use('/warehouses', requireModule('inventory'), require('./warehouses.routes'))
 // Movimientos internos, ajustes y kardex por ubicación
-router.use('/stock', require('./stock.routes'))
+router.use('/stock', requireModule('inventory'), require('./stock.routes'))
 
 // Mount products routes
-router.use('/products', require('./products.routes'))
+router.use('/products', requireModule('inventory'), require('./products.routes'))
 // Mount suppliers routes
-router.use('/suppliers', require('./suppliers.routes'))
+router.use('/suppliers', requireModule('contacts'), require('./suppliers.routes'))
 // Mount catalogs routes
-router.use('/catalogs', require('./catalogs.routes'))
+router.use('/catalogs', requireModule('catalogs'), require('./catalogs.routes'))
 // Mount sales and alerts
-router.use('/sales', require('./sales.routes'))
-router.use('/alerts', require('./alerts.routes'))
+router.use('/sales', requireModule('sales'), require('./sales.routes'))
+router.use('/alerts', requireModule('alerts'), require('./alerts.routes'))
 // Dashboard stats
-router.use('/dashboard', require('./dashboard.routes'))
+router.use('/dashboard', requireModule('dashboard'), require('./dashboard.routes'))
 // Auth (users, login, etc.)
 router.use('/auth', require('./usuarios.routes'))
-// Users / auth routes
-router.use('/auth', require('./usuarios.routes'))
 // Analytics
-router.use('/analytics', require('./analytics.routes'))
+router.use('/analytics', requireModule('analytics'), require('./analytics.routes'))
 // Reports (PDF)
-router.use('/reports', require('./reports.routes'))
+router.use('/reports', requireModule('reports'), require('./reports.routes'))
 // Returns (product returns/refunds)
-router.use('/returns', require('./returns.routes'))
+router.use('/returns', requireModule('returns'), require('./returns.routes'))
 // Cash register sessions (apertura de caja)
-router.use('/cash-sessions', require('./cashSessions.routes'))
+router.use('/cash-sessions', requireModule('sales'), require('./cashSessions.routes'))
 // Cash closures (cierre de caja)
-router.use('/cash-closures', require('./cashClosures.routes'))
+router.use('/cash-closures', requireModule('cash-closure'), require('./cashClosures.routes'))
 // System settings (configuración)
 router.use('/settings', require('./settings.routes'))
 // Promotions (discount codes)
-router.use('/promotions', require('./promotions.routes'))
+router.use(promotionsModule.routePrefix, requireModule(promotionsModule.code), promotionsModule.loadRouter())
 // Incoming Merchandise (registro de mercancía)
-router.use('/incoming-merchandise', require('./incomingMerchandise.routes'))
+router.use('/incoming-merchandise', requireModule('merchandise'), require('./incomingMerchandise.routes'))
 // Inventariado (conteo físico)
-router.use('/inventory-counts', require('./inventoryCounts.routes'))
+router.use('/inventory-counts', requireModule('inventory-count'), require('./inventoryCounts.routes'))
 // Cotizaciones comerciales
-router.use('/quotes', require('./quotes.routes'))
+router.use('/quotes', requireModule('quotes'), require('./quotes.routes'))
 // Pedidos comerciales
-router.use('/orders', require('./orders.routes'))
+router.use('/orders', requireModule('orders'), require('./orders.routes'))
 // Cotiz/pedidos: vencimientos y reportes operativos
-router.use('/commercial-documents', require('./commercialDocuments.routes'))
+router.use('/commercial-documents', requireAnyModule('quotes', 'orders'), require('./commercialDocuments.routes'))
 // Contabilidad (partida doble)
-router.use('/accounting', require('./accounting.routes'))
+router.use('/accounting', requireModule('accounting'), require('./accounting.routes'))
 // RRHH (empleados, asistencia, anticipos)
-router.use('/hr', require('./hr.routes'))
+router.use('/hr', requireModule('hr'), require('./hr.routes'))
 // Nómina (planillas y recibos)
-router.use('/payroll', require('./payroll.routes'))
+router.use('/payroll', requireModule('payroll'), require('./payroll.routes'))
 // Cartera (cuentas por cobrar de clientes)
-router.use('/receivables', require('./receivables.routes'))
+router.use('/receivables', requireModule('receivables'), require('./receivables.routes'))
 
 
 module.exports = router

@@ -12,6 +12,7 @@ const { prisma } = require('../models/prisma')
 const { seedCompanySettings } = require('../services/companySettings')
 const { seedChartOfAccounts } = require('../services/accounting/seedChartOfAccounts')
 const { invalidateSystemConfigCache } = require('../utils/getTimezone')
+const { seedCompanyModules } = require('../modules/platform/service')
 
 const COMPANY_SELECT = {
   id: true, name: true, code: true, tax_id: true, address: true,
@@ -57,6 +58,9 @@ exports.create = async (req, res, next) => {
       await seedCompanySettings(tx, company.id, company)
       // Nace con catálogo de cuentas y mapeo por defecto: sin esto no puede contabilizar nada
       await seedChartOfAccounts(tx, company.id)
+      // Compatibilidad inicial: las empresas nuevas reciben el catálogo modular
+      // completo. Luego un administrador comercial puede suspender módulos.
+      await seedCompanyModules(tx, company.id)
       return { ...company, branches: [branch] }
     })
     res.status(201).json(result)

@@ -12,6 +12,7 @@
 require('dotenv/config')
 const { PrismaClient } = require('@prisma/client')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
+const { seedCompanyModules } = require('../src/modules/platform/service')
 const prisma = new PrismaClient()
 
 // Mismos ids que la migración 20260811120000_multi_company_branches, para que
@@ -35,6 +36,7 @@ async function main() {
     update: {},
     create: { id: DEFAULT_BRANCH_ID, company_id: company.id, name: 'Principal', code: 'PRIN', is_default: true },
   })
+  await seedCompanyModules(prisma, company.id)
   console.log('  Empresa y sucursal principal listas')
 
   // ========================================
