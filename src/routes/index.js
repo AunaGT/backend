@@ -13,6 +13,7 @@ const router = Router()
 const { resolveTenant } = require('../middlewares/tenant')
 const { requireAnyModule, requireModule } = require('../modules/platform')
 const promotionsModule = require('../modules/promotions/manifest')
+const inventoryModule = require('../modules/inventory/manifest')
 
 // Basic ping
 router.get('/', (req, res) => {
@@ -30,13 +31,13 @@ router.use('/branches', requireModule('branches'), require('./branches.routes'))
 router.use('/modules', require('../modules/platform/routes'))
 // Traslados de mercancía entre sucursales
 router.use('/transfers', requireModule('transfers'), require('./transfers.routes'))
-// Almacenes y ubicaciones dentro de la sucursal
-router.use('/warehouses', requireModule('inventory'), require('./warehouses.routes'))
-// Movimientos internos, ajustes y kardex por ubicación
-router.use('/stock', requireModule('inventory'), require('./stock.routes'))
-
-// Mount products routes
-router.use('/products', requireModule('inventory'), require('./products.routes'))
+for (const inventoryRoute of inventoryModule.routes) {
+  router.use(
+    inventoryRoute.routePrefix,
+    requireModule(inventoryModule.code),
+    inventoryRoute.loadRouter()
+  )
+}
 // Mount suppliers routes
 router.use('/suppliers', requireModule('contacts'), require('./suppliers.routes'))
 // Mount catalogs routes
