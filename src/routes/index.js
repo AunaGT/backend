@@ -16,11 +16,14 @@ const promotionsModule = require('../modules/promotions/manifest')
 const inventoryModule = require('../modules/inventory/manifest')
 const salesModule = require('../modules/sales/manifest')
 const contactsModule = require('../modules/contacts/manifest')
+const quotesModule = require('../modules/quotes/manifest')
 
 // Basic ping
 router.get('/', (req, res) => {
   res.json({ ok: true, message: 'API up' })
 })
+
+router.use(quotesModule.routePrefix, quotesModule.loadPublicRouter())
 
 // Empresa + sucursal del request (req.companyId / req.branchId) para todas las rutas
 router.use(resolveTenant)
@@ -78,7 +81,11 @@ router.use('/incoming-merchandise', requireModule('merchandise'), require('./inc
 // Inventariado (conteo físico)
 router.use('/inventory-counts', requireModule('inventory-count'), require('./inventoryCounts.routes'))
 // Cotizaciones comerciales
-router.use('/quotes', requireModule('quotes'), require('./quotes.routes'))
+router.use(
+  quotesModule.routePrefix,
+  requireModule(quotesModule.code),
+  quotesModule.loadRouter()
+)
 // Pedidos comerciales
 router.use('/orders', requireModule('orders'), require('./orders.routes'))
 // Cotiz/pedidos: vencimientos y reportes operativos

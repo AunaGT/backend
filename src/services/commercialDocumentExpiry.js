@@ -4,9 +4,33 @@
 
 const { prisma } = require('../models/prisma')
 const { releaseByDocument } = require('./stockAvailability')
+const { readCompanyModules } = require('../modules/platform/service')
 
 const QUOTE_EXPIRABLE = ['DRAFT', 'SENT', 'ACCEPTED']
 const ORDER_EXPIRABLE = ['DRAFT', 'CONFIRMED', 'PARTIALLY_FULFILLED']
+
+async function filterEnabledQuoteIds(
+  overdueQuotes,
+  client,
+  loadModules = readCompanyModules
+) {
+  const enabledByCompany = new Map()
+  const ids = []
+
+  for (const quote of overdueQuotes) {
+    const companyId = quote.branch.company_id
+    if (!enabledByCompany.has(companyId)) {
+      const modules = await loadModules(companyId, client, { useCache: false })
+      enabledByCompany.set(
+        companyId,
+        Boolean(modules.find((module) => module.code === 'quotes')?.effectiveEnabled)
+      )
+    }
+    if (enabledByCompany.get(companyId)) ids.push(quote.id)
+  }
+
+  return ids
+}
 
 async function expireCommercialDocuments(options = {}) {
   const now = options.now || new Date()
@@ -25,17 +49,21 @@ async function expireCommercialDocuments(options = {}) {
         status: { in: QUOTE_EXPIRABLE },
         valid_until: { lt: now },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        branch: { select: { company_id: true } },
+      },
     })
-    if (overdueQuotes.length) {
-      for (const q of overdueQuotes) {
-        await releaseByDocument(tx, q.id, { status: 'EXPIRED' })
+    const enabledQuoteIds = await filterEnabledQuoteIds(overdueQuotes, tx)
+    if (enabledQuoteIds.length) {
+      for (const quoteId of enabledQuoteIds) {
+        await releaseByDocument(tx, quoteId, { status: 'EXPIRED' })
       }
-      const r = await tx.commercialDocument.updateMany({
-        where: { id: { in: overdueQuotes.map((d) => d.id) } },
+      const result = await tx.commercialDocument.updateMany({
+        where: { id: { in: enabledQuoteIds } },
         data: { status: 'EXPIRED' },
       })
-      summary.quotesExpired = r.count
+      summary.quotesExpired = result.count
     }
 
     const overdueOrders = await tx.commercialDocument.findMany({
@@ -81,4 +109,5 @@ async function expireCommercialDocuments(options = {}) {
 
 module.exports = {
   expireCommercialDocuments,
+  filterEnabledQuoteIds,
 }

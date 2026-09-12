@@ -9,6 +9,7 @@ const promotionsModule = require('../src/modules/promotions/manifest')
 const inventoryModule = require('../src/modules/inventory/manifest')
 const salesModule = require('../src/modules/sales/manifest')
 const contactsModule = require('../src/modules/contacts/manifest')
+const quotesModule = require('../src/modules/quotes/manifest')
 
 test('el registro no contiene dependencias inexistentes ni circulares', () => {
   assert.equal(assertRegistryValid(), true)
@@ -226,4 +227,65 @@ test('configuración permanece disponible aunque una fila haya sido alterada man
   assert.equal(config.protected, true)
   assert.equal(config.status, 'ACTIVE')
   assert.equal(config.effectiveEnabled, true)
+})
+
+test('cotizaciones activas explícitamente quedan disponibles', () => {
+  const quotes = resolveEffectiveModules([
+    { module_code: 'quotes', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'quotes')
+
+  assert.equal(quotes.status, 'ACTIVE')
+  assert.equal(quotes.effectiveEnabled, true)
+  assert.equal(quotes.persisted, true)
+})
+
+test('cotizaciones desactivadas quedan bloqueadas', () => {
+  const quotes = resolveEffectiveModules([
+    { module_code: 'quotes', status: 'DISABLED' },
+  ]).find((module) => module.code === 'quotes')
+
+  assert.equal(quotes.status, 'DISABLED')
+  assert.equal(quotes.effectiveEnabled, false)
+})
+
+test('una prueba vencida de cotizaciones queda desactivada efectivamente', () => {
+  const quotes = resolveEffectiveModules([
+    {
+      module_code: 'quotes',
+      status: 'TRIAL',
+      trial_ends_at: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  ], new Date('2026-01-02T00:00:00.000Z'))
+    .find((module) => module.code === 'quotes')
+
+  assert.equal(quotes.status, 'TRIAL')
+  assert.equal(quotes.effectiveEnabled, false)
+})
+
+test('cotizaciones se bloquean cuando inventario está desactivado', () => {
+  const quotes = resolveEffectiveModules([
+    { module_code: 'inventory', status: 'DISABLED' },
+    { module_code: 'quotes', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'quotes')
+
+  assert.equal(quotes.effectiveEnabled, false)
+  assert.deepEqual(quotes.blockedBy, ['inventory'])
+})
+
+test('cotizaciones se bloquean cuando contactos está desactivado', () => {
+  const quotes = resolveEffectiveModules([
+    { module_code: 'contacts', status: 'DISABLED' },
+    { module_code: 'quotes', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'quotes')
+
+  assert.equal(quotes.effectiveEnabled, false)
+  assert.deepEqual(quotes.blockedBy, ['contacts'])
+})
+
+test('el manifiesto de cotizaciones coincide con el registro y conserva el prefijo HTTP', () => {
+  const definition = MODULE_DEFINITIONS.find((module) => module.code === quotesModule.code)
+  assert.ok(definition)
+  assert.deepEqual([...quotesModule.dependencies], [...definition.dependencies])
+  assert.equal(quotesModule.routePrefix, '/quotes')
+  assert.equal(typeof quotesModule.loadRouter, 'function')
 })

@@ -16,6 +16,7 @@ const {
 } = require('../services/priceResolution')
 const { nextDocumentReference } = require('../services/referenceGenerator')
 const { targetBranch, branchWhere } = require('../middlewares/tenant')
+const { getCompanyModuleBlock } = require('../modules/quotes/access')
 
 async function loadBranch(tx, branchId) {
   return tx.branch.findUnique({ where: { id: branchId }, select: { id: true, code: true, seq: true } })
@@ -91,8 +92,8 @@ function defaultValidUntil(days = 30) {
   return d
 }
 
-async function defaultValidUntilFromSettings(tx) {
-  return defaultQuoteValidUntil(tx)
+async function defaultValidUntilFromSettings(tx, companyId) {
+  return defaultQuoteValidUntil(tx, companyId)
 }
 
 async function ensurePublicToken(tx, docId) {
@@ -124,7 +125,7 @@ async function ensurePublicToken(tx, docId) {
   return token
 }
 
-async function applyQuoteSoftHold(tx, quote, userId) {
+async function applyQuoteSoftHold(tx, quote, userId, companyId) {
   const lines = await tx.commercialDocumentLine.findMany({
     where: { document_id: quote.id },
     orderBy: { sort_order: 'asc' },
@@ -137,7 +138,7 @@ async function applyQuoteSoftHold(tx, quote, userId) {
     { branchId: quote.branch_id }
   )
   await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
-  const expiresAt = await defaultQuoteSoftHoldExpiresAt(tx)
+  const expiresAt = await defaultQuoteSoftHoldExpiresAt(tx, companyId)
   await reserveForDocument(tx, {
     documentId: quote.id,
     documentLines: lines,
@@ -156,6 +157,7 @@ exports.getPublicByToken = async (req, res, next) => {
     const quote = await prisma.commercialDocument.findFirst({
       where: { public_token: token, doc_type: QUOTE_DOC_TYPE },
       include: {
+        branch: { select: { company_id: true } },
         lines: {
           orderBy: { sort_order: 'asc' },
           include: { product: { select: { id: true, name: true, barcode: true } } },
@@ -163,12 +165,14 @@ exports.getPublicByToken = async (req, res, next) => {
       },
     })
     if (!quote) return res.status(404).json({ message: 'Cotización no encontrada' })
+    const moduleBlock = await getCompanyModuleBlock(quote.branch.company_id, 'quotes')
+    if (moduleBlock) return res.status(403).json(moduleBlock)
     if (['CANCELLED', 'REJECTED'].includes(quote.status)) {
       return res.status(410).json({ message: 'Esta cotización ya no está disponible' })
     }
 
     const companyRows = await prisma.systemSetting.findMany({
-      where: { key: { in: ['company_name', 'company_logo_url'] } },
+      where: { key: { in: ['company_name', 'company_logo_url'] }, company_id: quote.branch.company_id },
     })
     const companyMap = Object.fromEntries(companyRows.map((r) => [r.key, r.value]))
 
@@ -449,7 +453,7 @@ exports.create = async (req, res, next) => {
           throw err
         }
       } else {
-        validUntil = await defaultValidUntilFromSettings(tx)
+        validUntil = await defaultValidUntilFromSettings(tx, req.companyId)
       }
 
       const branch = await loadBranch(tx, branchId)
@@ -536,7 +540,7 @@ exports.update = async (req, res, next) => {
       let validUntil = existing.valid_until
       if (validUntilRaw !== undefined) {
         if (validUntilRaw == null || validUntilRaw === '') {
-          validUntil = await defaultValidUntilFromSettings(tx)
+          validUntil = await defaultValidUntilFromSettings(tx, req.companyId)
         } else {
           validUntil = new Date(validUntilRaw)
           if (Number.isNaN(validUntil.getTime())) {
@@ -612,7 +616,7 @@ exports.updateStatus = async (req, res, next) => {
     const updated = await prismaTransaction.$transaction(async (tx) => {
       if (newStatus === 'SENT') {
         await ensurePublicToken(tx, existing.id)
-        await applyQuoteSoftHold(tx, existing, userId)
+        await applyQuoteSoftHold(tx, existing, userId, req.companyId)
       } else if (['REJECTED', 'CANCELLED', 'EXPIRED'].includes(newStatus)) {
         await releaseByDocument(tx, existing.id, { status: 'RELEASED' })
       }
