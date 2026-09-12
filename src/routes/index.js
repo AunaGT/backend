@@ -15,6 +15,7 @@ const { requireAnyModule, requireModule } = require('../modules/platform')
 const promotionsModule = require('../modules/promotions/manifest')
 const inventoryModule = require('../modules/inventory/manifest')
 const salesModule = require('../modules/sales/manifest')
+const contactsModule = require('../modules/contacts/manifest')
 
 // Basic ping
 router.get('/', (req, res) => {
@@ -40,7 +41,11 @@ for (const inventoryRoute of inventoryModule.routes) {
   )
 }
 // Mount suppliers routes
-router.use('/suppliers', requireModule('contacts'), require('./suppliers.routes'))
+router.use(
+  contactsModule.routePrefix,
+  requireModule(contactsModule.code),
+  contactsModule.loadRouter()
+)
 // Mount catalogs routes
 router.use('/catalogs', requireModule('catalogs'), require('./catalogs.routes'))
 for (const salesRoute of salesModule.routes) {

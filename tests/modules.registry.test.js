@@ -8,6 +8,7 @@ const {
 const promotionsModule = require('../src/modules/promotions/manifest')
 const inventoryModule = require('../src/modules/inventory/manifest')
 const salesModule = require('../src/modules/sales/manifest')
+const contactsModule = require('../src/modules/contacts/manifest')
 
 test('el registro no contiene dependencias inexistentes ni circulares', () => {
   assert.equal(assertRegistryValid(), true)
@@ -54,6 +55,57 @@ test('una prueba vencida de inventario queda desactivada efectivamente', () => {
 
   assert.equal(inventory.status, 'TRIAL')
   assert.equal(inventory.effectiveEnabled, false)
+})
+
+test('contactos activos explícitamente quedan disponibles', () => {
+  const contacts = resolveEffectiveModules([
+    { module_code: 'contacts', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'contacts')
+
+  assert.equal(contacts.status, 'ACTIVE')
+  assert.equal(contacts.effectiveEnabled, true)
+  assert.equal(contacts.persisted, true)
+})
+
+test('contactos desactivados quedan bloqueados', () => {
+  const contacts = resolveEffectiveModules([
+    { module_code: 'contacts', status: 'DISABLED' },
+  ]).find((module) => module.code === 'contacts')
+
+  assert.equal(contacts.status, 'DISABLED')
+  assert.equal(contacts.effectiveEnabled, false)
+})
+
+test('una prueba vencida de contactos queda desactivada efectivamente', () => {
+  const contacts = resolveEffectiveModules([
+    {
+      module_code: 'contacts',
+      status: 'TRIAL',
+      trial_ends_at: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  ], new Date('2026-01-02T00:00:00.000Z'))
+    .find((module) => module.code === 'contacts')
+
+  assert.equal(contacts.status, 'TRIAL')
+  assert.equal(contacts.effectiveEnabled, false)
+})
+
+test('contactos no depende de inventario', () => {
+  const contacts = resolveEffectiveModules([
+    { module_code: 'inventory', status: 'DISABLED' },
+    { module_code: 'contacts', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'contacts')
+
+  assert.equal(contacts.effectiveEnabled, true)
+  assert.deepEqual(contacts.blockedBy, [])
+})
+
+test('el manifiesto de contactos coincide con el registro y conserva el prefijo HTTP', () => {
+  const definition = MODULE_DEFINITIONS.find((module) => module.code === contactsModule.code)
+  assert.ok(definition)
+  assert.deepEqual([...contactsModule.dependencies], [...definition.dependencies])
+  assert.equal(contactsModule.routePrefix, '/suppliers')
+  assert.equal(typeof contactsModule.loadRouter, 'function')
 })
 
 test('ventas activas explícitamente quedan disponibles', () => {
