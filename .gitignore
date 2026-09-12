@@ -19,3 +19,6 @@ prisma/generated/
 coverage/
 dist/
 .vercel/
+
+# Local AI-assisted planning artifacts
+docs/superpowers/
