@@ -14,6 +14,7 @@ const { resolveTenant } = require('../middlewares/tenant')
 const { requireAnyModule, requireModule } = require('../modules/platform')
 const promotionsModule = require('../modules/promotions/manifest')
 const inventoryModule = require('../modules/inventory/manifest')
+const salesModule = require('../modules/sales/manifest')
 
 // Basic ping
 router.get('/', (req, res) => {
@@ -42,8 +43,14 @@ for (const inventoryRoute of inventoryModule.routes) {
 router.use('/suppliers', requireModule('contacts'), require('./suppliers.routes'))
 // Mount catalogs routes
 router.use('/catalogs', requireModule('catalogs'), require('./catalogs.routes'))
-// Mount sales and alerts
-router.use('/sales', requireModule('sales'), require('./sales.routes'))
+for (const salesRoute of salesModule.routes) {
+  router.use(
+    salesRoute.routePrefix,
+    requireModule(salesModule.code),
+    salesRoute.loadRouter()
+  )
+}
+// Mount alerts
 router.use('/alerts', requireModule('alerts'), require('./alerts.routes'))
 // Dashboard stats
 router.use('/dashboard', requireModule('dashboard'), require('./dashboard.routes'))
@@ -55,8 +62,6 @@ router.use('/analytics', requireModule('analytics'), require('./analytics.routes
 router.use('/reports', requireModule('reports'), require('./reports.routes'))
 // Returns (product returns/refunds)
 router.use('/returns', requireModule('returns'), require('./returns.routes'))
-// Cash register sessions (apertura de caja)
-router.use('/cash-sessions', requireModule('sales'), require('./cashSessions.routes'))
 // Cash closures (cierre de caja)
 router.use('/cash-closures', requireModule('cash-closure'), require('./cashClosures.routes'))
 // System settings (configuración)

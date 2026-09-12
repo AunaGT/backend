@@ -7,6 +7,7 @@ const {
 } = require('../src/modules/platform/registry')
 const promotionsModule = require('../src/modules/promotions/manifest')
 const inventoryModule = require('../src/modules/inventory/manifest')
+const salesModule = require('../src/modules/sales/manifest')
 
 test('el registro no contiene dependencias inexistentes ni circulares', () => {
   assert.equal(assertRegistryValid(), true)
@@ -53,6 +54,50 @@ test('una prueba vencida de inventario queda desactivada efectivamente', () => {
 
   assert.equal(inventory.status, 'TRIAL')
   assert.equal(inventory.effectiveEnabled, false)
+})
+
+test('ventas activas explícitamente quedan disponibles', () => {
+  const sales = resolveEffectiveModules([
+    { module_code: 'sales', status: 'ACTIVE' },
+  ]).find((module) => module.code === 'sales')
+
+  assert.equal(sales.status, 'ACTIVE')
+  assert.equal(sales.effectiveEnabled, true)
+  assert.equal(sales.persisted, true)
+})
+
+test('ventas desactivadas quedan bloqueadas', () => {
+  const sales = resolveEffectiveModules([
+    { module_code: 'sales', status: 'DISABLED' },
+  ]).find((module) => module.code === 'sales')
+
+  assert.equal(sales.status, 'DISABLED')
+  assert.equal(sales.effectiveEnabled, false)
+})
+
+test('una prueba vencida de ventas queda desactivada efectivamente', () => {
+  const sales = resolveEffectiveModules([
+    {
+      module_code: 'sales',
+      status: 'TRIAL',
+      trial_ends_at: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  ], new Date('2026-01-02T00:00:00.000Z'))
+    .find((module) => module.code === 'sales')
+
+  assert.equal(sales.status, 'TRIAL')
+  assert.equal(sales.effectiveEnabled, false)
+})
+
+test('el manifiesto de ventas coincide con el registro y conserva prefijos HTTP', () => {
+  const definition = MODULE_DEFINITIONS.find((module) => module.code === salesModule.code)
+  assert.ok(definition)
+  assert.deepEqual([...salesModule.dependencies], [...definition.dependencies])
+  assert.deepEqual(
+    salesModule.routes.map((route) => route.routePrefix),
+    ['/sales', '/cash-sessions']
+  )
+  assert.equal(salesModule.routes.every((route) => typeof route.loadRouter === 'function'), true)
 })
 
 test('el manifiesto de inventario coincide con el registro y conserva prefijos HTTP', () => {
