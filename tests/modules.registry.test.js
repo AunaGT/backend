@@ -100,6 +100,54 @@ test('el manifiesto de ventas coincide con el registro y conserva prefijos HTTP'
   assert.equal(salesModule.routes.every((route) => typeof route.loadRouter === 'function'), true)
 })
 
+test('ventas rechaza códigos cuando promociones está desactivado', () => {
+  const { requirePromotionsForSale } = require('../src/modules/sales/middleware')
+  const modules = resolveEffectiveModules([
+    { module_code: 'promotions', status: 'DISABLED' },
+  ])
+  const req = { body: { promotion_codes: ['PROMO10'] }, companyModules: modules }
+  const response = {
+    statusCode: null,
+    payload: null,
+    status(code) { this.statusCode = code; return this },
+    json(payload) { this.payload = payload; return this },
+  }
+  let continued = false
+
+  requirePromotionsForSale(req, response, () => { continued = true })
+
+  assert.equal(continued, false)
+  assert.equal(response.statusCode, 403)
+  assert.equal(response.payload.code, 'MODULE_DISABLED')
+  assert.equal(response.payload.module, 'promotions')
+})
+
+test('ventas sin códigos no exige promociones', () => {
+  const { requirePromotionsForSale } = require('../src/modules/sales/middleware')
+  const req = {
+    body: { promotion_codes: [] },
+    companyModules: resolveEffectiveModules([{ module_code: 'promotions', status: 'DISABLED' }]),
+  }
+  let continued = false
+
+  requirePromotionsForSale(req, {}, () => { continued = true })
+
+  assert.equal(continued, true)
+})
+
+test('ventas acepta códigos cuando promociones está activo', () => {
+  const { requirePromotionsForSale } = require('../src/modules/sales/middleware')
+  const req = {
+    body: { promotion_codes: ['PROMO10'] },
+    companyModules: resolveEffectiveModules([{ module_code: 'promotions', status: 'ACTIVE' }]),
+  }
+  let continued = false
+
+  requirePromotionsForSale(req, {}, () => { continued = true })
+
+  assert.equal(continued, true)
+})
+
 test('el manifiesto de inventario coincide con el registro y conserva prefijos HTTP', () => {
   const definition = MODULE_DEFINITIONS.find((module) => module.code === inventoryModule.code)
   assert.ok(definition)

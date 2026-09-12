@@ -11,6 +11,7 @@
 const { Router } = require('express')
 const { Auth, hasAnyRole, hasPermission } = require('../middlewares/autenticacion')
 const Sales = require('../controllers/sales.controller')
+const { requirePromotionsForSale } = require('../modules/sales/middleware')
 
 const router = Router()
 
@@ -134,7 +135,7 @@ router.get('/:id', Auth, hasPermission('sales.view', 'sales.view_detail', 'sales
  *     responses:
  *       201: { description: Creado }
  */
-router.post('/', Auth, hasPermission('sales.create'), Sales.create)
+router.post('/', Auth, hasPermission('sales.create'), requirePromotionsForSale, Sales.create)
 
 /**
  * @openapi

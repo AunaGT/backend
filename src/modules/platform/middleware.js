@@ -27,6 +27,7 @@ function requireModule(code) {
           blockedBy: module?.blockedBy || [],
         })
       }
+      req.companyModules = modules
       req.companyModule = module
       next()
     } catch (error) {
