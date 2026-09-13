@@ -34,18 +34,23 @@ plataforma y por eso permanecen explícitas.
 
 ## Qué falta
 
-Los manifiestos ya aíslan el montaje y la activación, pero varios routers aún
+Los módulos `dashboard`, `alerts`, `analytics`, `branches`, `config`,
+`promotions`, `hr`, `payroll`, `returns`, `transfers`, `receivables`,
+`inventory-count` y `merchandise` ya poseen sus routers/controllers dentro de
+`src/modules`. RRHH publica sus validadores desde `src/modules/hr/index.js` y
+Cartera publica su lógica desde `src/modules/receivables/index.js`; Nómina y
+Ventas consumen esas fronteras en vez de importar internals.
+
+Los manifiestos ya aíslan el montaje y la activación, pero los demás routers aún
 apuntan a controllers y services legacy. La siguiente fase es mover propiedad
 física, un módulo por PR, sin cambiar contratos HTTP:
 
 1. Crear dentro del módulo `routes.js`, `application/`, `domain/`,
    `infrastructure/` y `tests/` únicamente cuando haya código real para mover.
-2. Mover primero un módulo pequeño (`alerts` o `dashboard`) y usarlo como patrón.
-3. Extraer después `catalogs`, `branches`, `transfers`, `inventory-count`,
-   `cash-closure`, `hr` y `payroll`.
+2. Usar `dashboard`, `alerts` o `hr` como patrones ya terminados.
+3. Continuar con `catalogs`, `users`, `contacts` y `cash-closure`.
 4. Extraer al final los módulos con más acoplamiento: `inventory`, `sales`,
-   `quotes`, `orders`, `returns`, `receivables`, `merchandise`, `reports` y
-   `accounting`.
+   `quotes`, `orders`, `reports` y `accounting`.
 5. Convertir dependencias cruzadas en puertos públicos. Ejemplo: Pedidos no debe
    importar internals de Inventario; debe consumir una función pública como
    `inventory.reserveStock(...)` exportada desde el índice del módulo.

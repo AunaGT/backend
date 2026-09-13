@@ -29,7 +29,7 @@ const {
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../services/bomStock')
 const { nextDocumentReference } = require('../services/referenceGenerator')
 const { requireBranch, branchWhere, hasPerm } = require('../middlewares/tenant')
-const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../services/receivables')
+const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../modules/receivables')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {

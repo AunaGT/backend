@@ -7,5 +7,5 @@ module.exports = Object.freeze({
   code: 'promotions',
   routePrefix: '/promotions',
   dependencies: Object.freeze(['sales', 'inventory']),
-  loadRouter: () => require('../../routes/promotions.routes'),
+  loadRouter: () => require('./routes'),
 })

@@ -37,7 +37,7 @@ async function main() {
   const { restoreStockMap } = require('../src/services/bomStock')
   const { inTransitTotals } = require('../src/services/inTransit')
   const { getFinancialData } = require('../src/controllers/reports.controller')
-  const transfers = require('../src/controllers/transfers.controller')
+  const transfers = require('../src/modules/transfers/controller')
 
   const co = await prisma.company.create({ data: { name: 'Tránsito SA', code: `TR${Date.now() % 100000}` } })
   const origen = await prisma.branch.create({ data: { company_id: co.id, name: 'Central', code: 'CTR', is_default: true } })

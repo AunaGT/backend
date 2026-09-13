@@ -3,7 +3,7 @@
  *
  * Antes de esto el crédito estaba a medias: `cashOrBank` ya mandaba la venta a
  * la cuenta de Clientes, pero nada la acreditaba nunca (la cuenta solo crecía) y
- * no había forma de saber qué cliente debía cuánto. Ver src/services/receivables.js
+ * no había forma de saber qué cliente debía cuánto. Ver src/modules/receivables/domain/receivables.js
  * y la sección "Cobros de clientes" de postPendingOperations.
  *
  * Cubre: (a) el FIFO aplica a la factura más vieja primero; (b) los estados
@@ -39,7 +39,7 @@ const CUENTAS = [
 const dias = (n) => new Date(Date.now() + n * 86400000)
 
 async function main() {
-  const R = require('../src/services/receivables')
+  const R = require('../src/modules/receivables')
   const { postPendingOperations } = require('../src/services/accounting/postingEngine')
 
   // ---- Datos base ----

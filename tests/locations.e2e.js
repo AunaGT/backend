@@ -320,7 +320,7 @@ async function main() {
   assert(desmarcada.body.sales_location_id === null, 'volver a marcarla deja la sucursal sin ubicación de venta fija')
 
   console.log('\n== 12. El conteo físico se hace y se aplica ubicación por ubicación ==')
-  const counts = require('../src/controllers/inventoryCounts.controller')
+  const counts = require('../src/modules/inventory-count/controller')
   // Whisky solo en dos ubicaciones de la sucursal: 6 en GENERAL y 2 en SALA-01.
   const whisky = await prisma.product.create({
     data: {
@@ -387,7 +387,7 @@ async function main() {
   assert(kardex.body.length === 2, 'y el libro anotó el ajuste en las dos ubicaciones')
 
   console.log('\n== 13. El traslado sale por ubicación, entra donde se indique y vuelve a su origen ==')
-  const transfers = require('../src/controllers/transfers.controller')
+  const transfers = require('../src/modules/transfers/controller')
   const tequila = await prisma.product.create({
     data: {
       name: 'Tequila', company_id: co.id, category_id: cat.id, supplier_id: sup.id,
@@ -522,7 +522,7 @@ async function main() {
   assert(sucCerveza.stock === 7, 'la sucursal no tiene faltante: solo está mal repartido (7 en total)')
 
   console.log('\n== 16. Códigos automáticos, alta en sucursal, baja de lotes e ingreso dirigido ==')
-  const branchesCtl = require('../src/controllers/branches.controller')
+  const branchesCtl = require('../src/modules/branches/controller')
 
   const autoAlm = await callController(warehouses.create, { ...req10, body: { name: 'Sala de ventas' } })
   assert(autoAlm.status === 201 && autoAlm.body.code === 'SALADEVENTAS',

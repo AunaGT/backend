@@ -477,7 +477,7 @@ async function main() {
     },
   })
 
-  const promos = require('../src/controllers/promotions.controller')
+  const promos = require('../src/modules/promotions/controller')
   const listaCentro = await callController(promos.list, {
     companyId: acme.id, branchId: acmeCentro.id, query: {},
   })
