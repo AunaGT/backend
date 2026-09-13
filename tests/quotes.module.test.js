@@ -1,5 +1,11 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+
+// Algunos controladores cargan el middleware de autenticación al importarse.
+// La prueba no firma tokens reales, pero debe proporcionar una clave aislada
+// para no depender del .env local del desarrollador o del CI.
+process.env.JWT_SECRET ||= 'auna-module-tests-only-not-for-production-2026'
+
 const { resolveEffectiveModules } = require('../src/modules/platform/registry')
 
 function responseStub() {
@@ -329,6 +335,24 @@ test('el vencimiento omite cotizaciones bloqueadas por dependencias', async () =
   const ids = await filterEnabledQuoteIds(rows, {}, loadModules)
 
   assert.deepEqual(ids, [])
+})
+
+test('el vencimiento procesa únicamente pedidos de empresas con el módulo activo', async () => {
+  const { filterEnabledOrderIds } = require('../src/services/commercialDocumentExpiry')
+  const rows = [
+    { id: 'order-active', branch: { company_id: 'company-active' } },
+    { id: 'order-disabled', branch: { company_id: 'company-disabled' } },
+  ]
+  const loadModules = async (companyId) => resolveEffectiveModules([
+    {
+      module_code: 'orders',
+      status: companyId === 'company-active' ? 'ACTIVE' : 'DISABLED',
+    },
+  ])
+
+  const ids = await filterEnabledOrderIds(rows, {}, loadModules)
+
+  assert.deepEqual(ids, ['order-active'])
 })
 
 test('la cotización pública evita tenant y las rutas privadas lo conservan', async (t) => {

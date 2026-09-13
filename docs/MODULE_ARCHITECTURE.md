@@ -38,8 +38,9 @@ src/modules/<module>/
   tests/            # pruebas del módulo
 ```
 
-Durante la migración, el manifiesto puede envolver un router antiguo. El módulo
-piloto `promotions` demuestra este patrón sin una reescritura abrupta.
+Durante la migración, el manifiesto puede envolver un router antiguo. Los 23
+módulos registrados ya tienen esta frontera; el avance y la secuencia para
+mover sus internals están en `docs/MODULARIZATION_HANDOFF.md`.
 
 ## Reglas obligatorias
 

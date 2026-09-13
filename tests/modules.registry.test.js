@@ -1,5 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+
+process.env.JWT_SECRET ||= 'auna-module-tests-only-not-for-production-2026'
+
 const {
   MODULE_DEFINITIONS,
   assertRegistryValid,
@@ -10,10 +13,44 @@ const inventoryModule = require('../src/modules/inventory/manifest')
 const salesModule = require('../src/modules/sales/manifest')
 const contactsModule = require('../src/modules/contacts/manifest')
 const quotesModule = require('../src/modules/quotes/manifest')
+const { MODULE_MANIFESTS, getManifestRoutes } = require('../src/modules/catalog')
 
 test('el registro no contiene dependencias inexistentes ni circulares', () => {
   assert.equal(assertRegistryValid(), true)
   assert.equal(new Set(MODULE_DEFINITIONS.map((module) => module.code)).size, MODULE_DEFINITIONS.length)
+})
+
+test('cada definición tiene un único manifiesto HTTP sincronizado', () => {
+  const manifestsByCode = new Map(MODULE_MANIFESTS.map((manifest) => [manifest.code, manifest]))
+
+  assert.equal(MODULE_MANIFESTS.length, MODULE_DEFINITIONS.length)
+  assert.equal(manifestsByCode.size, MODULE_MANIFESTS.length)
+
+  for (const definition of MODULE_DEFINITIONS) {
+    const manifest = manifestsByCode.get(definition.code)
+    assert.ok(manifest, `Falta el manifiesto ${definition.code}`)
+    assert.deepEqual([...manifest.dependencies], [...definition.dependencies])
+
+    const routes = getManifestRoutes(manifest)
+    assert.ok(routes.length > 0, `${definition.code} no declara rutas`)
+    assert.equal(routes.every((route) => (
+      typeof route.routePrefix === 'string' &&
+      route.routePrefix.startsWith('/') &&
+      typeof route.loadRouter === 'function'
+    )), true)
+  }
+})
+
+test('todos los manifiestos pueden cargar sus routers', () => {
+  for (const manifest of MODULE_MANIFESTS) {
+    for (const route of getManifestRoutes(manifest)) {
+      const moduleRouter = route.loadRouter()
+      assert.equal(typeof moduleRouter, 'function', `${manifest.code} no cargó un router Express`)
+    }
+    if (manifest.loadPublicRouter) {
+      assert.equal(typeof manifest.loadPublicRouter(), 'function')
+    }
+  }
 })
 
 test('la compatibilidad activa módulos cuando aún no existe una fila', () => {

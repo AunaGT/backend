@@ -9,27 +9,36 @@ const { readCompanyModules } = require('../modules/platform/service')
 const QUOTE_EXPIRABLE = ['DRAFT', 'SENT', 'ACCEPTED']
 const ORDER_EXPIRABLE = ['DRAFT', 'CONFIRMED', 'PARTIALLY_FULFILLED']
 
-async function filterEnabledQuoteIds(
-  overdueQuotes,
+async function filterEnabledDocumentIds(
+  overdueDocuments,
+  moduleCode,
   client,
   loadModules = readCompanyModules
 ) {
   const enabledByCompany = new Map()
   const ids = []
 
-  for (const quote of overdueQuotes) {
-    const companyId = quote.branch.company_id
+  for (const document of overdueDocuments) {
+    const companyId = document.branch.company_id
     if (!enabledByCompany.has(companyId)) {
       const modules = await loadModules(companyId, client, { useCache: false })
       enabledByCompany.set(
         companyId,
-        Boolean(modules.find((module) => module.code === 'quotes')?.effectiveEnabled)
+        Boolean(modules.find((module) => module.code === moduleCode)?.effectiveEnabled)
       )
     }
-    if (enabledByCompany.get(companyId)) ids.push(quote.id)
+    if (enabledByCompany.get(companyId)) ids.push(document.id)
   }
 
   return ids
+}
+
+function filterEnabledQuoteIds(overdueQuotes, client, loadModules = readCompanyModules) {
+  return filterEnabledDocumentIds(overdueQuotes, 'quotes', client, loadModules)
+}
+
+function filterEnabledOrderIds(overdueOrders, client, loadModules = readCompanyModules) {
+  return filterEnabledDocumentIds(overdueOrders, 'orders', client, loadModules)
 }
 
 async function expireCommercialDocuments(options = {}) {
@@ -72,17 +81,25 @@ async function expireCommercialDocuments(options = {}) {
         status: { in: ORDER_EXPIRABLE },
         valid_until: { lt: now },
       },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        branch: { select: { company_id: true } },
+      },
     })
 
+    const enabledOrderIds = await filterEnabledOrderIds(overdueOrders, tx)
+    const enabledOrderIdSet = new Set(enabledOrderIds)
+
     for (const order of overdueOrders) {
+      if (!enabledOrderIdSet.has(order.id)) continue
       if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_FULFILLED') {
         await releaseByDocument(tx, order.id, { status: 'EXPIRED' })
       }
     }
-    if (overdueOrders.length) {
+    if (enabledOrderIds.length) {
       const r = await tx.commercialDocument.updateMany({
-        where: { id: { in: overdueOrders.map((d) => d.id) } },
+        where: { id: { in: enabledOrderIds } },
         data: { status: 'EXPIRED' },
       })
       summary.ordersExpired = r.count
@@ -109,5 +126,7 @@ async function expireCommercialDocuments(options = {}) {
 
 module.exports = {
   expireCommercialDocuments,
+  filterEnabledDocumentIds,
+  filterEnabledOrderIds,
   filterEnabledQuoteIds,
 }

@@ -14,9 +14,10 @@ const rateLimit = require('express-rate-limit')
 const controller = require('../controllers/usuarios.controller')
 const { Auth, hasAnyRole, hasPermission } = require('../middlewares/autenticacion')
 const { requireModule } = require('../modules/platform')
+const usersManifest = require('../modules/users/manifest')
 
 const router = Router()
-const usersModule = requireModule('users')
+const usersModule = requireModule(usersManifest.code)
 
 // Frena fuerza bruta en las rutas que verifican contraseña. 10 intentos / 15 min por IP.
 const loginLimiter = rateLimit({
