@@ -8,9 +8,16 @@ tener una frontera explícita. Un módulo activo no equivale a un permiso:
 - **Activación:** la empresa contrató la capacidad.
 - **Permiso:** el usuario puede ejecutar una acción dentro de esa capacidad.
 - **Configuración:** parámetros propios de la empresa para esa capacidad.
+- **Experiencia:** densidad y revelado inicial de la interfaz para una persona
+  dentro de una empresa. Nunca concede acceso.
 
 El orden obligatorio de autorización es: autenticación → tenant → módulo →
 permiso → caso de uso. El frontend nunca sustituye estas validaciones.
+
+La regla práctica es: módulo decide si la función existe; configuración decide
+si el establecimiento la usa; permiso decide si la persona puede ejecutarla; y
+perfil de experiencia decide cuándo la interfaz se la muestra. No combinar esas
+cuatro preguntas en una sola bandera.
 
 ## Piezas centrales
 

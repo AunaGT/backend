@@ -30,6 +30,7 @@ const userWithPerms = {
   cashRegister: { select: { id: true, name: true, code: true, active: true } },
   user_companies: {
     select: {
+      experience_profile: true,
       company: { select: { id: true, name: true, code: true, logo_url: true, active: true } },
     },
   },
@@ -63,7 +64,9 @@ function serializeUser(user) {
     cash_register_id: user.cash_register_id,
     cash_register: user.cashRegister || null,
     companies: Array.isArray(user.user_companies)
-      ? user.user_companies.map((uc) => uc.company).filter((c) => c && c.active)
+      ? user.user_companies
+          .map((uc) => uc.company && { ...uc.company, experience_profile: uc.experience_profile ?? null })
+          .filter((c) => c && c.active)
       : [],
     branches: Array.isArray(user.user_branches)
       ? user.user_branches.map((ub) => ub.branch).filter((b) => b && b.active)
@@ -338,7 +341,10 @@ exports.getById = async (req, res, next) => {
           select: { branch: { select: { id: true, name: true, code: true, active: true } } },
         },
         user_companies: {
-          select: { company: { select: { id: true, name: true, code: true } } },
+          select: {
+            experience_profile: true,
+            company: { select: { id: true, name: true, code: true } },
+          },
         },
         employee_record: {
           select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true, address: true, hire_date: true },
@@ -366,7 +372,10 @@ exports.getById = async (req, res, next) => {
       cash_register: user.cashRegister,
       default_branch_id: user.default_branch_id,
       branches: user.user_branches.map((ub) => ub.branch),
-      companies: user.user_companies.map((uc) => uc.company),
+      companies: user.user_companies.map((uc) => ({
+        ...uc.company,
+        experience_profile: uc.experience_profile ?? null,
+      })),
       created_at: user.created_at,
       updated_at: user.updated_at
     })

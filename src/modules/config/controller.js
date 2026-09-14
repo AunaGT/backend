@@ -52,7 +52,7 @@ exports.getAll = async (req, res, next) => {
  */
 exports.getPublic = async (req, res, next) => {
   try {
-    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate']
+    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate', 'default_experience_profile', 'sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels']
     const rows = await prisma.systemSetting.findMany({
       where: { key: { in: keys }, company_id: req.companyId }
     })
@@ -66,7 +66,11 @@ exports.getPublic = async (req, res, next) => {
       locale: 'es-GT',
       cash_closure_max_diff_pct: '5',
       vat_affiliation: '',
-      iva_rate: '12'
+      iva_rate: '12',
+      default_experience_profile: 'CASHIER',
+      sales_allow_credit: 'true',
+      sales_show_fiscal_fields: 'true',
+      sales_show_channels: 'true'
     }
     for (const row of rows) {
       if (out.hasOwnProperty(row.key)) out[row.key] = (row.value != null && String(row.value).trim() !== '') ? String(row.value).trim() : out[row.key]
@@ -304,6 +308,18 @@ exports.update = async (req, res, next) => {
       }
     }
 
+    if (
+      payload.default_experience_profile !== undefined &&
+      !['CASHIER', 'MANAGER', 'OWNER', 'ADVANCED'].includes(String(payload.default_experience_profile))
+    ) {
+      return res.status(400).json({ message: 'default_experience_profile no es válido' })
+    }
+    for (const boolKey of ['sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels']) {
+      if (payload[boolKey] !== undefined && !['true', 'false'].includes(String(payload[boolKey]).toLowerCase())) {
+        return res.status(400).json({ message: `${boolKey} debe ser true o false` })
+      }
+    }
+
     const allowedKeys = new Set([
       'currency_code',
       'currency_name',
@@ -327,6 +343,10 @@ exports.update = async (req, res, next) => {
       'quote_validity_days',
       'order_validity_days',
       'quote_soft_hold_hours',
+      'default_experience_profile',
+      'sales_allow_credit',
+      'sales_show_fiscal_fields',
+      'sales_show_channels',
     ])
 
     for (const [key, value] of Object.entries(payload)) {

@@ -33,3 +33,18 @@ Publicar el frontend primero puede hacer que llame endpoints que el backend ante
 - Esquema al día pero interfaz anterior: el dominio de producción continúa apuntando a `main` u otro deployment previo.
 
 La migración `20260811110000_baseline_drift` es histórica. En una base que ya contenía esas tablas por un antiguo `db push`, se resolvió como aplicada; no debe ejecutarse manualmente otra vez.
+
+## Historia heredada pendiente de reconciliar
+
+La base publicada conserva nombres de migraciones anteriores al
+`20260211233410_init` consolidado. Varias pueden recuperarse del historial Git,
+pero devolverlas a `prisma/migrations` rompería una instalación nueva: primero
+crearía las tablas antiguas y luego el `init` intentaría crearlas otra vez.
+
+No inventar archivos vacíos, no editar `_prisma_migrations` y no restaurar las
+migraciones antiguas dentro de la cadena ejecutable solo para hacer verde el
+estado. La solución segura es preparar, en una base clonada, una nueva línea de
+base que represente el esquema actual; validar tanto la base publicada como una
+instalación vacía; y promover esa línea de forma controlada. Hasta completar
+esa reconciliación, `migrate:status` seguirá marcando historia divergente y el
+despliegue de nuevas migraciones debe permanecer pausado.

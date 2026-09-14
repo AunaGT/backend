@@ -18,6 +18,7 @@ router.post('/', Auth, hasPermission('companies.manage'), Companies.create)
 router.put('/:id', Auth, hasPermission('companies.manage'), Companies.update)
 router.put('/:id/users', Auth, hasPermission('companies.manage'), Companies.assignUsers)
 router.post('/:id/users/:userId', Auth, hasPermission('companies.manage'), Companies.addUser)
+router.patch('/:id/users/:userId/experience-profile', Auth, hasPermission('users.edit'), Companies.updateUserExperienceProfile)
 router.delete('/:id/users/:userId', Auth, hasPermission('companies.manage'), Companies.removeUser)
 
 module.exports = router

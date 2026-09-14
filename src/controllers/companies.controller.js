@@ -24,10 +24,10 @@ exports.list = async (req, res, next) => {
   try {
     const rows = await prisma.userCompany.findMany({
       where: { user_id: req.user.sub, company: { active: true } },
-      select: { company: { select: COMPANY_SELECT } },
+      select: { experience_profile: true, company: { select: COMPANY_SELECT } },
       orderBy: { company: { name: 'asc' } },
     })
-    res.json(rows.map((r) => r.company))
+    res.json(rows.map((r) => ({ ...r.company, experience_profile: r.experience_profile ?? null })))
   } catch (e) { next(e) }
 }
 
@@ -137,6 +137,33 @@ exports.addUser = async (req, res, next) => {
       create: { user_id: userId, company_id: id },
     })
     res.json({ ok: true })
+  } catch (e) { next(e) }
+}
+
+// PATCH /api/companies/:id/users/:userId/experience-profile
+// Solo cambia cuánto detalle ve inicialmente. Nunca concede permisos.
+exports.updateUserExperienceProfile = async (req, res, next) => {
+  try {
+    const { id, userId } = req.params
+    await assertMember(req, id)
+    const value = req.body?.experience_profile
+    const profile = value == null || value === '' ? null : String(value).toUpperCase()
+    if (profile !== null && !['CASHIER', 'MANAGER', 'OWNER', 'ADVANCED'].includes(profile)) {
+      return res.status(400).json({ message: 'Perfil de experiencia no válido' })
+    }
+
+    const membership = await prisma.userCompany.findUnique({
+      where: { user_id_company_id: { user_id: userId, company_id: id } },
+      select: { user_id: true },
+    })
+    if (!membership) return res.status(404).json({ message: 'El usuario no pertenece a esta empresa' })
+
+    const updated = await prisma.userCompany.update({
+      where: { user_id_company_id: { user_id: userId, company_id: id } },
+      data: { experience_profile: profile },
+      select: { experience_profile: true },
+    })
+    res.json({ experience_profile: updated.experience_profile })
   } catch (e) { next(e) }
 }
 

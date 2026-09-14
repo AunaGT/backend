@@ -66,6 +66,13 @@ enum CompanyModuleStatus {
   DISABLED
 }
 
+enum ExperienceProfile {
+  CASHIER
+  MANAGER
+  OWNER
+  ADVANCED
+}
+
 model CompanyModule {
   company_id    String              @db.Uuid
   company       Company             @relation(fields: [company_id], references: [id], onDelete: Cascade)
@@ -85,11 +92,13 @@ model CompanyModule {
 
 /// Pertenencia usuario ↔ empresa (N a N). El email del usuario es único global.
 model UserCompany {
-  user_id    String   @db.Uuid
-  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  company_id String   @db.Uuid
-  company    Company  @relation(fields: [company_id], references: [id], onDelete: Cascade)
-  created_at DateTime @default(now())
+  user_id            String             @db.Uuid
+  user               User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company_id         String             @db.Uuid
+  company            Company            @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  /// Controla densidad y revelado progresivo de la interfaz. No concede permisos.
+  experience_profile ExperienceProfile?
+  created_at         DateTime           @default(now())
 
   @@id([user_id, company_id])
   @@index([company_id])

@@ -644,6 +644,14 @@ exports.convertToSale = async (req, res, next) => {
         err.status = 400
         throw err
       }
+      // Este flujo aún no crea la cuenta por cobrar ni valida límite/vencimiento.
+      // Bloquear es más seguro que registrar una venta a crédito como pagada.
+      if (paymentMethod.is_credit) {
+        const err = new Error('Los pedidos al crédito deben cobrarse desde una venta directa por ahora')
+        err.status = 400
+        err.code = 'ORDER_CREDIT_NOT_SUPPORTED'
+        throw err
+      }
 
       await assertLinesAvailable(
         tx,

@@ -50,6 +50,11 @@ function defaultCompanySettings(company = {}) {
     ['quote_validity_days', '30', 'string'],
     ['order_validity_days', '7', 'string'],
     ['quote_soft_hold_hours', '48', 'string'],
+    // Experiencia progresiva de venta. Estas banderas no conceden permisos.
+    ['default_experience_profile', 'CASHIER', 'string'],
+    ['sales_allow_credit', 'true', 'string'],
+    ['sales_show_fiscal_fields', 'true', 'string'],
+    ['sales_show_channels', 'true', 'string'],
   ]
 }
 

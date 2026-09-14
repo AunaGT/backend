@@ -670,6 +670,22 @@ exports.create = async (req, res, next) => {
         err.status = 400
         throw err
       }
+      if (paymentMethod.is_credit) {
+        const creditSetting = await tx.systemSetting.findUnique({
+          where: {
+            company_id_key: { company_id: req.companyId, key: 'sales_allow_credit' },
+          },
+          select: { value: true },
+        })
+        // Compatibilidad: empresas existentes sin la nueva clave conservan el
+        // comportamiento anterior hasta que guarden su configuración.
+        if (String(creditSetting?.value ?? 'true').toLowerCase() !== 'true') {
+          const err = new Error('Las ventas al crédito están desactivadas para esta empresa')
+          err.status = 403
+          err.code = 'CREDIT_SALES_DISABLED'
+          throw err
+        }
+      }
       let creditDueDate = null
       let salePaymentStatus = 'PAID'
       if (paymentMethod.is_credit) {
