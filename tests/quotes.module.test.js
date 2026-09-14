@@ -18,7 +18,7 @@ function responseStub() {
 }
 
 function loadQuotesController(t, mocks) {
-  const controllerPath = require.resolve('../src/controllers/quotes.controller')
+  const controllerPath = require.resolve('../src/modules/quotes/controller')
   require(controllerPath)
   const replacements = new Map(Object.entries(mocks).map(([path, exports]) => [require.resolve(path), exports]))
   const cached = new Map([...replacements.keys(), controllerPath].map((path) => [path, require.cache[path]]))
@@ -359,7 +359,7 @@ test('la cotización pública evita tenant y las rutas privadas lo conservan', a
   const express = require('express')
   const tenantPath = require.resolve('../src/middlewares/tenant')
   const platformPath = require.resolve('../src/modules/platform')
-  const controllerPath = require.resolve('../src/controllers/quotes.controller')
+  const controllerPath = require.resolve('../src/modules/quotes/controller')
   const routesPath = require.resolve('../src/routes')
   const cached = new Map([
     [tenantPath, require.cache[tenantPath]],

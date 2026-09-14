@@ -1,11 +1,11 @@
 const routes = Object.freeze([
   Object.freeze({
     routePrefix: '/sales',
-    loadRouter: () => require('../../routes/sales.routes'),
+    loadRouter: () => require('./sales.routes'),
   }),
   Object.freeze({
     routePrefix: '/cash-sessions',
-    loadRouter: () => require('../../routes/cashSessions.routes'),
+    loadRouter: () => require('./cashSessions.routes'),
   }),
 ])
 

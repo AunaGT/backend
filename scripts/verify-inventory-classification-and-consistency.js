@@ -15,12 +15,12 @@
 
 const bcrypt = require('bcryptjs')
 const { prisma, prismaTransaction } = require('../src/models/prisma')
-const productsCtrl = require('../src/controllers/products.controller')
+const productsCtrl = require('../src/modules/inventory/products.controller')
 const transfersCtrl = require('../src/modules/transfers/controller')
-const salesCtrl = require('../src/controllers/sales.controller')
+const salesCtrl = require('../src/modules/sales/controller')
 const returnsCtrl = require('../src/modules/returns/controller')
 const analyticsCtrl = require('../src/modules/analytics/controller')
-const { getFinancialData } = require('../src/controllers/reports.controller')
+const { getFinancialData } = require('../src/modules/reports/controller')
 
 const DEFAULT_COMPANY_ID = '00000000-0000-4000-8000-000000000001'
 

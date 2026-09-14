@@ -158,7 +158,7 @@ async function main() {
   }
 
   console.log('\n== 7. Quitar de la sucursal exige 0 también en las ubicaciones ==')
-  const productsCtl = require('../src/controllers/products.controller')
+  const productsCtl = require('../src/modules/inventory/products.controller')
   // Estado que solo se alcanza forzándolo: los espejos dicen 0 pero la
   // cuarentena todavía guarda 3. La prueba defiende el invariante.
   await prisma.productStock.update({
@@ -184,7 +184,7 @@ async function main() {
   assert(Object.keys(quedan).length === 0, 'y sus filas de ubicación se fueron con él')
 
   console.log('\n== 9. CRUD de almacenes, siempre dentro de la sucursal ==')
-  const warehouses = require('../src/controllers/warehouses.controller')
+  const warehouses = require('../src/modules/inventory/warehouses.controller')
   const otraSuc = await prisma.branch.create({ data: { company_id: co.id, name: 'Anexo', code: 'ANX' } })
 
   const nuevo = await callController(warehouses.create, {
@@ -231,7 +231,7 @@ async function main() {
   assert(limpio.body?.ok === true, 'uno vacío y sin historial sí se borra')
 
   console.log('\n== 10. Movimientos internos y ajustes ==')
-  const stockMoves = require('../src/controllers/stockMoves.controller')
+  const stockMoves = require('../src/modules/inventory/stock.controller')
   const vino = await prisma.product.create({
     data: {
       name: 'Vino', company_id: co.id, category_id: cat.id, supplier_id: sup.id,

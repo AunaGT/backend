@@ -7,8 +7,8 @@ const swaggerUi = require('swagger-ui-express')
 const swaggerJSDoc = require('swagger-jsdoc')
 
 // Routers (placeholders, keep existing index for now)
-const usuariosRoutes = require('./src/routes/usuarios.routes')
-// If you later add files like ./src/routes/usuarios.routes.js in CJS, import here and spread in /api
+const usuariosRoutes = require('./src/modules/users/routes')
+// Las rutas de usuarios viven en su módulo y se exponen aquí para este arranque auxiliar.
 const apiRoutes = require('./src/routes')
 
 var app = express()

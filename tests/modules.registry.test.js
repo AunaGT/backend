@@ -1,5 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
 
 process.env.JWT_SECRET ||= 'auna-module-tests-only-not-for-production-2026'
 
@@ -50,6 +52,22 @@ test('todos los manifiestos pueden cargar sus routers', () => {
     if (manifest.loadPublicRouter) {
       assert.equal(typeof manifest.loadPublicRouter(), 'function')
     }
+  }
+})
+
+test('cada manifiesto carga routers físicos desde su propia carpeta', () => {
+  for (const definition of MODULE_DEFINITIONS) {
+    const manifestPath = path.join(__dirname, '..', 'src', 'modules', definition.code, 'manifest.js')
+    const source = fs.readFileSync(manifestPath, 'utf8')
+    const targets = [...source.matchAll(/load(?:Public)?Router:\s*\(\)\s*=>\s*require\(['"]([^'"]+)['"]\)/g)]
+      .map((match) => match[1])
+
+    assert.ok(targets.length > 0, `${definition.code} no publica un router`)
+    assert.equal(
+      targets.every((target) => target.startsWith('./')),
+      true,
+      `${definition.code} todavía carga un router fuera de su módulo`
+    )
   }
 })
 

@@ -54,7 +54,7 @@ async function main() {
 
   const { restoreStockMap } = require('../src/services/bomStock')
   const { postPendingOperations } = require('../src/services/accounting/postingEngine')
-  const sales = require('../src/controllers/sales.controller')
+  const sales = require('../src/modules/sales/controller')
 
   const co = await prisma.company.create({ data: { name: 'Blindaje SA', code: `BL${Date.now() % 100000}` } })
   const suc = await prisma.branch.create({ data: { company_id: co.id, name: 'Central', code: 'CTR', is_default: true } })

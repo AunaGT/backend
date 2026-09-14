@@ -5,7 +5,7 @@
  * caja configurada" aunque el turno cerrado y pendiente de arqueo seguía ahí.
  * resolveRegister() solo miraba caja asignada o caja default de sucursal, sin
  * considerar dónde el usuario tenía trabajo real (turno abierto o cerrado sin
- * arqueo). Ver src/controllers/cashSessions.controller.js resolveRegister().
+ * arqueo). Ver src/modules/sales/cashSessions.controller.js resolveRegister().
  *
  * Uso: contra un Postgres desechable ya migrado.
  */
@@ -26,7 +26,7 @@ const callController = (fn, req) => new Promise((resolve, reject) => {
 async function main() {
   const role = await prisma.role.upsert({ where: { name: 'Admin' }, update: {}, create: { name: 'Admin' } })
 
-  const cashSessions = require('../src/controllers/cashSessions.controller')
+  const cashSessions = require('../src/modules/sales/cashSessions.controller')
 
   const co = await prisma.company.create({ data: { name: 'Caja SA', code: `CJ${Date.now() % 100000}` } })
   const suc = await prisma.branch.create({ data: { company_id: co.id, name: 'Zona 10', code: 'Z10', is_default: true } })

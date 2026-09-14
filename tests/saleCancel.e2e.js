@@ -37,7 +37,7 @@ async function main() {
   await prisma.status.upsert({ where: { name: 'Resuelta' }, update: {}, create: { name: 'Resuelta' } })
 
   const { restoreStockMap } = require('../src/services/bomStock')
-  const sales = require('../src/controllers/sales.controller')
+  const sales = require('../src/modules/sales/controller')
 
   const co = await prisma.company.create({ data: { name: 'Cancelaciones SA', code: `CX${Date.now() % 100000}` } })
   const suc = await prisma.branch.create({ data: { company_id: co.id, name: 'Central', code: 'CTR', is_default: true } })

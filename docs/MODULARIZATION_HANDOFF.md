@@ -32,55 +32,48 @@ plataforma y por eso permanecen explícitas.
 - Pruebas de contrato: `tests/modules.registry.test.js`.
 - Reglas generales: `docs/MODULE_ARCHITECTURE.md`.
 
-## Qué falta
+## Estado de la reorganización física
 
-Los módulos `dashboard`, `alerts`, `analytics`, `branches`, `config`,
-`promotions`, `hr`, `payroll`, `returns`, `transfers`, `receivables`,
-`inventory-count` y `merchandise` ya poseen sus routers/controllers dentro de
-`src/modules`. RRHH publica sus validadores desde `src/modules/hr/index.js` y
-Cartera publica su lógica desde `src/modules/receivables/index.js`; Nómina y
-Ventas consumen esas fronteras en vez de importar internals.
+Las 23 capacidades ya poseen manifiesto, router y controlador dentro de
+`src/modules/<code>`. Los directorios globales `src/routes` y `src/controllers`
+conservan únicamente composición o capacidades de plataforma. La prueba
+`cada manifiesto carga routers físicos desde su propia carpeta` impide volver a
+introducir montajes legacy.
 
-Los manifiestos ya aíslan el montaje y la activación, pero los demás routers aún
-apuntan a controllers y services legacy. La siguiente fase es mover propiedad
-física, un módulo por PR, sin cambiar contratos HTTP:
+RRHH publica validadores desde `src/modules/hr/index.js` y Cartera publica su
+lógica desde `src/modules/receivables/index.js`; Nómina y Ventas consumen esas
+fronteras en vez de importar internals.
 
-1. Crear dentro del módulo `routes.js`, `application/`, `domain/`,
-   `infrastructure/` y `tests/` únicamente cuando haya código real para mover.
-2. Usar `dashboard`, `alerts` o `hr` como patrones ya terminados.
-3. Continuar con `catalogs`, `users`, `contacts` y `cash-closure`.
-4. Extraer al final los módulos con más acoplamiento: `inventory`, `sales`,
-   `quotes`, `orders`, `reports` y `accounting`.
-5. Convertir dependencias cruzadas en puertos públicos. Ejemplo: Pedidos no debe
-   importar internals de Inventario; debe consumir una función pública como
-   `inventory.reserveStock(...)` exportada desde el índice del módulo.
-6. Revisar jobs y procesos asíncronos. Antes de mutar datos de una capacidad
-   opcional deben leer `readCompanyModules(companyId)`; el scheduler de
-   documentos comerciales ya filtra Cotizaciones y Pedidos por empresa y sirve
-   como referencia.
-7. Añadir pruebas por módulo para estado activo, desactivado, trial vencido,
-   dependencia bloqueada, aislamiento entre empresas y permisos.
+La siguiente fase ya no es mover routers. Es profundizar cada dominio sin
+cambiar contratos:
 
-No conviene mover todos los archivos a la vez. El manifiesto permite conservar
-el router legacy mientras cada extracción se valida y entrega de forma pequeña.
+1. Extraer servicios globales únicamente cuando tengan un dueño claro; los
+   servicios genuinamente transversales pueden permanecer en `src/services`.
+2. Convertir dependencias cruzadas en índices públicos del módulo y evitar
+   imports a controllers internos.
+3. Revisar jobs y procesos asíncronos: antes de mutar una capacidad opcional
+   deben consultar `readCompanyModules(companyId)`.
+4. Añadir E2E con base de datos para activo, desactivado, trial vencido,
+   aislamiento entre empresas, permisos y atomicidad.
+5. Trabajar un dominio por PR aunque la frontera física común ya esté completa.
 
 ## Receta para otro colaborador o IA
 
-Para migrar `<code>`:
+Para ampliar `<code>`:
 
-1. Leer completo `docs/MODULE_ARCHITECTURE.md`, este archivo, el manifiesto del
-   módulo y su router legacy.
+1. Leer completo `docs/MODULE_ARCHITECTURE.md`, este archivo, el manifiesto y
+   el índice público del módulo si existe.
 2. Confirmar que código y dependencias coinciden con el registro; no inventar un
    segundo identificador.
 3. Buscar referencias con `rg "controller|service|ruta" src tests`.
-4. Mover un solo caso de uso manteniendo URL, payload, respuesta, permisos y
+4. Extraer un solo caso de uso manteniendo URL, payload, respuesta, permisos y
    transacción existentes.
-5. Actualizar `loadRouter` para apuntar a la nueva interfaz pública solo cuando
-   las pruebas del caso de uso estén verdes.
+5. Publicar dependencias entre módulos mediante `index.js`; nunca mediante la
+   ruta física de un controller.
 6. Ejecutar `npm run test:modules` y las pruebas del dominio afectado.
 7. Verificar que `git status --short` no incluya `.env` ni `env`.
 
-Prompt sugerido: “Migra físicamente el módulo `<code>` siguiendo
+Prompt sugerido: “Profundiza el módulo `<code>` siguiendo
 `docs/MODULE_ARCHITECTURE.md` y `docs/MODULARIZATION_HANDOFF.md`. Conserva los
 contratos HTTP y Prisma, no cambies módulos vecinos, no importes internals de
 otro módulo y agrega pruebas de activo/inactivo, tenant y permisos.”

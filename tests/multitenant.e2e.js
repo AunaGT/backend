@@ -399,7 +399,7 @@ async function main() {
       ],
     }),
   )
-  const reports = require('../src/controllers/accountingReports.controller')
+  const reports = require('../src/modules/accounting/reports.controller')
   const porSucursal = await new Promise((resolve, reject) => {
     reports.byBranch(
       { companyId: acme.id, query: {} },
@@ -530,7 +530,7 @@ async function main() {
       status: 'DRAFT', total: 100, created_by: user.id,
     },
   })
-  const orders = require('../src/controllers/orders.controller')
+  const orders = require('../src/modules/orders/controller')
   const movido = await callController(orders.changeBranch, {
     params: { id: pedido.id }, body: { branch_id: acmeNorte.id },
     companyId: acme.id, branchId: acmeCentro.id,
@@ -550,7 +550,7 @@ async function main() {
 
   // 13. Quitar un producto de una sucursal no lo quita de las demás.
   console.log('\n--- 13. Producto fuera de una sola sucursal ---')
-  const products = require('../src/controllers/products.controller')
+  const products = require('../src/modules/inventory/products.controller')
   const soloCentro = await mk('Solo Centro', acme, catA, supA, 'ONLY-CENTRO')
   await setStock(soloCentro, acmeCentro, 3, 0)
   await prisma.productStock.create({ data: { product_id: soloCentro.id, branch_id: acmeNorte.id, stock: 0 } })
@@ -608,7 +608,7 @@ async function main() {
 
   // 15. El reporte de inventario es del alcance pedido, no del catálogo entero.
   console.log('\n--- 15. Reporte de inventario por sucursal ---')
-  const { inventoryReport } = require('../src/controllers/reports.controller')
+  const { inventoryReport } = require('../src/modules/reports/controller')
   const csvReporte = (req) => new Promise((resolve, reject) => {
     const res = { setHeader() {}, status() { return res }, send: resolve, json: resolve }
     Promise.resolve(inventoryReport(req, res, reject)).catch(reject)
