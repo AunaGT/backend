@@ -5,12 +5,15 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:modules": "node --test tests/modules.registry.test.js tests/quotes.module.test.js tests/hr.validation.test.js",
+    "test:modules": "node --test tests/modules.registry.test.js tests/quotes.module.test.js tests/hr.validation.test.js tests/releaseInfo.test.js",
     "dev": "nodemon index.js",
     "start": "node index.js",
     "seed": "node prisma/seed.js",
-    "migrate": "prisma migrate dev",
-    "prisma:generate": "prisma generate",
+    "migrate": "npm run migrate:dev",
+    "migrate:dev": "node scripts/prisma-cli.js migrate dev",
+    "migrate:status": "node scripts/prisma-cli.js migrate status",
+    "migrate:deploy": "node scripts/prisma-cli.js migrate deploy",
+    "prisma:generate": "node scripts/prisma-cli.js generate",
     "prepare": "prisma generate"
   },
   "keywords": [],

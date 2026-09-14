@@ -1,4 +1,4 @@
-require('dotenv/config')
+require('./src/config/loadEnv')
 const app = require('./app')
 
 // For Vercel serverless, export the app

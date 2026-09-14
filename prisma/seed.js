@@ -8,8 +8,8 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
-// El .env no se carga solo cuando esto corre con `node` (index.js sí lo hace).
-require('dotenv/config')
+// Acepta el `.env` estándar y el archivo local heredado llamado `env`.
+require('../src/config/loadEnv')
 const { PrismaClient } = require('@prisma/client')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 const { seedCompanyModules } = require('../src/modules/platform/service')

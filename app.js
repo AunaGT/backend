@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser')
 const path = require('path')
 const swaggerUi = require('swagger-ui-express')
 const swaggerJSDoc = require('swagger-jsdoc')
+const { getReleaseInfo } = require('./src/config/release')
 
 // Routers (placeholders, keep existing index for now)
 const usuariosRoutes = require('./src/modules/users/routes')
@@ -71,6 +72,7 @@ const swaggerOptions = {
   apis: [
     path.join(__dirname, 'src/routes/*.routes.js'),
     path.join(__dirname, 'src/controllers/*.js'),
+    path.join(__dirname, 'src/modules/**/*.js'),
   ],
 }
 const swaggerSpec = swaggerJSDoc(swaggerOptions)
@@ -85,9 +87,13 @@ const { prisma } = require('./src/models/prisma.js')
 app.get('/health', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`
-    res.json({ ok: true })
+    res.json({ ok: true, release: getReleaseInfo() })
   } catch (e) {
-    res.status(500).json({ ok: false, error: 'DB connection failed' })
+    res.status(500).json({
+      ok: false,
+      error: 'DB connection failed',
+      release: getReleaseInfo(),
+    })
   }
 })
 

@@ -12,6 +12,7 @@ const { Router } = require('express')
 const router = Router()
 const { resolveTenant } = require('../middlewares/tenant')
 const { requireAnyModule, requireModule } = require('../modules/platform')
+const { getReleaseInfo } = require('../config/release')
 const {
   MODULE_MANIFESTS,
   MODULE_MANIFEST_BY_CODE,
@@ -31,7 +32,7 @@ function mountModule(appRouter, manifest) {
 
 // Basic ping
 router.get('/', (req, res) => {
-  res.json({ ok: true, message: 'API up' })
+  res.json({ ok: true, message: 'API up', release: getReleaseInfo() })
 })
 
 router.use(quotesModule.routePrefix, quotesModule.loadPublicRouter())
