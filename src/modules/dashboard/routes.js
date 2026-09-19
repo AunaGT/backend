@@ -9,12 +9,12 @@
  */
 
 const { Router } = require('express');
-const { Auth } = require('../../middlewares/autenticacion');
+const { Auth, hasPermission } = require('../../middlewares/autenticacion');
 const Dashboard = require('./controller');
 
 const router = Router();
 
 // GET /api/dashboard/stats - Obtener estadísticas del dashboard
-router.get('/stats', Auth, Dashboard.getStats);
+router.get('/stats', Auth, hasPermission('analytics.view'), Dashboard.getStats);
 
 module.exports = router;

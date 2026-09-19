@@ -11,6 +11,22 @@
 const { DateTime } = require('luxon');
 const { prisma } = require('../../models/prisma');
 const { syncLotExpiryAlerts } = require('../../services/lots');
+const { branchWhere } = require('../../middlewares/tenant');
+const { getTimezone } = require('../../utils/getTimezone');
+const { buildPeriodRanges, buildPeriodSummary } = require('./domain');
+
+function isAdmin(user) {
+  const role = user?.role?.name || user?.role_name
+  return typeof role === 'string' && role.toLowerCase() === 'admin'
+}
+
+function can(user, permission) {
+  return isAdmin(user) || (Array.isArray(user?.permissions) && user.permissions.includes(permission))
+}
+
+function moduleEnabled(req, code) {
+  return (req.companyModules || []).some((module) => module.code === code && module.effectiveEnabled)
+}
 
 /**
  * GET /api/dashboard/stats
@@ -18,39 +34,48 @@ const { syncLotExpiryAlerts } = require('../../services/lots');
  */
 exports.getStats = async (req, res) => {
   try {
-    // Obtener fecha de inicio del día en Guatemala (CST, UTC-6)
-    const nowGt = DateTime.now().setZone('America/Guatemala');
-    const startOfDayGt = nowGt.startOf('day');
-    
-    // Convertir a UTC para la consulta
-    const startOfDayUtc = startOfDayGt.toUTC().toJSDate();
-    const nowUtc = nowGt.toUTC().toJSDate();
+    const timezone = await getTimezone(prisma, req.companyId)
+    const nowLocal = DateTime.now().setZone(timezone);
+    const nowUtc = nowLocal.toUTC().toJSDate();
 
-    // 1. Ventas del día (solo ventas con estado Completado - id: 1)
+    // Ventas completadas: un solo recorrido alimenta hoy, semana y mes. También
+    // incluye el tramo comparable anterior para no enfrentar un día parcial con
+    // un día completo.
     const STATUS_COMPLETADO = 1;
-
-    const { branchWhere } = require('../../middlewares/tenant')
     const tenantSales = branchWhere(req)
-    const salesAggregate = await prisma.sale.aggregate({
+    const ranges = buildPeriodRanges(nowLocal, timezone)
+    const earliestStart = ranges.month.previous.start
+    const sales = await prisma.sale.findMany({
       where: {
         ...tenantSales,
-        sold_at: { gte: startOfDayUtc, lte: nowUtc },
+        sold_at: { gte: earliestStart, lte: nowUtc },
         status_id: STATUS_COMPLETADO
       },
-      _sum: { 
-        adjusted_total: true  // ✅ Usar adjusted_total (ventas netas con devoluciones)
+      select: {
+        sold_at: true,
+        adjusted_total: true,
+        sale_items: {
+          select: {
+            qty: true,
+            unit_cost: true,
+            product: { select: { cost: true } },
+          },
+        },
       },
-      _count: true
     });
-
-    const ventasHoy = salesAggregate._sum.adjusted_total || 0;  // ✅ Ventas netas
-    const cantidadVentasHoy = salesAggregate._count || 0;
+    const periods = buildPeriodSummary(sales, ranges)
+    const ventasHoy = periods.today.sales
+    const cantidadVentasHoy = periods.today.transactions
 
     // 2 y 3. Stock y valor de inventario: de la sucursal activa (o total de la
     // empresa en vista consolidada, usando el espejo products.stock)
     let productosEnStock
     let valorInventario
-    if (req.branchId) {
+    const canViewInventory = moduleEnabled(req, 'inventory') && can(req.user, 'products.view')
+    if (!canViewInventory) {
+      productosEnStock = null
+      valorInventario = null
+    } else if (req.branchId) {
       const rows = await prisma.productStock.findMany({
         where: { branch_id: req.branchId, product: { deleted_at: null } },
         select: { stock: true, product: { select: { cost: true } } },
@@ -70,49 +95,41 @@ exports.getStats = async (req, res) => {
     }
 
     // 4. Alertas críticas (alertas activas no resueltas con prioridad "Crítica")
-    await syncLotExpiryAlerts(prisma); // advisory, autothrottled; no hay cron en serverless
-    const priorityCritica = await prisma.alertPriority.findFirst({
-      where: { name: { in: ['Crítica', 'Critica'] } }
-    });
+    let alertasCriticas = null
+    if (moduleEnabled(req, 'alerts') && (can(req.user, 'alerts.view') || can(req.user, 'alerts.manage'))) {
+      await syncLotExpiryAlerts(prisma); // advisory, autothrottled; no hay cron en serverless
+      const [priorityCritica, statusActiva] = await Promise.all([
+        prisma.alertPriority.findFirst({ where: { name: { in: ['Crítica', 'Critica'] } } }),
+        prisma.status.findFirst({ where: { name: 'Activa' } }),
+      ])
+      alertasCriticas = await prisma.alert.count({
+        where: {
+          ...branchWhere(req),
+          resolved: 0,
+          ...(statusActiva ? { status_id: statusActiva.id } : {}),
+          ...(priorityCritica ? { priority_id: priorityCritica.id } : {})
+        }
+      })
+    }
 
-    const statusActiva = await prisma.status.findFirst({
-      where: { name: 'Activa' }
-    });
-
-    const alertasCriticasQuery = {
-      ...branchWhere(req),
-      resolved: 0,
-      ...(statusActiva ? { status_id: statusActiva.id } : {}),
-      ...(priorityCritica ? { priority_id: priorityCritica.id } : {})
-    };
-
-    const alertasCriticas = await prisma.alert.count({
-      where: alertasCriticasQuery
-    });
-
-    // Calcular comparaciones con ayer (opcional para mostrar tendencias)
-    const yesterdayStart = startOfDayGt.minus({ days: 1 }).toUTC().toJSDate();
-    const yesterdayEnd = startOfDayGt.toUTC().toJSDate();
-
-    const salesYesterday = await prisma.sale.aggregate({
-      where: {
-        ...tenantSales,
-        sold_at: { gte: yesterdayStart, lt: yesterdayEnd },
-        status_id: STATUS_COMPLETADO
-      },
-      _sum: { adjusted_total: true }  // ✅ Usar adjusted_total para comparación correcta
-    });
-
-    const ventasAyer = salesYesterday._sum.adjusted_total || 0;  // ✅ Ventas netas de ayer
-    const cambioVentas = ventasAyer > 0 
-      ? ((ventasHoy - ventasAyer) / ventasAyer * 100).toFixed(1)
-      : 0;
+    let pendingCashDifferences = null
+    if (moduleEnabled(req, 'cash-closure') && can(req.user, 'cashclosure.view')) {
+      const pendingClosures = await prisma.cashClosure.findMany({
+        where: { ...branchWhere(req), status: 'Pendiente' },
+        select: { difference: true },
+      })
+      const withDifference = pendingClosures.filter((closure) => Math.abs(Number(closure.difference) || 0) >= 0.005)
+      pendingCashDifferences = {
+        count: withDifference.length,
+        amount: Number(withDifference.reduce((sum, closure) => sum + Math.abs(Number(closure.difference) || 0), 0).toFixed(2)),
+      }
+    }
 
     return res.json({
       ventasHoy: {
-        valor: Number(ventasHoy.toFixed(2)),
+        valor: ventasHoy,
         cantidad: cantidadVentasHoy,
-        cambio: Number(cambioVentas),
+        cambio: periods.today.salesChange,
         comparacion: 'vs ayer'
       },
       productosEnStock: {
@@ -121,7 +138,7 @@ exports.getStats = async (req, res) => {
         comparacion: 'vs ayer'
       },
       valorInventario: {
-        valor: Number(valorInventario.toFixed(2)),
+        valor: valorInventario == null ? null : Number(valorInventario.toFixed(2)),
         cambio: 0, // Se puede calcular comparando con snapshot anterior si es necesario
         comparacion: 'vs ayer'
       },
@@ -130,8 +147,10 @@ exports.getStats = async (req, res) => {
         cambio: 0, // Se puede calcular comparando con días anteriores si es necesario
         comparacion: 'vs ayer'
       },
-      timestamp: nowGt.toISO(),
-      timezone: 'America/Guatemala'
+      periods,
+      pendingCashDifferences,
+      timestamp: nowLocal.toISO(),
+      timezone
     });
 
   } catch (error) {
