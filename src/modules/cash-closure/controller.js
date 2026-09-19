@@ -10,6 +10,7 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
+const { normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
 const { getTimezone } = require('../../utils/getTimezone')
 
 const number = (v) => {
@@ -512,6 +513,12 @@ exports.create = async (req, res, next) => {
     const differencePercentage = theoreticalTotal > 0 
       ? (difference / theoreticalTotal) * 100 
       : 0
+    const closureNotes = normalizeClosureNotes(notes)
+    if (requiresDifferenceReason(difference, closureNotes)) {
+      return res.status(400).json({
+        message: 'Debe indicar el motivo del faltante o sobrante antes de guardar el cierre'
+      })
+    }
 
     const nowLocal = DateTime.now().setZone(tz);
     const dateUTC = DateTime.utc(
@@ -585,7 +592,7 @@ exports.create = async (req, res, next) => {
           total_transactions: totalTransactions,
           total_customers: totalCustomers,
           average_ticket: averageTicket,
-          notes: notes || null,
+          notes: closureNotes || null,
           status: 'Pendiente'
         }
       })
