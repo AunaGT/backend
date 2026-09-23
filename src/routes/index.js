@@ -20,6 +20,7 @@ const {
 } = require('../modules/catalog')
 
 const quotesModule = MODULE_MANIFEST_BY_CODE.get('quotes')
+const ordersModule = MODULE_MANIFEST_BY_CODE.get('orders')
 
 function mountModule(appRouter, manifest) {
   for (const moduleRoute of getManifestRoutes(manifest)) {
@@ -36,6 +37,7 @@ router.get('/', (req, res) => {
 })
 
 router.use(quotesModule.routePrefix, quotesModule.loadPublicRouter())
+router.use(ordersModule.routePrefix, ordersModule.loadPublicRouter())
 
 // Empresa + sucursal del request (req.companyId / req.branchId) para todas las rutas
 router.use(resolveTenant)

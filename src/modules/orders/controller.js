@@ -6,6 +6,7 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { Prisma } = require('@prisma/client')
+const crypto = require('crypto')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, deductStockMap } = require('../../services/bomStock')
 const { consumeLotsFEFO } = require('../../services/lots')
@@ -13,6 +14,8 @@ const { dispatchedByRef } = require('../../services/stockLocations')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../../services/priceResolution')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
+const { buildOrderDateFilter, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
+const { getCompanyModuleBlock } = require('../platform/service')
 
 async function loadBranch(tx, branchId) {
   return tx.branch.findUnique({ where: { id: branchId }, select: { id: true, code: true, seq: true } })
@@ -58,7 +61,7 @@ const ORDER_LIST_INCLUDE = {
 const ORDER_DETAIL_INCLUDE = {
   branch: BRANCH_SELECT,
   customerContact: {
-    select: { id: true, name: true, tax_id: true, email: true, phone: true },
+    select: { id: true, name: true, tax_id: true, contact: true, email: true, phone: true, address: true },
   },
   createdBy: { select: { id: true, name: true, email: true } },
   convertedFrom: { select: { id: true, reference: true, doc_type: true, status: true } },
@@ -98,6 +101,26 @@ const orderWhereIdOrReference = (idOrRef) => {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
   if (isUuid) return { id: s, doc_type: ORDER_DOC_TYPE }
   return { reference: s, doc_type: ORDER_DOC_TYPE }
+}
+
+async function ensurePublicToken(tx, docId) {
+  const doc = await tx.commercialDocument.findUnique({
+    where: { id: docId },
+    select: { public_token: true },
+  })
+  if (doc?.public_token) return doc.public_token
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const token = crypto.randomBytes(24).toString('hex')
+    const exists = await tx.commercialDocument.findFirst({ where: { public_token: token } })
+    if (exists) continue
+    await tx.commercialDocument.update({ where: { id: docId }, data: { public_token: token } })
+    return token
+  }
+
+  const error = new Error('No se pudo generar enlace público')
+  error.status = 500
+  throw error
 }
 
 function parseSalesChannel(raw) {
@@ -248,7 +271,16 @@ async function requireCashSession(tx, user, explicitRegisterId, branchId) {
 
 exports.list = async (req, res, next) => {
   try {
-    const { status, search } = req.query || {}
+    const {
+      status,
+      search,
+      customer_contact_id: customerContactId,
+      date_from: dateFrom,
+      date_to: dateTo,
+      preparation_status: preparationStatus,
+      delivery_status: deliveryStatus,
+      sort = 'created_desc',
+    } = req.query || {}
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 25)))
     const searchTerm = String(search || '').trim()
@@ -262,9 +294,6 @@ exports.list = async (req, res, next) => {
       where.branch_id = wantedBranch
     }
     let searchMeta = null
-    if (status && String(status).toUpperCase() !== 'ALL' && !searchTerm) {
-      where.status = String(status).toUpperCase()
-    }
     if (searchTerm) {
       const meta = appendCommercialDocSearchFilter(where, searchTerm)
       searchMeta = meta
@@ -282,14 +311,35 @@ exports.list = async (req, res, next) => {
       }
     }
 
-    const totalItems = await prisma.commercialDocument.count({ where })
+    if (customerContactId) {
+      const id = String(customerContactId)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return res.status(400).json({ message: 'Cliente inválido' })
+      }
+      where.customer_contact_id = id
+    }
+    const createdAt = buildOrderDateFilter(dateFrom, dateTo)
+    if (createdAt) where.created_at = createdAt
+
+    const summaryWhere = { ...where }
+    const statuses = resolveOrderStatuses({
+      status,
+      preparation: preparationStatus,
+      delivery: deliveryStatus,
+    })
+    if (statuses) where.status = { in: statuses }
+
+    const [totalItems, statusCounts] = await Promise.all([
+      prisma.commercialDocument.count({ where }),
+      prisma.commercialDocument.groupBy({ by: ['status'], where: summaryWhere, _count: { _all: true } }),
+    ])
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
     const items = await prisma.commercialDocument.findMany({
       where,
       include: ORDER_LIST_INCLUDE,
-      orderBy: { created_at: 'desc' },
+      orderBy: resolveOrderOrderBy(String(sort)),
       skip: (safePage - 1) * pageSize,
       take: pageSize,
     })
@@ -302,6 +352,10 @@ exports.list = async (req, res, next) => {
       totalItems,
       nextPage: safePage < totalPages ? safePage + 1 : null,
       prevPage: safePage > 1 ? safePage - 1 : null,
+      summary: statusCounts.reduce((acc, row) => {
+        acc[row.status] = row._count._all
+        return acc
+      }, {}),
       ...(searchMeta ? { searchMeta } : {}),
     })
   } catch (e) {
@@ -323,6 +377,129 @@ exports.getById = async (req, res, next) => {
     res.json(doc)
   } catch (e) {
     next(e)
+  }
+}
+
+exports.getShareLink = async (req, res, next) => {
+  try {
+    const order = await prisma.commercialDocument.findFirst({
+      where: {
+        ...orderWhereIdOrReference(req.params.id),
+        branch: { company_id: req.companyId },
+      },
+      select: { id: true },
+    })
+    if (!order) return res.status(404).json({ message: 'Pedido no encontrado' })
+
+    const token = await prisma.$transaction((tx) => ensurePublicToken(tx, order.id))
+    const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '')
+    const path = `/p/${token}`
+    res.json({ public_token: token, public_url: base ? `${base}${path}` : path })
+  } catch (error) {
+    next(error)
+  }
+}
+
+exports.getPublicByToken = async (req, res, next) => {
+  try {
+    const token = String(req.params.token || '').trim()
+    if (!token) return res.status(400).json({ message: 'Token requerido' })
+
+    const order = await prisma.commercialDocument.findFirst({
+      where: { public_token: token, doc_type: ORDER_DOC_TYPE },
+      select: {
+        reference: true,
+        status: true,
+        created_at: true,
+        updated_at: true,
+        confirmed_at: true,
+        valid_until: true,
+        customer: true,
+        customer_nit: true,
+        is_final_consumer: true,
+        sales_channel: true,
+        subtotal: true,
+        discount_total: true,
+        total: true,
+        notes: true,
+        branch: { select: { company_id: true, name: true, code: true } },
+        customerContact: {
+          select: { name: true, contact: true, email: true, phone: true, address: true },
+        },
+        lines: {
+          orderBy: { sort_order: 'asc' },
+          select: {
+            qty: true,
+            qty_fulfilled: true,
+            unit_price: true,
+            line_total: true,
+            product: { select: { name: true, barcode: true } },
+          },
+        },
+        documentSales: {
+          orderBy: { created_at: 'asc' },
+          select: {
+            sale: {
+              select: {
+                reference: true,
+                total: true,
+                date: true,
+                status: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    })
+    if (!order) return res.status(404).json({ message: 'Pedido no encontrado' })
+
+    const moduleBlock = await getCompanyModuleBlock(order.branch.company_id, 'orders')
+    if (moduleBlock) return res.status(403).json(moduleBlock)
+
+    const companyRows = await prisma.systemSetting.findMany({
+      where: {
+        key: { in: ['company_name', 'company_logo_url'] },
+        company_id: order.branch.company_id,
+      },
+    })
+    const company = Object.fromEntries(companyRows.map((row) => [row.key, row.value]))
+
+    res.json({
+      reference: order.reference,
+      status: order.status,
+      created_at: order.created_at,
+      updated_at: order.updated_at,
+      confirmed_at: order.confirmed_at,
+      valid_until: order.valid_until,
+      customer: order.customer,
+      customer_nit: order.is_final_consumer ? null : order.customer_nit,
+      is_final_consumer: order.is_final_consumer,
+      customer_contact: order.customerContact,
+      sales_channel: order.sales_channel,
+      subtotal: order.subtotal,
+      discount_total: order.discount_total,
+      total: order.total,
+      notes: order.notes,
+      branch: order.branch ? { name: order.branch.name, code: order.branch.code } : null,
+      company_name: company.company_name || 'Auna',
+      company_logo_url: String(company.company_logo_url || '').trim(),
+      lines: order.lines.map((line) => ({
+        product_name: line.product?.name || null,
+        barcode: line.product?.barcode || null,
+        qty: line.qty,
+        qty_fulfilled: line.qty_fulfilled || 0,
+        unit_price: line.unit_price,
+        line_total: line.line_total,
+      })),
+      sales: order.documentSales.flatMap(({ sale }) => sale ? [{
+        reference: sale.reference,
+        total: sale.total,
+        date: sale.date,
+        status: sale.status?.name || null,
+      }] : []),
+    })
+  } catch (error) {
+    next(error)
   }
 }
 

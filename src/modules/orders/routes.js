@@ -10,6 +10,7 @@ const router = Router()
 
 router.get('/', Auth, hasPermission('orders.view'), Orders.list)
 router.post('/', Auth, hasPermission('orders.create'), Orders.create)
+router.get('/:id/share-link', Auth, hasPermission('orders.view'), Orders.getShareLink)
 router.get('/:id', Auth, hasPermission('orders.view'), Orders.getById)
 router.put('/:id', Auth, hasPermission('orders.create'), Orders.update)
 router.put('/:id/branch', Auth, hasPermission('orders.create'), Orders.changeBranch)

@@ -28,6 +28,19 @@ async function readCompanyModules(companyId, client = prisma, { useCache = true 
   return modules
 }
 
+async function getCompanyModuleBlock(companyId, code, loadModules = readCompanyModules) {
+  const modules = await loadModules(companyId, undefined, { useCache: false })
+  const module = modules?.find((item) => item.code === code)
+  if (module?.effectiveEnabled) return null
+  return {
+    code: 'MODULE_DISABLED',
+    message: `El módulo ${module?.name || code} no está disponible para esta empresa`,
+    module: code,
+    status: module?.status || 'DISABLED',
+    blockedBy: module?.blockedBy || [],
+  }
+}
+
 async function seedCompanyModules(client, companyId) {
   await client.companyModule.createMany({
     data: MODULE_DEFINITIONS.map((module) => ({
@@ -121,6 +134,7 @@ async function updateCompanyModule(companyId, code, input) {
 }
 
 module.exports = {
+  getCompanyModuleBlock,
   invalidateCompanyModules,
   readCompanyModules,
   seedCompanyModules,
