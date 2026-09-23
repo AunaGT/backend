@@ -22,6 +22,7 @@ const { assertLinesAvailable } = require('../../services/stockAvailability')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { consumeLotsFEFO, recreateLotsFromSnapshot } = require('../../services/lots')
 const { assertBranchLocations, dispatchedByRef, defaultLocationId } = require('../../services/stockLocations')
+const { buildTransferWhere } = require('./domain')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías: sin esto
 // el envío fallaba "a veces" y funcionaba al reintentar (conexión ya caliente).
@@ -45,19 +46,16 @@ exports.list = async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 25)))
-    const { direction = 'all', status } = req.query || {}
-
-    const where = {}
-    if (status) where.status = String(status).toUpperCase()
-
-    if (req.branchId) {
-      if (direction === 'in') where.to_branch_id = req.branchId
-      else if (direction === 'out') where.from_branch_id = req.branchId
-      else where.OR = [{ from_branch_id: req.branchId }, { to_branch_id: req.branchId }]
-    } else {
-      // Vista consolidada: todos los traslados de la empresa
-      where.fromBranch = { company_id: req.companyId }
-    }
+    const { direction = 'all', status, search, from_branch_id: fromBranchId, to_branch_id: toBranchId } = req.query || {}
+    const where = buildTransferWhere({
+      companyId: req.companyId,
+      branchId: req.branchId,
+      direction,
+      status,
+      search,
+      fromBranchId,
+      toBranchId,
+    })
 
     const totalItems = await prisma.stockTransfer.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
