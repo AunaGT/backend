@@ -35,7 +35,7 @@ router.use(Auth, hasPermission('analytics.view'))
  *         description: Año del que se quiere obtener la información (desde la primera venta completada)
  *     responses:
  *       200:
- *         description: Resumen preparado para dashboards
+ *         description: Resumen preparado para el tablero analítico
  */
 router.get('/first-sale-year', ctrl.firstSaleYear)
 router.get('/summary', ctrl.summary)

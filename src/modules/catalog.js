@@ -1,5 +1,4 @@
 const manifests = [
-  require('./dashboard/manifest'),
   require('./inventory/manifest'),
   require('./catalogs/manifest'),
   require('./contacts/manifest'),

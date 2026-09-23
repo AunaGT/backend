@@ -20,6 +20,7 @@ const { MODULE_MANIFESTS, getManifestRoutes } = require('../src/modules/catalog'
 test('el registro no contiene dependencias inexistentes ni circulares', () => {
   assert.equal(assertRegistryValid(), true)
   assert.equal(new Set(MODULE_DEFINITIONS.map((module) => module.code)).size, MODULE_DEFINITIONS.length)
+  assert.equal(MODULE_DEFINITIONS.some((module) => module.code === 'dashboard'), false)
 })
 
 test('cada definición tiene un único manifiesto HTTP sincronizado', () => {
@@ -27,6 +28,7 @@ test('cada definición tiene un único manifiesto HTTP sincronizado', () => {
 
   assert.equal(MODULE_MANIFESTS.length, MODULE_DEFINITIONS.length)
   assert.equal(manifestsByCode.size, MODULE_MANIFESTS.length)
+  assert.equal(manifestsByCode.has('dashboard'), false)
 
   for (const definition of MODULE_DEFINITIONS) {
     const manifest = manifestsByCode.get(definition.code)

@@ -7,7 +7,6 @@
  * política de altas sin tocar los routers.
  */
 const MODULE_DEFINITIONS = Object.freeze([
-  { code: 'dashboard', name: 'Dashboard', dependencies: [] },
   { code: 'inventory', name: 'Inventario', dependencies: [] },
   { code: 'catalogs', name: 'Datos maestros', dependencies: [] },
   { code: 'contacts', name: 'Contactos', dependencies: [] },
