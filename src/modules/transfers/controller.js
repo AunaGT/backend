@@ -34,7 +34,7 @@ const TRANSFER_INCLUDE = {
   createdBy: { select: { id: true, name: true } },
   receivedBy: { select: { id: true, name: true } },
   lines: {
-    include: { product: { select: { id: true, name: true, barcode: true } } },
+    include: { product: { select: { id: true, name: true, barcode: true, image_url: true } } },
   },
 }
 
