@@ -681,6 +681,7 @@ exports.convertToOrder = async (req, res, next) => {
           branch_id: quote.branch_id,
           reference,
           doc_type: ORDER_DOC_TYPE,
+          fulfillment_mode: 'SEPARATE',
           status: 'DRAFT',
           valid_until: quote.valid_until,
           customer: quote.customer,

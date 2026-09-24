@@ -93,16 +93,14 @@ async function expireCommercialDocuments(options = {}) {
 
     for (const order of overdueOrders) {
       if (!enabledOrderIdSet.has(order.id)) continue
-      if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_FULFILLED') {
+      await tx.$queryRaw`SELECT id FROM commercial_documents WHERE id = ${order.id}::uuid FOR UPDATE`
+      const current = await tx.commercialDocument.findUnique({ where: { id: order.id }, select: { status: true, valid_until: true } })
+      if (!current || !ORDER_EXPIRABLE.includes(current.status) || !current.valid_until || current.valid_until >= now) continue
+      if (current.status === 'CONFIRMED' || current.status === 'PARTIALLY_FULFILLED') {
         await releaseByDocument(tx, order.id, { status: 'EXPIRED' })
       }
-    }
-    if (enabledOrderIds.length) {
-      const r = await tx.commercialDocument.updateMany({
-        where: { id: { in: enabledOrderIds } },
-        data: { status: 'EXPIRED' },
-      })
-      summary.ordersExpired = r.count
+      await tx.commercialDocument.update({ where: { id: order.id }, data: { status: 'EXPIRED' } })
+      summary.ordersExpired += 1
     }
 
     const res = await tx.stockReservation.updateMany({

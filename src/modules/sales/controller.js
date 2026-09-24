@@ -932,9 +932,13 @@ exports.updateStatus = async (req, res, next) => {
             sale_items: { include: { return_items: { select: { qty_returned: true } } } },
             cashRegisterSession: { select: { status: true } },
             paymentEntries: { select: { amount: true } },
+            orderLink: { select: { document: { select: { fulfillment_mode: true } } } },
           },
         })
         if (!current) throw new Error('Venta no encontrada')
+        if (current.orderLink?.document?.fulfillment_mode === 'SEPARATE' && current.status_id !== Number(targetStatusId)) {
+          throw Object.assign(new Error('Esta venta corresponde a entregas independientes. Registra una devolución para corregir productos entregados.'), { status: 409 })
+        }
 
         // El cierre guardó el teórico recorriendo las ventas del turno. Cambiar
         // una de ellas después deja la diferencia contra el conteo físico sin

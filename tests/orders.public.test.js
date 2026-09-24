@@ -273,6 +273,9 @@ test('la ruta pública de pedidos evita tenant y la administrativa lo conserva',
       'confirm',
       'cancel',
       'convertToSale',
+      'deliver',
+      'reverseDelivery',
+      'invoice',
     ].map((name) => [name, handler])),
   }
   delete require.cache[routesPath]

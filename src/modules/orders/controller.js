@@ -59,6 +59,7 @@ const ORDER_LIST_INCLUDE = {
 }
 
 const ORDER_DETAIL_INCLUDE = {
+  deliveries: { orderBy: { created_at: 'desc' }, include: { lines: true } },
   branch: BRANCH_SELECT,
   customerContact: {
     select: { id: true, name: true, tax_id: true, contact: true, email: true, phone: true, address: true },
@@ -572,6 +573,7 @@ exports.create = async (req, res, next) => {
           branch_id: branchId,
           reference,
           doc_type: ORDER_DOC_TYPE,
+          fulfillment_mode: 'SEPARATE',
           status: 'DRAFT',
           valid_until: validUntil,
           customer: customer != null ? String(customer).trim() || null : null,
@@ -781,9 +783,19 @@ exports.cancel = async (req, res, next) => {
     if (salesCount > 0) {
       return res.status(400).json({ message: 'No se puede cancelar un pedido con ventas registradas' })
     }
+    if (order.fulfillment_mode === 'SEPARATE' && await prisma.orderDelivery.count({ where: { document_id: order.id, reversed_at: null } })) {
+      return res.status(409).json({ message: 'El pedido tiene entregas registradas; no se puede cancelar' })
+    }
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
-      if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_FULFILLED') {
+      await tx.$queryRaw`SELECT id FROM commercial_documents WHERE id = ${order.id}::uuid FOR UPDATE`
+      const current = await tx.commercialDocument.findUnique({ where: { id: order.id } })
+      if (!['DRAFT', 'CONFIRMED', 'PARTIALLY_FULFILLED'].includes(current.status)
+        || await tx.commercialDocumentSale.count({ where: { document_id: order.id } })
+        || (current.fulfillment_mode === 'SEPARATE' && await tx.orderDelivery.count({ where: { document_id: order.id, reversed_at: null } }))) {
+        throw Object.assign(new Error('El pedido cambió o tiene entregas/ventas; actualiza la vista antes de cancelarlo'), { status: 409 })
+      }
+      if (current.status === 'CONFIRMED' || current.status === 'PARTIALLY_FULFILLED') {
         await releaseByDocument(tx, order.id, { status: 'RELEASED' })
       }
       return tx.commercialDocument.update({
@@ -819,6 +831,9 @@ exports.convertToSale = async (req, res, next) => {
     if (!order) return res.status(404).json({ message: 'Pedido no encontrado' })
     if (!['CONFIRMED', 'PARTIALLY_FULFILLED'].includes(order.status)) {
       return res.status(400).json({ message: 'Solo pedidos confirmados o parciales pueden convertirse en venta' })
+    }
+    if (order.fulfillment_mode === 'SEPARATE') {
+      return res.status(409).json({ message: 'Registra la entrega y después factura desde el detalle del pedido', code: 'ORDER_SEPARATE_FULFILLMENT' })
     }
     // La entrega ocurre en la sucursal del pedido: ahí están la reserva y el stock
     if (req.branchId !== order.branch_id) {
@@ -986,3 +1001,23 @@ exports.convertToSale = async (req, res, next) => {
     next(e)
   }
 }
+
+function separateOrderAction(action) {
+  return async (req, res, next) => {
+    try {
+      if (!req.user?.sub) return res.status(401).json({ message: 'Usuario no autenticado' })
+      if (!req.companyId || !req.branchId) return res.status(400).json({ message: 'Selecciona empresa y sucursal' })
+      const operations = require('./fulfillment')
+      const result = await prismaTransaction.$transaction(async tx => {
+        const result = await operations[action](tx, req, requireCashSession)
+        const order = await tx.commercialDocument.findUnique({ where: { id: result.orderId }, include: ORDER_DETAIL_INCLUDE })
+        return { ...result, order }
+      }, ORDER_TX_OPTIONS)
+      res.status(201).json(result)
+    } catch (error) { next(error) }
+  }
+}
+
+exports.deliver = separateOrderAction('deliver')
+exports.invoice = separateOrderAction('invoice')
+exports.reverseDelivery = separateOrderAction('reverseDelivery')
