@@ -21,3 +21,26 @@ test('valida fechas y ordenamiento del listado', () => {
   assert.throws(() => buildOrderDateFilter('ayer', ''), /fecha/i)
   assert.throws(() => resolveOrderOrderBy('random'), /orden/i)
 })
+
+test('normaliza datos administrativos del despacho y notas', () => {
+  const { normalizeOrderAdminDetails } = require('../src/modules/orders/domain')
+
+  assert.deepEqual(normalizeOrderAdminDetails({
+    delivery_carrier: '  Auna Logistics  ',
+    delivery_tracking_number: '  AUNA-123  ',
+    delivery_address: '  Zona 10  ',
+    delivery_dispatched_at: '2026-09-23T14:00:00.000Z',
+    delivery_estimated_at: '2026-09-24T18:00:00.000Z',
+    notes: '  Llamar antes de entregar  ',
+  }), {
+    delivery_carrier: 'Auna Logistics',
+    delivery_tracking_number: 'AUNA-123',
+    delivery_address: 'Zona 10',
+    delivery_dispatched_at: new Date('2026-09-23T14:00:00.000Z'),
+    delivery_estimated_at: new Date('2026-09-24T18:00:00.000Z'),
+    notes: 'Llamar antes de entregar',
+  })
+  assert.throws(() => normalizeOrderAdminDetails({ delivery_dispatched_at: 'ayer' }), /fecha/i)
+  assert.throws(() => normalizeOrderAdminDetails({ delivery_dispatched_at: true }), /fecha/i)
+  assert.throws(() => normalizeOrderAdminDetails({ delivery_carrier: 'x'.repeat(151) }), /transportista/i)
+})

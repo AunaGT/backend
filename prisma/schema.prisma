@@ -947,6 +947,11 @@ model CommercialDocument {
   discount_total      Decimal?                 @db.Decimal(12, 2)
   total               Decimal                  @db.Decimal(12, 2)
   notes               String?                  @db.Text
+  delivery_carrier             String?         @db.VarChar(150)
+  delivery_tracking_number     String?         @db.VarChar(100)
+  delivery_address             String?         @db.VarChar(500)
+  delivery_dispatched_at       DateTime?
+  delivery_estimated_at        DateTime?
   converted_from_id   String?                  @db.Uuid
   convertedFrom       CommercialDocument?      @relation("CommercialDocConversion", fields: [converted_from_id], references: [id], onDelete: SetNull)
   convertedChildren   CommercialDocument[]     @relation("CommercialDocConversion")

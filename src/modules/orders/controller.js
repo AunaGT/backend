@@ -14,7 +14,7 @@ const { dispatchedByRef } = require('../../services/stockLocations')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../../services/priceResolution')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
-const { buildOrderDateFilter, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
+const { buildOrderDateFilter, normalizeOrderAdminDetails, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
 const { getCompanyModuleBlock } = require('../platform/service')
 
 async function loadBranch(tx, branchId) {
@@ -73,8 +73,11 @@ const ORDER_DETAIL_INCLUDE = {
           id: true,
           reference: true,
           total: true,
+          adjusted_total: true,
+          payment_status: true,
           date: true,
           status: { select: { name: true } },
+          paymentEntries: { select: { amount: true } },
         },
       },
     },
@@ -377,6 +380,26 @@ exports.getById = async (req, res, next) => {
     res.json(doc)
   } catch (e) {
     next(e)
+  }
+}
+
+exports.updateAdminDetails = async (req, res, next) => {
+  try {
+    const where = { ...orderWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
+    const order = await prisma.commercialDocument.findFirst({ where, select: { id: true } })
+    if (!order) return res.status(404).json({ message: 'Pedido no encontrado' })
+
+    const data = normalizeOrderAdminDetails(req.body)
+    if (!Object.keys(data).length) return res.status(400).json({ message: 'No hay cambios válidos' })
+
+    const updated = await prisma.commercialDocument.update({
+      where: { id: order.id },
+      data,
+      include: ORDER_DETAIL_INCLUDE,
+    })
+    res.json(updated)
+  } catch (error) {
+    next(error)
   }
 }
 
