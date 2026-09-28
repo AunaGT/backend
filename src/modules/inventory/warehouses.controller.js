@@ -14,8 +14,9 @@
  */
 
 const { prisma } = require('../../models/prisma')
-const { requireBranch } = require('../../middlewares/tenant')
+const { requireBranch, hasPerm } = require('../../middlewares/tenant')
 const { uniqueCode } = require('../../utils/autoCode')
+const { withStockUnits } = require('./warehouses.presentation')
 
 const KINDS = ['BODEGA', 'SALA_VENTAS', 'VITRINA', 'TRANSITO', 'OTRO']
 
@@ -61,7 +62,10 @@ exports.list = async (req, res, next) => {
   try {
     // ?branch_id= (o 'all') deja que una pantalla pida los almacenes de otra
     // sucursal sin cambiar el selector global; sin él, los de la activa.
-    const allowed = req.branchIds || req.userBranchIds || (req.branchId ? [req.branchId] : [])
+    let allowed = req.branchIds || req.userBranchIds || (req.branchId ? [req.branchId] : [])
+    if (hasPerm(req.user, 'branches.manage') || hasPerm(req.user, 'branches.view_all')) {
+      allowed = (await prisma.branch.findMany({ where: { company_id: req.companyId }, select: { id: true } })).map((branch) => branch.id)
+    }
     const asked = req.query?.branch_id ? String(req.query.branch_id) : null
     if (asked && asked !== 'all' && !allowed.includes(asked)) {
       return res.status(403).json({ message: 'Sin acceso a esa sucursal' })
@@ -71,7 +75,7 @@ exports.list = async (req, res, next) => {
     const [rows, branch] = await Promise.all([
       prisma.warehouse.findMany({
         where,
-        include: { ...WAREHOUSE_INCLUDE, branch: { select: { id: true, name: true } } },
+        include: { ...WAREHOUSE_INCLUDE, branch: { select: { id: true, name: true, active: true } } },
         orderBy: [{ dispatch_priority: 'asc' }, { name: 'asc' }],
       }),
       branchId
@@ -82,7 +86,11 @@ exports.list = async (req, res, next) => {
     for (const w of rows) {
       for (const l of w.locations) l.is_sales = l.id === branch?.sales_location_id
     }
-    res.json(rows)
+    const locationIds = rows.flatMap((warehouse) => warehouse.locations.map((location) => location.id))
+    const totals = locationIds.length ? await prisma.productStockLocation.groupBy({
+      by: ['location_id'], where: { location_id: { in: locationIds } }, _sum: { stock: true },
+    }) : []
+    res.json(withStockUnits(rows, totals))
   } catch (e) { next(e) }
 }
 

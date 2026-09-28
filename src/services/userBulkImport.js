@@ -14,6 +14,7 @@
  */
 const bcrypt = require('bcryptjs')
 const { prisma } = require('../models/prisma')
+const { assertGrant, fail } = require('./userAccess')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -122,8 +123,8 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
     const password = String(normalizedRow.password || '').trim()
     if (!password) {
         errors.push('El campo "password" es requerido')
-    } else if (password.length < 6) {
-        errors.push('La contraseña debe tener al menos 6 caracteres')
+    } else if (password.length < 10 || Buffer.byteLength(password) > 72) {
+        errors.push('La contraseña debe tener al menos 10 caracteres y máximo 72 bytes')
     } else {
         data.password = password // Will be hashed later
     }
@@ -174,7 +175,9 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
  * @param {Array} rows - Filas ya mapeadas (sin encabezado Excel; fila índice 0 → Excel fila 2)
  * @param {object} [importOptionsRaw]
  */
-async function bulkValidateUsers(rows, importOptionsRaw) {
+async function bulkValidateUsers(rows, importOptionsRaw, context) {
+    if (!context?.companyId || !context?.user) fail(400, 'Empresa requerida')
+    if (!Array.isArray(rows) || rows.length > 1000) fail(400, 'Máximo 1000 filas por importación')
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return {
             validRows: [],
@@ -186,13 +189,15 @@ async function bulkValidateUsers(rows, importOptionsRaw) {
     }
 
     const importOptions = normalizeImportOptions(importOptionsRaw)
+    if (importOptions.createRoles.length) fail(400, 'Crea los roles desde Roles y permisos antes de importar')
 
     const roles = await prisma.role.findMany({
-        select: { id: true, name: true },
+        where: { OR: [{ company_id: context.companyId }, { company_id: null }] },
+        include: { permissions: { include: { permission: true } } },
     })
     const rolesMap = new Map()
     roles.forEach(role => {
-        rolesMap.set(role.name.toLowerCase(), role.id)
+        try { assertGrant(context.user, role); rolesMap.set(role.name.toLowerCase(), role.id) } catch (e) { if (e.status !== 403) throw e }
     })
 
     const existingUsers = await prisma.user.findMany({
@@ -264,7 +269,8 @@ async function ensureRoleIdImport(name, cache) {
  * @param {Array} validRows - Array of validated user rows
  * @returns {Object} Result with created count and skipped count
  */
-async function bulkCreateUsers(validRows) {
+async function bulkCreateUsers(validRows, context) {
+    if (!context?.companyId || !context?.user) fail(400, 'Empresa requerida')
     if (!validRows || validRows.length === 0) {
         return { created: 0, skipped: 0, errors: [] }
     }
@@ -277,10 +283,10 @@ async function bulkCreateUsers(validRows) {
     for (const row of validRows) {
         try {
             const d = { ...row.data }
-            if (d.role_create_name) {
-                d.role_id = await ensureRoleIdImport(d.role_create_name, roleCache)
-                delete d.role_create_name
-            }
+            if (d.role_create_name) fail(400, 'Crea el rol antes de importar')
+            const role = await prisma.role.findFirst({ where: { id: d.role_id, OR: [{ company_id: context.companyId }, { company_id: null }] }, include: { permissions: { include: { permission: true } } } })
+            if (!role) fail(400, 'Rol no disponible')
+            assertGrant(context.user, role)
 
             const hashedPassword = await bcrypt.hash(d.password, 10)
 
@@ -299,6 +305,8 @@ async function bulkCreateUsers(validRows) {
                     email: d.email,
                     password: hashedPassword,
                     role_id: d.role_id,
+                    user_companies: { create: { company_id: context.companyId, role_id: d.role_id } },
+                    ...(context.branchId ? { default_branch_id: context.branchId, user_branches: { create: { branch_id: context.branchId } } } : {}),
                     // Sin datos de RRHH: la importación crea CUENTAS. La ficha de
                     // empleado (teléfono, dirección, ingreso) se carga en RRHH, que es
                     // donde la planilla la lee.

@@ -43,6 +43,8 @@ exports.crearToken = function (usuario) {
     role_name: usuario.role?.name || usuario.role_name || null,
     role: roleObj,
     permissions,
+    auth_version: usuario.auth_version || 0,
+    ...(usuario.sid ? { sid: usuario.sid } : {}),
     iat: moment().unix(),
     exp: moment().add(ACCESS_TOKEN_MINUTES, 'minutes').unix(),
   }

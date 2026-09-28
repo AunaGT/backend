@@ -99,6 +99,10 @@ model UserCompany {
   /// Controla densidad y revelado progresivo de la interfaz. No concede permisos.
   experience_profile ExperienceProfile?
   created_at         DateTime           @default(now())
+  status             String             @default("ACTIVE") @db.VarChar(12)
+  role_id            Int?
+  role               Role?              @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  last_access_at     DateTime?
 
   @@id([user_id, company_id])
   @@index([company_id])
@@ -119,6 +123,9 @@ model Branch {
   address           String?        @db.Text
   phone             String?        @db.VarChar(50)
   active            Boolean        @default(true)
+  operational_status String         @default("OPERATING") @db.VarChar(20)
+  manager_user_id    String?        @db.Uuid
+  manager           User?          @relation("BranchManager", fields: [manager_user_id], references: [id], onDelete: SetNull)
   is_default        Boolean        @default(false)
   /// Ubicación de la que despacha el punto de venta de esta sucursal. Si es
   /// null, la venta sale por prioridad de despacho como cualquier otra salida.
@@ -153,6 +160,7 @@ model Branch {
   payroll_runs             PayrollRun[]
 
   @@unique([company_id, code])
+  @@index([manager_user_id])
   @@map("branches")
 }
 
@@ -705,6 +713,9 @@ model Role {
   name        String           @unique @db.VarChar(50)
   users       User[]
   permissions RolePermission[]
+  company_id  String?          @db.Uuid
+  description String?          @db.VarChar(500)
+  memberships UserCompany[]
 
   @@map("roles")
 }
@@ -772,6 +783,7 @@ model User {
   // Multi-empresa / sucursales
   user_companies     UserCompany[]
   user_branches      UserBranch[]
+  managed_branches   Branch[]       @relation("BranchManager")
   /// Sucursal por defecto al entrar (si es null se usa la primera asignada)
   default_branch_id  String?         @db.Uuid
   defaultBranch      Branch?         @relation("UserDefaultBranch", fields: [default_branch_id], references: [id], onDelete: SetNull)
@@ -787,6 +799,9 @@ model User {
   updated_at DateTime @updatedAt
 
   refresh_tokens RefreshToken[]
+  auth_version   Int @default(0)
+  last_login_at  DateTime?
+  password_changed_at DateTime?
 
   @@map("users")
 }
@@ -801,9 +816,24 @@ model RefreshToken {
   revoked_at  DateTime?
   replaced_by String?   @db.VarChar(64)
   created_at  DateTime  @default(now())
+  session_id  String    @default(uuid()) @db.Uuid
+  device      String?   @db.VarChar(200)
 
   @@index([user_id])
   @@map("refresh_tokens")
+}
+
+/// Auditoría administrativa; snapshots mínimos, nunca credenciales.
+model UserAccessEvent {
+  id         String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  user_id    String @db.Uuid
+  actor_id   String @db.Uuid
+  action     String @db.VarChar(100)
+  created_at DateTime @default(now())
+
+  @@index([company_id, user_id, created_at])
+  @@map("user_access_events")
 }
 
 model Alert {

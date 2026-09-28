@@ -13,6 +13,7 @@ const { seedCompanySettings } = require('../services/companySettings')
 const { seedChartOfAccounts } = require('../services/accounting/seedChartOfAccounts')
 const { invalidateSystemConfigCache } = require('../utils/getTimezone')
 const { seedCompanyModules } = require('../modules/platform/service')
+const { assertGrant } = require('../services/userAccess')
 
 const COMPANY_SELECT = {
   id: true, name: true, code: true, tax_id: true, address: true,
@@ -22,12 +23,16 @@ const COMPANY_SELECT = {
 // GET /api/companies — empresas a las que pertenece el usuario
 exports.list = async (req, res, next) => {
   try {
+    const all = req.query?.all === '1' && (req.user.role?.name?.toLowerCase() === 'admin' || req.user.permissions?.includes('companies.manage'))
     const rows = await prisma.userCompany.findMany({
-      where: { user_id: req.user.sub, company: { active: true } },
-      select: { experience_profile: true, company: { select: COMPANY_SELECT } },
+      where: { user_id: req.user.sub, status: 'ACTIVE', ...(all ? {} : { company: { active: true } }) },
+      select: { experience_profile: true, company: { select: all ? {
+        ...COMPANY_SELECT,
+        branches: { select: { id: true, company_id: true, name: true, code: true, address: true, phone: true, active: true, is_default: true, operational_status: true, manager_user_id: true, manager: { select: { id: true, name: true } } }, orderBy: { name: 'asc' } },
+      } : COMPANY_SELECT } },
       orderBy: { company: { name: 'asc' } },
     })
-    res.json(rows.map((r) => ({ ...r.company, experience_profile: r.experience_profile ?? null })))
+    res.json(rows.map((r) => ({ ...r.company, branch_count: r.company.branches?.length, experience_profile: r.experience_profile ?? null })))
   } catch (e) { next(e) }
 }
 
@@ -116,7 +121,7 @@ async function assertMember(req, companyId) {
   const member = await prisma.userCompany.findUnique({
     where: { user_id_company_id: { user_id: req.user.sub, company_id: companyId } },
   })
-  if (!member) {
+  if (!member || member.status !== 'ACTIVE') {
     const err = new Error('Sin acceso a esa empresa')
     err.status = 403
     throw err
@@ -128,8 +133,14 @@ exports.addUser = async (req, res, next) => {
   try {
     const { id, userId } = req.params
     await assertMember(req, id)
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
-    if (!user) return res.status(404).json({ message: 'Usuario no encontrado' })
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: {
+      role: { include: { permissions: { include: { permission: true } } } },
+      user_companies: { select: { company_id: true } },
+    } })
+    if (!user || (user.user_companies.some(m => m.company_id !== id) && !user.user_companies.some(m => m.company_id === id))) {
+      return res.status(404).json({ message: 'Usuario no encontrado' })
+    }
+    if (!user.user_companies.some(m => m.company_id === id)) assertGrant(req.user, user.role)
 
     await prisma.userCompany.upsert({
       where: { user_id_company_id: { user_id: userId, company_id: id } },
@@ -177,6 +188,15 @@ exports.removeUser = async (req, res, next) => {
     }
 
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM companies WHERE id = ${id}::uuid FOR UPDATE`
+      const target = await tx.userCompany.findUnique({ where: { user_id_company_id: { user_id: userId, company_id: id } }, select: {
+        status: true, role: { select: { name: true } }, user: { select: { role: { select: { name: true } } } },
+      } })
+      if (!target) { const err = new Error('Usuario no encontrado'); err.status = 404; throw err }
+      if (target.status === 'ACTIVE' && (target.role?.name || target.user.role?.name)?.toLowerCase() === 'admin') {
+        const others = await tx.userCompany.count({ where: { company_id: id, status: 'ACTIVE', user_id: { not: userId }, OR: [{ role: { name: 'admin' } }, { role_id: null, user: { role: { name: 'admin' } } }] } })
+        if (!others) { const err = new Error('Debe permanecer un administrador activo'); err.status = 409; throw err }
+      }
       await tx.userBranch.deleteMany({
         where: { user_id: userId, branch: { company_id: id } },
       })
@@ -206,19 +226,28 @@ exports.assignUsers = async (req, res, next) => {
     if (!user_ids.includes(req.user.sub)) {
       return res.status(400).json({ message: 'No puedes quitarte a ti mismo de la empresa' })
     }
-    const member = await prisma.userCompany.findUnique({
-      where: { user_id_company_id: { user_id: req.user.sub, company_id: id } },
-    })
-    if (!member) return res.status(403).json({ message: 'Sin acceso a esa empresa' })
-
-    await prisma.$transaction(async (tx) => {
-      await tx.userCompany.deleteMany({ where: { company_id: id, user_id: { notIn: user_ids } } })
-      for (const uid of user_ids) {
-        await tx.userCompany.upsert({
-          where: { user_id_company_id: { user_id: uid, company_id: id } },
-          update: {},
-          create: { user_id: uid, company_id: id },
-        })
+    const ids = [...new Set(user_ids)]
+    if (ids.some(uid => typeof uid !== 'string') || ids.length > 1000) return res.status(400).json({ message: 'Lista de usuarios inválida' })
+    await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM companies WHERE id = ${id}::uuid FOR UPDATE`
+      const members = await tx.userCompany.findMany({ where: { company_id: id }, select: {
+        user_id: true, status: true, role: { select: { name: true } }, user: { select: { role: { select: { name: true } } } },
+      } })
+      if (!members.some(m => m.user_id === req.user.sub && m.status === 'ACTIVE')) {
+        const err = new Error('Sin acceso a esa empresa'); err.status = 403; throw err
+      }
+      // El reemplazo legacy solo puede retirar membresías existentes. Alta: endpoint individual con comprobación de privilegios.
+      if (ids.some(uid => !members.some(m => m.user_id === uid))) {
+        const err = new Error('Usuario no encontrado'); err.status = 404; throw err
+      }
+      if (!members.some(m => ids.includes(m.user_id) && m.status === 'ACTIVE' && (m.role?.name || m.user.role?.name)?.toLowerCase() === 'admin')) {
+        const err = new Error('Debe permanecer un administrador activo'); err.status = 409; throw err
+      }
+      const removed = members.filter(m => !ids.includes(m.user_id)).map(m => m.user_id)
+      if (removed.length) {
+        await tx.userBranch.deleteMany({ where: { user_id: { in: removed }, branch: { company_id: id } } })
+        await tx.user.updateMany({ where: { id: { in: removed }, defaultBranch: { company_id: id } }, data: { default_branch_id: null } })
+        await tx.userCompany.deleteMany({ where: { company_id: id, user_id: { in: removed } } })
       }
     })
     res.json({ ok: true })

@@ -11,10 +11,12 @@
 const { prisma } = require('../../models/prisma')
 const { hasPerm } = require('../../middlewares/tenant')
 const { uniqueCode } = require('../../utils/autoCode')
+const { branchState } = require('./presentation')
 
 const BRANCH_SELECT = {
   id: true, company_id: true, name: true, code: true, address: true,
-  phone: true, active: true, is_default: true,
+  phone: true, active: true, is_default: true, operational_status: true,
+  manager_user_id: true, manager: { select: { id: true, name: true } },
 }
 
 // GET /api/branches — sucursales de la empresa actual.
@@ -31,14 +33,14 @@ exports.list = async (req, res, next) => {
         select: BRANCH_SELECT,
         orderBy: { name: 'asc' },
       })
-      return res.json(rows)
+      return res.json(rows.map((row) => ({ ...row, state: branchState(row) })))
     }
     const rows = await prisma.userBranch.findMany({
       where: { user_id: req.user.sub, branch: { company_id: req.companyId, active: true } },
       select: { branch: { select: BRANCH_SELECT } },
       orderBy: { branch: { name: 'asc' } },
     })
-    res.json(rows.map((r) => r.branch))
+    res.json(rows.map((r) => ({ ...r.branch, state: branchState(r.branch) })))
   } catch (e) { next(e) }
 }
 
@@ -68,7 +70,7 @@ exports.create = async (req, res, next) => {
       await tx.userBranch.create({ data: { user_id: req.user.sub, branch_id: b.id } })
       return b
     })
-    res.status(201).json(branch)
+    res.status(201).json({ ...branch, state: branchState(branch) })
   } catch (e) {
     if (e.code === 'P2002') {
       return res.status(409).json({ message: 'Ya existe una sucursal con ese código en la empresa' })
@@ -87,13 +89,25 @@ exports.update = async (req, res, next) => {
     })
     if (!existing) return res.status(404).json({ message: 'Sucursal no encontrada' })
 
-    const { name, address, phone, active, is_default } = req.body || {}
+    const { name, address, phone, active, is_default, operational_status, manager_user_id } = req.body || {}
+    if (operational_status !== undefined && !['OPERATING', 'MAINTENANCE'].includes(operational_status)) {
+      return res.status(400).json({ message: 'Estado operativo no válido' })
+    }
+    if (manager_user_id !== undefined && manager_user_id !== null) {
+      const assignment = await prisma.userBranch.findUnique({
+        where: { user_id_branch_id: { user_id: manager_user_id, branch_id: id } },
+        select: { user_id: true, user: { select: { user_companies: { where: { company_id: req.companyId, status: 'ACTIVE' }, select: { user_id: true } } } } },
+      })
+      if (!assignment?.user?.user_companies?.length) return res.status(400).json({ message: 'El responsable debe estar asignado a esta sucursal y empresa' })
+    }
     const data = {}
     if (name !== undefined) data.name = name
     if (address !== undefined) data.address = address
     if (phone !== undefined) data.phone = phone
     if (active !== undefined) data.active = Boolean(active)
     if (is_default !== undefined) data.is_default = Boolean(is_default)
+    if (operational_status !== undefined) data.operational_status = operational_status
+    if (manager_user_id !== undefined) data.manager_user_id = manager_user_id
 
     const branch = await prisma.$transaction(async (tx) => {
       if (data.is_default === true) {
@@ -104,7 +118,7 @@ exports.update = async (req, res, next) => {
       }
       return tx.branch.update({ where: { id }, data, select: BRANCH_SELECT })
     })
-    res.json(branch)
+    res.json({ ...branch, state: branchState(branch) })
   } catch (e) { next(e) }
 }
 
@@ -172,5 +186,20 @@ exports.listForUser = async (req, res, next) => {
       branches: rows.map((r) => r.branch),
       default_branch_id: user?.default_branch_id || null,
     })
+  } catch (e) { next(e) }
+}
+
+// GET /api/branches/:id/managers — opciones para responsable, solo usuarios
+// activos asignados a esta sucursal. No exige acceso al padrón completo.
+exports.managers = async (req, res, next) => {
+  try {
+    const branch = await prisma.branch.findFirst({ where: { id: req.params.id, company_id: req.companyId }, select: { id: true } })
+    if (!branch) return res.status(404).json({ message: 'Sucursal no encontrada' })
+    const rows = await prisma.userBranch.findMany({
+      where: { branch_id: branch.id, user: { user_companies: { some: { company_id: req.companyId, status: 'ACTIVE' } } } },
+      select: { user: { select: { id: true, name: true } } },
+      orderBy: { user: { name: 'asc' } },
+    })
+    res.json(rows.map((row) => row.user))
   } catch (e) { next(e) }
 }

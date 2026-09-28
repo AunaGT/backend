@@ -17,6 +17,7 @@ router.get('/', Auth, Branches.list)
 router.post('/', Auth, hasPermission('branches.manage'), Branches.create)
 router.put('/assign', Auth, hasPermission('branches.manage', 'users.edit'), Branches.assignUser)
 router.get('/user/:userId', Auth, hasPermission('branches.manage', 'users.view'), Branches.listForUser)
+router.get('/:id/managers', Auth, hasPermission('branches.manage'), Branches.managers)
 router.put('/:id', Auth, hasPermission('branches.manage'), Branches.update)
 
 module.exports = router

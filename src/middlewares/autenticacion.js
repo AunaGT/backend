@@ -11,8 +11,9 @@
 const jwt_simple = require('jwt-simple')
 const moment = require('moment')
 const { secret, ACCESS_COOKIE } = require('../config/security')
+const { loadSessionUser, effectiveUser } = require('../services/userAccess')
 
-exports.Auth = function (req, res, next) {
+exports.Auth = async function (req, res, next) {
   // Cookie httpOnly primero; fallback al header Bearer (curl/tests/herramientas).
   const cookieToken = req.cookies && req.cookies[ACCESS_COOKIE]
   const headerToken = req.headers.authorization
@@ -29,9 +30,12 @@ exports.Auth = function (req, res, next) {
     if (payload.exp <= moment().unix()) {
       return res.status(401).send({ message: 'El token ya ha expirado' })
     }
-    req.user = payload
+    const user = req.sessionUser || await loadSessionUser(payload)
+    req.user = { ...effectiveUser(user, req.companyId), sid: payload.sid }
     next()
   } catch (error) {
+    if (error.status) return res.status(error.status).send({ message: error.message })
+    if (error.name === 'PrismaClientKnownRequestError' || error.name === 'PrismaClientInitializationError') return next(error)
     return res.status(401).send({ message: 'El token no es válido' })
   }
 }
@@ -106,4 +110,3 @@ exports.hasPermission = function (...permissionCodes) {
     next()
   }
 }
-

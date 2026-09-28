@@ -11,13 +11,14 @@
 const { Router } = require('express')
 const multer = require('multer')
 const rateLimit = require('express-rate-limit')
-const controller = require('./controller')
+const controller = { ...require('./controller'), ...require('./adminController') }
 const { Auth, hasAnyRole, hasPermission } = require('../../middlewares/autenticacion')
 const { requireModule } = require('../platform')
 const usersManifest = require('./manifest')
 
 const router = Router()
 const usersModule = requireModule(usersManifest.code)
+const self = require('./selfController')
 
 // Frena fuerza bruta en las rutas que verifican contraseña. 10 intentos / 15 min por IP.
 const loginLimiter = rateLimit({
@@ -141,7 +142,7 @@ router.post('/logout', controller.logout)
  *       403:
  *         description: Usuario no es administrador
  */
-router.post('/validate-admin', loginLimiter, controller.validateAdmin)
+router.post('/validate-admin', Auth, loginLimiter, controller.validateAdmin)
 
 /**
  * @openapi
@@ -163,6 +164,14 @@ router.post('/validate-admin', loginLimiter, controller.validateAdmin)
  *                   $ref: '#/components/schemas/User'
  */
 router.get('/me', Auth, controller.me)
+router.patch('/me', Auth, self.updateSelf)
+router.post('/me/password', Auth, loginLimiter, self.password)
+router.get('/me/sessions', Auth, self.sessions)
+router.delete('/me/sessions/:sessionId', Auth, self.closeSession)
+router.post('/me/photo', Auth, upload.single('file'), (req, res, next) => {
+  req.params.id = req.user.sub
+  return controller.uploadPhoto(req, res, next)
+})
 
 /**
  * @openapi
@@ -264,6 +273,8 @@ router.post('/users/bulk-import-mapped', Auth, usersModule, hasPermission('users
  *         description: Usuario no encontrado
  */
 router.get('/users/:id', Auth, usersModule, hasPermission('users.view'), controller.getById)
+router.get('/users/:id/activity', Auth, usersModule, hasPermission('users.view'), controller.activity)
+router.patch('/users/:id/access', Auth, usersModule, hasPermission('users.edit'), controller.setAccess)
 
 /**
  * @openapi
@@ -343,7 +354,7 @@ router.delete('/users/:id', Auth, usersModule, hasPermission('users.delete'), co
  *                   id: { type: integer }
  *                   name: { type: string }
  */
-router.get('/roles', Auth, usersModule, hasPermission('roles.view', 'roles.manage'), controller.getRoles)
+router.get('/roles', Auth, usersModule, hasPermission('roles.view', 'roles.manage', 'users.view', 'users.create', 'users.edit'), controller.getRoles)
 
 /**
  * @openapi
@@ -392,7 +403,7 @@ router.get('/roles/with-permissions', Auth, usersModule, hasPermission('roles.ma
  *       404:
  *         description: Rol no encontrado
  */
-router.get('/roles/:id/with-permissions', Auth, usersModule, hasPermission('roles.manage', 'roles.view'), controller.getRoleWithPermissions)
+router.get('/roles/:id/with-permissions', Auth, usersModule, hasPermission('roles.manage', 'roles.view', 'users.view', 'users.create', 'users.edit'), controller.getRoleWithPermissions)
 
 /**
  * @openapi

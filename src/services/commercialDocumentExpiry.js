@@ -2,7 +2,7 @@
  * Vencimiento de cotizaciones/pedidos y reservas de stock.
  */
 
-const { prisma } = require('../models/prisma')
+const { prisma, prismaTransaction } = require('../models/prisma')
 const { releaseByDocument } = require('./stockAvailability')
 const { readCompanyModules } = require('../modules/platform/service')
 
@@ -119,7 +119,8 @@ async function expireCommercialDocuments(options = {}) {
   }
 
   if (options.tx) return run(options.tx)
-  return prisma.$transaction(run, { maxWait: 15_000, timeout: 60_000 })
+  const txClient = prismaTransaction || prisma
+  return txClient.$transaction(run, { maxWait: 15_000, timeout: 60_000 })
 }
 
 module.exports = {

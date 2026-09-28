@@ -23,6 +23,7 @@ const { generateUserTemplate } = require('../../services/userTemplate')
 const { IMPLIES, expandPermissions } = require('../../config/permissionDeps')
 const { bulkValidateUsers, bulkCreateUsers } = require('../../services/userBulkImport')
 const { requireCompany } = require('../../middlewares/tenant')
+const { effectiveUser } = require('../../services/userAccess')
 
 // Consulta reutilizable de usuario con rol + permisos para el login/refresh/me.
 const userWithPerms = {
@@ -30,6 +31,9 @@ const userWithPerms = {
   cashRegister: { select: { id: true, name: true, code: true, active: true } },
   user_companies: {
     select: {
+      company_id: true,
+      status: true,
+      role: { include: { permissions: { include: { permission: true } } } },
       experience_profile: true,
       company: { select: { id: true, name: true, code: true, logo_url: true, active: true } },
     },
@@ -47,6 +51,10 @@ const userWithPerms = {
 
 function serializeUser(user) {
   return {
+    access_status: user.user_companies?.find(m => m.company_id === user.active_company_id)?.status,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+    password_changed_at: user.password_changed_at,
     id: user.id,
     name: user.name,
     email: user.email,
@@ -65,11 +73,12 @@ function serializeUser(user) {
     cash_register: user.cashRegister || null,
     companies: Array.isArray(user.user_companies)
       ? user.user_companies
+          .filter(uc => uc.status === 'ACTIVE')
           .map((uc) => uc.company && { ...uc.company, experience_profile: uc.experience_profile ?? null })
           .filter((c) => c && c.active)
       : [],
     branches: Array.isArray(user.user_branches)
-      ? user.user_branches.map((ub) => ub.branch).filter((b) => b && b.active)
+      ? user.user_branches.map((ub) => ub.branch).filter((b) => b && b.active && user.user_companies.some(m => m.company_id === b.company_id && m.status === 'ACTIVE'))
       : [],
     default_branch_id: user.default_branch_id || null,
     permissions: expandPermissions(
@@ -81,9 +90,10 @@ function serializeUser(user) {
 }
 
 // Setea las cookies de sesión (access + refresh) en la respuesta.
-async function setSessionCookies(res, user) {
-  const accessToken = crearToken(user)
-  const refreshToken = await refreshTokens.issue(user.id)
+async function setSessionCookies(res, user, req) {
+  const refreshToken = await refreshTokens.issue(user.id, req?.headers['user-agent'])
+  const session = await prisma.refreshToken.findUnique({ where: { token_hash: refreshTokens.hash(refreshToken) } })
+  const accessToken = crearToken({ ...user, sid: session.session_id })
   res.cookie(ACCESS_COOKIE, accessToken, accessCookieOptions())
   res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions())
 }
@@ -272,8 +282,9 @@ exports.login = async (req, res, next) => {
     const ok = await bcrypt.compare(password, user.password)
     if (!ok) return res.status(401).json({ message: 'Credenciales inválidas' })
 
-    await setSessionCookies(res, user)
-    res.json({ user: serializeUser(user) })
+    await prisma.user.update({ where: { id: user.id }, data: { last_login_at: new Date() } })
+    await setSessionCookies(res, user, req)
+    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
   } catch (e) { next(e) }
 }
 
@@ -295,9 +306,9 @@ exports.refresh = async (req, res, next) => {
       return res.status(401).json({ message: 'Sesión inválida' })
     }
 
-    res.cookie(ACCESS_COOKIE, crearToken(user), accessCookieOptions())
+    res.cookie(ACCESS_COOKIE, crearToken({ ...user, sid: result.sessionId }), accessCookieOptions())
     res.cookie(REFRESH_COOKIE, result.token, refreshCookieOptions())
-    res.json({ user: serializeUser(user) })
+    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
   } catch (e) { next(e) }
 }
 
@@ -306,7 +317,7 @@ exports.me = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.sub }, include: userWithPerms })
     if (!user) return res.status(401).json({ message: 'No autenticado' })
-    res.json({ user: serializeUser(user) })
+    res.json({ user: serializeUser(effectiveUser(user, req.companyId || user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
   } catch (e) { next(e) }
 }
 
@@ -773,7 +784,7 @@ exports.validateAdmin = async (req, res, next) => {
     // Buscar usuario por email (usamos email como username)
     const user = await prisma.user.findUnique({ 
       where: { email: username }, 
-      include: { role: true, employee_record: { select: { id: true, code: true, first_name: true, last_name: true, status: true, phone: true } } }
+      include: userWithPerms
     })
 
     if (!user) {
@@ -787,7 +798,8 @@ exports.validateAdmin = async (req, res, next) => {
     }
 
     // Verificar que sea administrador (role name = 'Admin' o 'Administrador')
-    const isAdmin = user.role && ['admin', 'administrador'].includes(user.role.name.toLowerCase())
+    const effective = effectiveUser(user, requireCompany(req))
+    const isAdmin = effective.role && ['admin', 'administrador'].includes(effective.role.name.toLowerCase())
     
     if (!isAdmin) {
       return res.status(403).json({ valid: false, message: 'Se requiere rol de administrador' })
@@ -800,7 +812,7 @@ exports.validateAdmin = async (req, res, next) => {
       user: {
         id: user.id,
         name: user.name,
-        role: user.role.name
+        role: effective.role.name
       }
     })
   } catch (e) { next(e) }
@@ -831,23 +843,15 @@ exports.uploadPhoto = async (req, res, next) => {
     }
 
     // Verificar que el usuario existe
-    const user = await prisma.user.findUnique({ where: { id } })
+    const user = await prisma.user.findFirst({ where: { id, ...(id === req.user.sub ? {} : { user_companies: { some: { company_id: requireCompany(req) } } }) }, include: { _count: { select: { user_companies: true } } } })
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' })
     }
 
-    // Eliminar foto anterior si existe
-    if (user.photo_url) {
-      try {
-        const oldPath = user.photo_url.split('/').slice(-2).join('/')
-        await supabase.storage.from('perfil-usuarios').remove([oldPath])
-      } catch (e) {
-        // Ignorar error si no se puede eliminar la foto anterior
-      }
-    }
+    if (id !== req.user.sub && user._count.user_companies > 1) return res.status(403).json({ message: 'Solo el titular puede modificar el avatar de una cuenta compartida' })
 
     // Generar nombre único para el archivo
-    const fileExt = file.originalname.split('.').pop()
+    const fileExt = 'webp'
     const fileName = `${id}-${Date.now()}.${fileExt}`
     const filePath = `user-photos/${fileName}`
 
@@ -856,13 +860,15 @@ exports.uploadPhoto = async (req, res, next) => {
       return res.status(400).json({ message: 'El archivo está vacío o no se pudo leer correctamente' })
     }
 
-    // Subir a Supabase Storage
+    // Decodificar contenido real y eliminar metadatos; no confiar en extensión/MIME.
+    const imageBuffer = await require('sharp')(file.buffer, { limitInputPixels: 16000000 }).rotate().resize(512, 512, { fit: 'cover' }).webp().toBuffer()
+    // La foto anterior se conserva hasta completar subida y escritura.
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('perfil-usuarios')
-      .upload(filePath, file.buffer, {
+      .upload(filePath, imageBuffer, {
         cacheControl: '3600',
         upsert: true,
-        contentType: file.mimetype
+        contentType: 'image/webp'
       })
 
     if (uploadError) {
@@ -920,10 +926,10 @@ exports.validateImportMapped = async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere un array de filas en "rows"' })
     }
 
-    const result = await bulkValidateUsers(rows, importOptions)
+    const result = await bulkValidateUsers(rows, importOptions, { companyId: requireCompany(req), user: req.user })
     res.json({
       ok: result.invalidRows.length === 0,
-      validRows: result.validRows,
+      validRows: result.validRows.map(r => ({ rowIndex: r.rowIndex })),
       invalidRows: result.invalidRows.map((r) => ({
         rowIndex: r.rowIndex,
         errors: r.errors,
@@ -944,16 +950,17 @@ exports.bulkImportMapped = async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere un array de filas válidas en "rows"' })
     }
 
-    const validation = await bulkValidateUsers(rows, importOptions)
+    const context = { companyId: requireCompany(req), branchId: req.branchId, user: req.user }
+    const validation = await bulkValidateUsers(rows, importOptions, context)
     if (validation.invalidRows.length > 0) {
       return res.status(400).json({
         message: 'Hay filas inválidas. Por favor, corrija los errores antes de importar.',
-        validation: validation
+        validation: { totals: validation.totals, invalidRows: validation.invalidRows.map(r => ({ rowIndex: r.rowIndex, errors: r.errors })) }
       })
     }
 
     // Importar solo las filas válidas
-    const result = await bulkCreateUsers(validation.validRows)
+    const result = await bulkCreateUsers(validation.validRows, context)
     res.json({
       message: `Importación completada: ${result.created} creados, ${result.skipped} omitidos`,
       ...result

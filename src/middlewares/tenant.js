@@ -29,6 +29,7 @@ const jwt_simple = require('jwt-simple')
 const moment = require('moment')
 const { secret, ACCESS_COOKIE } = require('../config/security')
 const { prisma } = require('../models/prisma')
+const { loadSessionUser, effectiveUser } = require('../services/userAccess')
 
 // Igual que Auth pero sin responder 401: las rutas públicas y Auth se encargan.
 function decodeUser(req) {
@@ -58,10 +59,12 @@ function hasPerm(user, code) {
 
 async function resolveTenant(req, res, next) {
   try {
+    // Renovar o cerrar una sesión no depende de que su access token siga vigente.
+    if (/^\/auth\/(login|refresh|logout)$/.test(req.path)) return next()
     // Rutas de auth (login/refresh/me y gestión de usuarios): resolución en modo
     // suave — si se puede, se resuelve (para crear usuarios con empresa); si no,
     // se sigue sin tenant en vez de bloquear el login o /me.
-    const soft = req.path.startsWith('/auth')
+    const soft = /^\/auth\/(login|refresh|logout|me)(\/|$)/.test(req.path)
     const fail = (status, message) => {
       if (soft) return next()
       return res.status(status).json({ message })
@@ -69,7 +72,19 @@ async function resolveTenant(req, res, next) {
 
     const user = decodeUser(req)
     if (!user) return next()
-    req.user = req.user || user
+    // Sesión y permisos frescos, antes de comprobar acceso consolidado.
+    let sessionUser
+    try {
+      sessionUser = await loadSessionUser(user)
+    } catch (err) {
+      if (soft) return next()
+      return res.status(err.status || 401).json({ message: err.message })
+    }
+    req.sessionUser = sessionUser
+    const activeCompanies = sessionUser.user_companies.filter(m => m.status === 'ACTIVE').map(m => m.company_id)
+    const requestedCompany = req.headers['x-company-id']
+    if (requestedCompany && !activeCompanies.includes(requestedCompany)) return fail(403, 'Sin acceso activo a esa empresa')
+    req.user = effectiveUser(sessionUser, requestedCompany || undefined)
 
     // ponytail: 1 query por request; cache por usuario si algún día pesa
     const row = await prisma.user.findUnique({
@@ -85,7 +100,7 @@ async function resolveTenant(req, res, next) {
     })
     if (!row) return fail(401, 'No autenticado')
 
-    const branches = row.user_branches.map((m) => m.branch).filter((b) => b.active)
+    const branches = row.user_branches.map((m) => m.branch).filter((b) => b.active && activeCompanies.includes(b.company_id))
     if (branches.length === 0) {
       return fail(403, 'No tienes ninguna sucursal asignada')
     }
@@ -98,10 +113,11 @@ async function resolveTenant(req, res, next) {
       if (req.method !== 'GET') {
         return res.status(400).json({ message: 'La vista consolidada es solo de lectura: indica una sucursal' })
       }
-      if (!hasPerm(user, 'branches.view_all')) {
+      const companyId = headerCompany || branches[0].company_id
+      req.user = effectiveUser(sessionUser, companyId)
+      if (!hasPerm(req.user, 'branches.view_all')) {
         return res.status(403).json({ message: 'No autorizado para la vista consolidada' })
       }
-      const companyId = headerCompany || branches[0].company_id
       if (!branches.some((b) => b.company_id === companyId)) {
         return res.status(403).json({ message: 'Sin acceso a esa empresa' })
       }
@@ -139,6 +155,7 @@ async function resolveTenant(req, res, next) {
     }
 
     req.companyId = branch.company_id
+    req.user = effectiveUser(sessionUser, req.companyId)
     req.branchId = branch.id
     // Sucursales del usuario en esta empresa: para escrituras dirigidas a otra
     // sucursal (crear un pedido "de Zona 11" estando parado en Zona 10).

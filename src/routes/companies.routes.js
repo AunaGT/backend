@@ -13,6 +13,12 @@ const router = Router()
 const { Auth, hasPermission } = require('../middlewares/autenticacion')
 const Companies = require('../controllers/companies.controller')
 
+// Un permiso de la empresa activa no concede administración sobre otra empresa.
+router.use('/:id', (req, res, next) => {
+  if (req.method !== 'GET' && req.params.id !== req.companyId) return res.status(403).json({ message: 'Selecciona esta empresa antes de administrarla' })
+  next()
+})
+
 router.get('/', Auth, Companies.list)
 router.post('/', Auth, hasPermission('companies.manage'), Companies.create)
 router.put('/:id', Auth, hasPermission('companies.manage'), Companies.update)

@@ -10,10 +10,10 @@
 
 const { prisma } = require('../../models/prisma')
 const { syncLotExpiryAlerts } = require('../../services/lots')
+const { formatAlertTimestamp } = require('./presentation')
 
 exports.list = async (req, res, next) => {
   try {
-    const { DateTime } = require('luxon')
     await syncLotExpiryAlerts(prisma) // advisory, autothrottled; no hay cron en serverless
     // By default only show unresolved alerts (resolved = 0), unless ?all=true
     const showAll = req.query.all === 'true'
@@ -34,17 +34,12 @@ exports.list = async (req, res, next) => {
     
     // Format timestamps to friendly Guatemala local time
     const adapted = alerts.map(a => {
-      let friendlyTimestamp = ''
-      if (a.timestamp) {
-        // Convert from UTC to Guatemala time (CST, UTC-6)
-        const gtTime = DateTime.fromJSDate(a.timestamp, { zone: 'utc' })
-          .setZone('America/Guatemala')
-          .setLocale('es')
-        friendlyTimestamp = gtTime.toFormat("dd LLL yyyy HH:mm")
-      }
+      const { timestamp, localDate, timestampIso } = formatAlertTimestamp(a.timestamp)
       return {
         ...a,
-        timestamp: friendlyTimestamp,
+        timestamp,
+        localDate,
+        timestampIso,
       }
     })
     res.json(adapted)
