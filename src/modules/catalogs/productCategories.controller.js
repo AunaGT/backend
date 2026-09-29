@@ -11,6 +11,7 @@
 const { prisma } = require('../../models/prisma')
 const { generateCatalogTemplate } = require('../../services/catalogTemplate')
 const { bulkValidateCatalogs, bulkCreateCatalogs } = require('../../services/catalogBulkImport')
+const { runImportStream } = require('../../utils/importStream')
 const {
   uploadImageBuffer,
   removePublicObject,
@@ -427,6 +428,16 @@ exports.bulkImportMapped = async (req, res, next) => {
   } catch (e) {
     next(e)
   }
+}
+
+exports.bulkImportMappedStream = async (req, res) => {
+  const items = req.body?.items
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ message: 'No se proporcionaron categorías para importar' })
+  await runImportStream(res, {
+    total: items.length,
+    validate: () => bulkValidateCatalogs(items, 'categories', req.companyId),
+    save: (rows, onProgress, isCancelled) => bulkCreateCatalogs(rows, 'categories', req.companyId, onProgress, isCancelled),
+  })
 }
 
 /**

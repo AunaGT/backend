@@ -236,6 +236,7 @@ router.post('/bulk-import', Auth, hasPermission('products.import'), upload.singl
  *         description: Error de validación
  */
 router.post('/bulk-import-mapped', Auth, hasPermission('products.import'), Products.bulkImportMapped)
+router.post('/bulk-import-mapped-stream', Auth, hasPermission('products.import'), Products.bulkImportMappedStream)
 
 /**
  * @openapi

@@ -26,6 +26,7 @@ router.post('/validate-import-mapped', Auth, hasPermission('catalogs.manage'), c
 
 // POST /catalogs/payment-terms/bulk-import-mapped
 router.post('/bulk-import-mapped', Auth, hasPermission('catalogs.manage'), ctrl.bulkImportMapped)
+router.post('/bulk-import-mapped-stream', Auth, hasPermission('catalogs.manage'), ctrl.bulkImportMappedStream)
 
 // POST /catalogs/payment-terms
 router.post('/', Auth, canManage, ctrl.create)

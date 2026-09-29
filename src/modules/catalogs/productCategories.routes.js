@@ -112,6 +112,7 @@ router.post('/validate-import-mapped', Auth, hasPermission('catalogs.manage'), c
  *         description: Error de validación
  */
 router.post('/bulk-import-mapped', Auth, hasPermission('catalogs.manage'), ctrl.bulkImportMapped)
+router.post('/bulk-import-mapped-stream', Auth, hasPermission('catalogs.manage'), ctrl.bulkImportMappedStream)
 
 /**
  * @openapi

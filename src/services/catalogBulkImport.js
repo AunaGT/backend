@@ -13,6 +13,7 @@
  * Handles validation and batch import for catalog items
  */
 const { prisma } = require('../models/prisma')
+const { ImportCancelledError } = require('../utils/importStream')
 
 /**
  * Validate a single catalog item row
@@ -139,7 +140,7 @@ async function bulkValidateCatalogs(rows, type, companyId) {
  * @param {string} type - 'categories' or 'payment-terms'
  * @returns {Object} Result with created count and skipped count
  */
-async function bulkCreateCatalogs(validRows, type, companyId) {
+async function bulkCreateCatalogs(validRows, type, companyId, onProgress = () => {}, isCancelled = () => false) {
     if (!validRows || validRows.length === 0) {
         return { created: 0, skipped: 0, errors: [] }
     }
@@ -149,7 +150,25 @@ async function bulkCreateCatalogs(validRows, type, companyId) {
     let skipped = 0
     const errors = []
 
-    for (const row of validRows) {
+    let processed = 0
+    for (let start = 0; start < validRows.length; start += 50) {
+      if (isCancelled()) throw new ImportCancelledError()
+      const batch = validRows.slice(start, start + 50)
+      try {
+        const result = await model.createMany({
+          data: batch.map(row => ({ name: row.data.name, company_id: companyId })),
+          skipDuplicates: true,
+        })
+        created += result.count
+        skipped += batch.length - result.count
+        processed += batch.length
+        onProgress({ processed, total: validRows.length, created, skipped })
+        continue
+      } catch (e) {
+        // Preserve row-level errors if the database cannot accept a whole batch.
+      }
+      for (const row of batch) {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             await model.create({
                 data: {
@@ -169,6 +188,9 @@ async function bulkCreateCatalogs(validRows, type, companyId) {
                 })
             }
         }
+        processed++
+        onProgress({ processed, total: validRows.length, created, skipped })
+      }
     }
 
     return { created, skipped, errors }

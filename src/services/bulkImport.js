@@ -15,6 +15,7 @@
 const XLSX = require('xlsx')
 const { prisma } = require('../models/prisma')
 const { applyBranchDelta } = require('./stockLocations')
+const { ImportCancelledError } = require('../utils/importStream')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -300,6 +301,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
     const importOptions = normalizeImportOptions(importOptionsRaw)
     const { companyId } = ctx
+    const barcodes = [...new Set(rows.flatMap(row => Object.entries(row)
+        .filter(([key]) => ['codigo_barras', 'barcode', 'codigo'].includes(key.toLowerCase().trim()))
+        .map(([, value]) => String(value ?? '').trim())).filter(Boolean))]
 
     const [categories, suppliers, products] = await Promise.all([
         prisma.productCategory.findMany({
@@ -311,7 +315,7 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
             select: { id: true, name: true },
         }),
         prisma.product.findMany({
-            where: { company_id: companyId, deleted: false },
+            where: { company_id: companyId, deleted: false, barcode: { in: barcodes } },
             select: { id: true, barcode: true },
         }),
     ])
@@ -442,7 +446,7 @@ async function ensureSupplierIdForProductImport(name, cache, companyId) {
 /**
  * @param {Object[]} validRows
  */
-async function bulkCreateProducts(validRows, ctx = {}) {
+async function bulkCreateProducts(validRows, ctx = {}, onProgress = () => {}, isCancelled = () => false) {
     const { companyId, branchId, locationId } = ctx
     const errors = []
     let created = 0
@@ -451,7 +455,18 @@ async function bulkCreateProducts(validRows, ctx = {}) {
     const categoryCache = new Map()
     const supplierCache = new Map()
 
-    for (const row of validRows) {
+    for (const name of new Set(validRows.map(row => row.data.category_create_name).filter(Boolean))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureProductCategoryIdImport(name, categoryCache, companyId)
+    }
+    for (const name of new Set(validRows.map(row => row.data.supplier_create_name).filter(Boolean))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureSupplierIdForProductImport(name, supplierCache, companyId)
+    }
+
+    let processed = 0
+    const saveOne = async (row) => {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             const d = { ...row.data, company_id: companyId }
             // Ya está en el catálogo de la empresa: no se duplica el producto, se
@@ -461,7 +476,7 @@ async function bulkCreateProducts(validRows, ctx = {}) {
                 const initialMin = Number(d.min_stock || 0)
                 await adoptIntoBranch(row.existingProductId, branchId, initialStock, initialMin, locationId)
                 adopted++
-                continue
+                return
             }
             if (d.category_create_name) {
                 d.category_id = await ensureProductCategoryIdImport(d.category_create_name, categoryCache, companyId)
@@ -502,7 +517,22 @@ async function bulkCreateProducts(validRows, ctx = {}) {
                 rowIndex: row.rowIndex,
                 error: err.message,
             })
+        } finally {
+            processed++
+            onProgress({ processed, total: validRows.length, created, adopted, skipped })
         }
+    }
+
+    for (let offset = 0; offset < validRows.length; offset += 4) {
+        if (isCancelled()) throw new ImportCancelledError()
+        const pendingByProduct = new Map()
+        await Promise.all(validRows.slice(offset, offset + 4).map(row => {
+            if (!row.existingProductId) return saveOne(row)
+            const previous = pendingByProduct.get(row.existingProductId) || Promise.resolve()
+            const task = previous.then(() => saveOne(row))
+            pendingByProduct.set(row.existingProductId, task)
+            return task
+        }))
     }
 
     return { created, adopted, skipped, errors }

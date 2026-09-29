@@ -11,6 +11,7 @@
 const { prisma } = require('../../models/prisma')
 const { generateCatalogTemplate } = require('../../services/catalogTemplate')
 const { bulkValidateCatalogs, bulkCreateCatalogs } = require('../../services/catalogBulkImport')
+const { runImportStream } = require('../../utils/importStream')
 
 /**
  * @swagger
@@ -389,4 +390,14 @@ exports.bulkImportMapped = async (req, res, next) => {
   } catch (e) {
     next(e)
   }
+}
+
+exports.bulkImportMappedStream = async (req, res) => {
+  const items = req.body?.items
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ message: 'No se proporcionaron términos de pago para importar' })
+  await runImportStream(res, {
+    total: items.length,
+    validate: () => bulkValidateCatalogs(items, 'payment-terms', req.companyId),
+    save: (rows, onProgress, isCancelled) => bulkCreateCatalogs(rows, 'payment-terms', req.companyId, onProgress, isCancelled),
+  })
 }

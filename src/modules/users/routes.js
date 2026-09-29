@@ -252,6 +252,7 @@ router.post('/users/validate-import-mapped', Auth, usersModule, hasPermission('u
  *         description: Importación completada
  */
 router.post('/users/bulk-import-mapped', Auth, usersModule, hasPermission('users.import'), controller.bulkImportMapped)
+router.post('/users/bulk-import-mapped-stream', Auth, usersModule, hasPermission('users.import'), controller.bulkImportMappedStream)
 
 /**
  * @openapi

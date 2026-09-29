@@ -22,6 +22,7 @@ const {
 const { generateUserTemplate } = require('../../services/userTemplate')
 const { IMPLIES, expandPermissions } = require('../../config/permissionDeps')
 const { bulkValidateUsers, bulkCreateUsers } = require('../../services/userBulkImport')
+const { runImportStream } = require('../../utils/importStream')
 const { requireCompany } = require('../../middlewares/tenant')
 const { effectiveUser } = require('../../services/userAccess')
 
@@ -966,4 +967,15 @@ exports.bulkImportMapped = async (req, res, next) => {
       ...result
     })
   } catch (e) { next(e) }
+}
+
+exports.bulkImportMappedStream = async (req, res) => {
+  const { rows, importOptions } = req.body || {}
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ message: 'Se requiere un array de filas válidas en "rows"' })
+  const context = { companyId: requireCompany(req), branchId: req.branchId, user: req.user }
+  await runImportStream(res, {
+    total: rows.length,
+    validate: () => bulkValidateUsers(rows, importOptions, context),
+    save: (validRows, onProgress, isCancelled) => bulkCreateUsers(validRows, context, onProgress, isCancelled),
+  })
 }

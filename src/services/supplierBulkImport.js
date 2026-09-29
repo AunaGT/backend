@@ -14,6 +14,7 @@
  */
 const XLSX = require('xlsx')
 const { prisma } = require('../models/prisma')
+const { ImportCancelledError } = require('../utils/importStream')
 
 function stripDiacritics(s) {
     return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -485,7 +486,7 @@ async function ensurePaymentTermId(name, cache, companyId) {
  * @param {object} [importOptionsRaw]
  * @returns {Promise<Object>}
  */
-async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
+async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}, onProgress = () => {}, isCancelled = () => false) {
     const { companyId } = ctx
     normalizeImportOptions(importOptionsRaw)
 
@@ -494,13 +495,22 @@ async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
     let skipped = 0
     const categoryCache = new Map()
     const paymentCache = new Map()
-    let defaultPaymentIdCached = null
-    const resolveDefaultPaymentId = async () => {
-        if (defaultPaymentIdCached == null) defaultPaymentIdCached = await getDefaultPaymentTermId(companyId)
-        return defaultPaymentIdCached
+    let defaultPaymentIdPromise
+    const resolveDefaultPaymentId = () => (defaultPaymentIdPromise ||= getDefaultPaymentTermId(companyId))
+
+    // Resolve shared catalog values once before independent contact writes.
+    for (const label of new Set(validRows.flatMap(row => (row.data.party_type || 'SUPPLIER') === 'SUPPLIER' ? row.data.category_labels || [] : []))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureProductCategoryId(label, categoryCache, companyId)
+    }
+    for (const label of new Set(validRows.flatMap(row => row.data.payment_term_names || []))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensurePaymentTermId(label, paymentCache, companyId)
     }
 
-    for (const row of validRows) {
+    let processed = 0
+    const saveOne = async (row) => {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             const partyType = row.data.party_type || 'SUPPLIER'
             const createData = {
@@ -568,7 +578,15 @@ async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
                 rowIndex: row.rowIndex,
                 error: err.message,
             })
+        } finally {
+            processed++
+            onProgress({ processed, total: validRows.length, created, skipped })
         }
+    }
+
+    for (let offset = 0; offset < validRows.length; offset += 4) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await Promise.all(validRows.slice(offset, offset + 4).map(saveOne))
     }
 
     return { created, skipped, errors }

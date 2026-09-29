@@ -19,6 +19,7 @@ const XLSX = require('xlsx')
 const { prisma } = require('../../models/prisma')
 const { createEntry, periodKeyForDate, AccountingError } = require('../../services/accounting/core')
 const { toCents } = require('../../services/accounting/logic')
+const { runImportStream, ImportCancelledError } = require('../../utils/importStream')
 
 const MAX_ROWS = 2000
 
@@ -181,6 +182,24 @@ exports.validateAccountsImport = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+async function persistAccounts(v, companyId, onProgress = () => {}, isCancelled = () => false) {
+  let processed = 0
+  await prisma.$transaction(async (tx) => {
+    const idByCode = new Map((await tx.account.findMany({ where: { company_id: companyId }, select: { id: true, code: true } })).map(a => [a.code, a.id]))
+    for (const r of v.ordered) {
+      if (isCancelled()) throw new ImportCancelledError()
+      const created = await tx.account.create({ data: {
+        company_id: companyId, code: r.code, name: r.name, type: r.type,
+        is_group: r.isGroup, parent_id: r.parent ? (idByCode.get(r.parent) ?? null) : null,
+      } })
+      idByCode.set(r.code, created.id)
+      onProgress({ processed: ++processed, total: v.ordered.length })
+    }
+    if (isCancelled()) throw new ImportCancelledError()
+  }, { timeout: 60000, maxWait: 10000 })
+  return { created: v.ordered.length, skipped: v.skipped.length }
+}
+
 exports.bulkImportAccounts = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
@@ -194,26 +213,7 @@ exports.bulkImportAccounts = async (req, res, next) => {
       })
     }
 
-    await prisma.$transaction(async (tx) => {
-      const idByCode = new Map(
-        (await tx.account.findMany({ where: { company_id: req.companyId }, select: { id: true, code: true } })).map((a) => [a.code, a.id]),
-      )
-      for (const r of v.ordered) {
-        const created = await tx.account.create({
-          data: {
-            company_id: req.companyId,
-            code: r.code,
-            name: r.name,
-            type: r.type,
-            is_group: r.isGroup,
-            parent_id: r.parent ? (idByCode.get(r.parent) ?? null) : null,
-          },
-        })
-        idByCode.set(r.code, created.id)
-      }
-    }, { timeout: 60000, maxWait: 10000 })
-
-    const created = v.ordered.length
+    const { created } = await persistAccounts(v, req.companyId)
     res.json({
       ok: true,
       created,
@@ -226,6 +226,17 @@ exports.bulkImportAccounts = async (req, res, next) => {
     if (e instanceof AccountingError) return res.status(400).json({ message: e.message })
     next(e)
   }
+}
+
+exports.bulkImportAccountsStream = async (req, res) => {
+  const items = checkItems(req, res)
+  if (!items) return
+  let validated
+  await runImportStream(res, {
+    total: items.length,
+    validate: async () => { validated = await validateAccounts(items, req.companyId); return { validRows: validated.ordered, invalidRows: validated.invalidRows } },
+    save: (_rows, onProgress, isCancelled) => persistAccounts(validated, req.companyId, onProgress, isCancelled),
+  })
 }
 
 // ============ ASIENTOS (DIARIO) ============
@@ -331,6 +342,28 @@ exports.validateJournalImport = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+async function persistJournal(v, req, onProgress = () => {}, isCancelled = () => false) {
+  const numbers = []
+  let processed = 0
+  await prisma.$transaction(async (tx) => {
+    for (const [ref, group] of v.groups) {
+      if (isCancelled()) throw new ImportCancelledError()
+      const entry = await createEntry(tx, {
+        company_id: req.companyId,
+        date: group[0].date,
+        description: group.find(r => r.description)?.description || `Asiento importado ${ref}`,
+        source_type: 'MANUAL', created_by: req.user?.sub ?? null,
+        lines: group.map(r => ({ account_id: r.account.id, debit: r.debit, credit: r.credit, description: r.description || null })),
+      })
+      numbers.push(entry.entry_number)
+      processed += group.length
+      onProgress({ processed, total: v.rows.length })
+    }
+    if (isCancelled()) throw new ImportCancelledError()
+  }, { timeout: 60000, maxWait: 10000 })
+  return { created: numbers.length, message: `Se importaron ${numbers.length} asientos (${numbers[0]} a ${numbers[numbers.length - 1]})` }
+}
+
 exports.bulkImportJournal = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
@@ -344,34 +377,24 @@ exports.bulkImportJournal = async (req, res, next) => {
       })
     }
 
-    const userId = req.user?.sub ?? null
-    const numbers = []
-    await prisma.$transaction(async (tx) => {
-      for (const [ref, group] of v.groups) {
-        const entry = await createEntry(tx, {
-          company_id: req.companyId,
-          date: group[0].date,
-          description: group.find((r) => r.description)?.description || `Asiento importado ${ref}`,
-          source_type: 'MANUAL',
-          created_by: userId,
-          lines: group.map((r) => ({
-            account_id: r.account.id,
-            debit: r.debit,
-            credit: r.credit,
-            description: r.description || null,
-          })),
-        })
-        numbers.push(entry.entry_number)
-      }
-    }, { timeout: 60000, maxWait: 10000 })
-
+    const result = await persistJournal(v, req)
     res.json({
       ok: true,
-      created: numbers.length,
-      message: `Se importaron ${numbers.length} asientos (${numbers[0]} a ${numbers[numbers.length - 1]})`,
+      ...result,
     })
   } catch (e) {
     if (e instanceof AccountingError) return res.status(400).json({ message: e.message })
     next(e)
   }
+}
+
+exports.bulkImportJournalStream = async (req, res) => {
+  const items = checkItems(req, res)
+  if (!items) return
+  let validated
+  await runImportStream(res, {
+    total: items.length,
+    validate: async () => { validated = await validateJournal(items, req.companyId); return { validRows: validated.rows, invalidRows: validated.invalidRows } },
+    save: (_rows, onProgress, isCancelled) => persistJournal(validated, req, onProgress, isCancelled),
+  })
 }

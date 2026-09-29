@@ -101,6 +101,7 @@ router.get('/template', Auth, hasPermission('contacts.suppliers.import'), Suppli
  *         description: Resultado de importación
  */
 router.post('/bulk-import-mapped', Auth, hasPermission('contacts.suppliers.import'), Suppliers.bulkImportMapped)
+router.post('/bulk-import-mapped-stream', Auth, hasPermission('contacts.suppliers.import'), Suppliers.bulkImportMappedStream)
 
 /**
  * @openapi

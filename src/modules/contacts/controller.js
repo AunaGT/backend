@@ -627,6 +627,7 @@ exports.replaceCustomerPriceRules = async (req, res, next) => {
 // ========== BULK IMPORT METHODS ==========
 
 const { bulkValidateSuppliers, bulkCreateSuppliers, generateSupplierTemplate } = require('../../services/supplierBulkImport')
+const { runImportStream } = require('../../utils/importStream')
 
 /**
  * @swagger
@@ -670,6 +671,17 @@ exports.bulkImportMapped = async (req, res, next) => {
   } catch (e) {
     next(e)
   }
+}
+
+exports.bulkImportMappedStream = async (req, res) => {
+  const { suppliers, importOptions } = req.body || {}
+  if (!Array.isArray(suppliers) || !suppliers.length) return res.status(400).json({ message: 'No se proporcionaron contactos' })
+  const ctx = { companyId: req.companyId }
+  await runImportStream(res, {
+    total: suppliers.length,
+    validate: () => bulkValidateSuppliers(suppliers, importOptions, ctx),
+    save: (rows, onProgress, isCancelled) => bulkCreateSuppliers(rows, importOptions, ctx, onProgress, isCancelled),
+  })
 }
 
 /**

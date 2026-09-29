@@ -198,6 +198,7 @@ const { getBrandingForPdf } = require('../../utils/pdfBranding')
 
 // Bulk import service
 const { parseExcel, validateBulkData, bulkCreateProducts, generateTemplateWithCatalogs } = require('../../services/bulkImport')
+const { runImportStream } = require('../../utils/importStream')
 const {
   parseKind,
   replaceProductBom,
@@ -2079,6 +2080,17 @@ exports.bulkImportMapped = async (req, res, next) => {
   } catch (e) {
     next(e)
   }
+}
+
+exports.bulkImportMappedStream = async (req, res) => {
+  const { products, importOptions } = req.body || {}
+  if (!Array.isArray(products) || !products.length) return res.status(400).json({ message: 'No se proporcionaron productos para importar' })
+  const ctx = { companyId: req.companyId, branchId: requireBranch(req), locationId: req.body?.location_id ? String(req.body.location_id) : null }
+  await runImportStream(res, {
+    total: products.length,
+    validate: () => validateBulkData(products, importOptions, { companyId: req.companyId }),
+    save: (rows, onProgress, isCancelled) => bulkCreateProducts(rows, ctx, onProgress, isCancelled),
+  })
 }
 
 /**
