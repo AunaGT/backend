@@ -3,6 +3,8 @@ const { assertReturnTransition, normalizeReturnPolicy, RETURN_RESOLUTIONS } = re
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, restoreStockMap } = require('../../services/bomStock')
 const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivables/domain/receivables')
+const { createReplacementSale, exchangeSettlement, resolvePricedSaleItems } = require('../sales/application')
+const { getReturnPolicy } = require('../../services/returnPolicy')
 
 const STOCK_DISPOSITIONS = new Set(['SELLABLE', 'QUARANTINE'])
 const DISPOSITIONS = new Set([...STOCK_DISPOSITIONS, 'SCRAP'])
@@ -121,22 +123,44 @@ async function assertDispositionLocations(tx, branchId, lines) {
   }
 }
 
-async function approveReturn(tx, { id, scope, userId, resolution, lines, policy }) {
+async function approveReturn(tx, { id, scope, userId, resolution, lines, policy, companyId, replacements }) {
   await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
-    include: { status: true, sale: { select: { branch_id: true } }, return_items: true },
+    include: {
+      status: true,
+      return_items: true,
+      replacement_items: true,
+      sale: { include: { sale_items: true } },
+    },
   })
   if (!current) throw invalid('Devolución no encontrada', 404)
   assertReturnTransition(current.status.name, 'Aprobada')
 
   const approvedResolution = String(resolution || current.requested_resolution || '')
   if (!RETURN_RESOLUTIONS.includes(approvedResolution)) throw invalid('La solución aprobada no es válida')
-  if (!normalizeReturnPolicy(policy).enabledResolutions.includes(approvedResolution)) {
+  const normalizedPolicy = normalizeReturnPolicy(policy)
+  if (!normalizedPolicy.enabledResolutions.includes(approvedResolution)) {
     throw invalid('La solución aprobada está deshabilitada por la política de la empresa', 409)
   }
   const plannedLines = normalizeApprovalLines(current, lines)
   await assertDispositionLocations(tx, current.sale.branch_id, plannedLines)
+
+  let approvedReplacements = []
+  if (approvedResolution === 'EXCHANGE') {
+    const requestedReplacements = Array.isArray(replacements) && replacements.length
+      ? replacements
+      : (current.replacement_items || []).map((item) => ({ product_id: item.product_id, qty: item.qty }))
+    approvedReplacements = await resolvePricedSaleItems(tx, {
+      items: requestedReplacements,
+      branchId: current.sale.branch_id,
+      companyId,
+      customerContactId: current.sale.customer_contact_id,
+      salesChannel: current.sale.sales_channel,
+      pricing: normalizedPolicy.exchangePricing,
+      originalSaleItems: current.sale.sale_items,
+    })
+  }
 
   const approvedStatus = await tx.returnStatus.findFirst({ where: { name: 'Aprobada' } })
   if (!approvedStatus) throw invalid('Estado "Aprobada" no encontrado', 500)
@@ -148,6 +172,10 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy 
       approved_resolution: approvedResolution,
       approved_by: userId,
       approved_at: approvedAt,
+      type: approvedResolution === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND',
+      price_difference: approvedResolution === 'EXCHANGE'
+        ? round2(approvedReplacements.reduce((sum, item) => sum + item.line_total, 0) - Number(current.total_refund))
+        : 0,
       version: { increment: 1 },
     },
     include: { status: true, sale: true, return_items: true, settlements: true },
@@ -156,6 +184,20 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy 
     await tx.returnItem.update({
       where: { id: line.return_item_id },
       data: { disposition: line.disposition, stock_location_id: line.stock_location_id },
+    })
+  }
+  if (approvedResolution === 'EXCHANGE' || current.replacement_items?.length) {
+    await tx.returnReplacementItem.deleteMany({ where: { return_id: id } })
+  }
+  if (approvedReplacements.length) {
+    await tx.returnReplacementItem.createMany({
+      data: approvedReplacements.map((item) => ({
+        return_id: id,
+        product_id: item.product_id,
+        qty: item.qty,
+        unit_price: item.unit_price,
+        line_total: item.line_total,
+      })),
     })
   }
   return updated
@@ -203,7 +245,7 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
   return { paymentMethodId, cashSessionId, externalReference: externalReference?.slice(0, 255) || null }
 }
 
-async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps = {}) {
+async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload }, deps = {}) {
   const key = String(payload?.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
   await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
@@ -212,10 +254,12 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
     include: {
       status: true,
       return_items: true,
+      replacement_items: true,
       sale: {
         include: {
           payment_method: true,
           paymentEntries: { select: { id: true, amount: true, created_at: true } },
+          sale_items: true,
         },
       },
     },
@@ -231,27 +275,27 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
   }
 
   const plan = buildCompletionPlan(current, payload)
-  if (plan.resolution === 'EXCHANGE') {
-    throw invalid('El cambio de producto debe generar primero su venta vinculada', 409)
-  }
+  const isExchange = plan.resolution === 'EXCHANGE'
   await assertDispositionLocations(tx, current.sale.branch_id, plan.lines)
 
   const isCreditSale = current.sale.payment_method?.is_credit === true
   const paid = isCreditSale ? paidOf(current.sale) : Number(current.sale.adjusted_total)
-  const receivable = isCreditSale
+  const receivable = !isExchange && isCreditSale
     ? planReceivableReturn({ adjustedTotal: current.sale.adjusted_total, paid, refundAmount: current.total_refund })
-    : {
+    : !isExchange ? {
         newAdjustedTotal: plan.saleAdjustment.adjusted_total,
         creditOffset: 0,
         refundable: round2(current.total_refund),
         releaseApplications: 0,
-      }
-  if (plan.resolution === 'CUSTOMER_CREDIT' && receivable.refundable > 0 && !current.sale.customer_contact_id) {
+      } : null
+  if (!isExchange && plan.resolution === 'CUSTOMER_CREDIT' && receivable.refundable > 0 && !current.sale.customer_contact_id) {
     throw invalid('La venta no tiene un cliente maestro al cual asignar el saldo a favor', 409)
   }
-  const direct = plan.resolution === 'CUSTOMER_CREDIT'
+  let direct = !isExchange && plan.resolution === 'CUSTOMER_CREDIT'
     ? { paymentMethodId: null, cashSessionId: null, externalReference: null }
-    : await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable)
+    : !isExchange
+      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable)
+      : { paymentMethodId: null, cashSessionId: null, externalReference: null }
 
   const restoreStock = deps.restoreStock || restoreDispositionStock
   const ensureAlerts = deps.ensureAlerts
@@ -266,9 +310,9 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
     where: { id: current.sale.id },
     data: plan.saleAdjustment,
   })
-  if (isCreditSale && receivable.releaseApplications > 0) {
+  if (!isExchange && isCreditSale && receivable.releaseApplications > 0) {
     await releaseSaleOverpayment(tx, current.sale.id, receivable.releaseApplications)
-  } else if (isCreditSale) {
+  } else if (!isExchange && isCreditSale) {
     await syncSaleStatus(tx, current.sale.id)
   }
 
@@ -284,7 +328,68 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
     })
   }
 
-  if (plan.resolution === 'CUSTOMER_CREDIT' && receivable.refundable > 0 && !isCreditSale) {
+  let replacement = null
+  let settlementKind
+  let settlementAmount
+  let creditOffset = receivable?.creditOffset || 0
+  let refunded = 0
+  let customerCredit = 0
+
+  if (isExchange) {
+    if (!current.replacement_items?.length) throw invalid('El cambio aprobado no tiene productos de reemplazo', 409)
+    const policy = await getReturnPolicy(tx, companyId)
+    replacement = await (deps.createReplacementSale || createReplacementSale)(tx, {
+      returnRecord: current,
+      replacements: current.replacement_items.map((item) => ({ product_id: item.product_id, qty: item.qty })),
+      companyId,
+      userId,
+      pricing: policy.exchangePricing,
+      cashRegisterSessionId: payload.settlement?.cash_register_session_id || null,
+    }, deps.replacementDeps)
+    const difference = replacement.difference
+    const channel = String(payload.settlement?.channel || 'ORIGINAL').toUpperCase()
+    const exchangePayment = exchangeSettlement({
+      difference,
+      channel,
+      hasCustomer: Boolean(current.sale.customer_contact_id),
+    })
+    settlementKind = exchangePayment.kind
+    settlementAmount = exchangePayment.amount
+    if (exchangePayment.requiresDirectMethod) {
+      const settlementResolution = channel === 'CASH'
+        ? 'REFUND_CASH'
+        : channel === 'TRANSFER'
+          ? 'REFUND_TRANSFER'
+          : 'REFUND_ORIGINAL'
+      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount)
+      if (difference.direction === 'COLLECTION') {
+        await tx.sale.update({
+          where: { id: replacement.sale.id },
+          data: {
+            payment_method_id: direct.paymentMethodId,
+            cash_register_session_id: direct.cashSessionId,
+            amount_received: difference.amount,
+            change: 0,
+          },
+        })
+      } else {
+        refunded = difference.amount
+      }
+    } else if (settlementKind === 'CUSTOMER_CREDIT') {
+      await tx.customerPayment.create({
+        data: {
+          branch_id: current.sale.branch_id,
+          customer_id: current.sale.customer_contact_id,
+          amount: difference.amount,
+          kind: 'CREDIT_NOTE',
+          reference: current.reference || null,
+          notes: `Saldo a favor por cambio ${current.reference || current.id}`,
+          registered_by: userId,
+        },
+      })
+      customerCredit = difference.amount
+    }
+  } else if (plan.resolution === 'CUSTOMER_CREDIT' && receivable.refundable > 0 && !isCreditSale) {
     await tx.customerPayment.create({
       data: {
         branch_id: current.sale.branch_id,
@@ -296,12 +401,19 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
         registered_by: userId,
       },
     })
+    settlementKind = 'CUSTOMER_CREDIT'
+    settlementAmount = receivable.refundable
+    customerCredit = receivable.refundable
   }
 
-  const settlementKind = receivable.refundable > 0
-    ? (plan.resolution === 'CUSTOMER_CREDIT' ? 'CUSTOMER_CREDIT' : 'REFUND')
-    : 'CREDIT_OFFSET'
-  const settlementAmount = receivable.refundable > 0 ? receivable.refundable : receivable.creditOffset
+  if (!isExchange && !settlementKind) {
+    settlementKind = receivable.refundable > 0
+      ? (plan.resolution === 'CUSTOMER_CREDIT' ? 'CUSTOMER_CREDIT' : 'REFUND')
+      : 'CREDIT_OFFSET'
+    settlementAmount = receivable.refundable > 0 ? receivable.refundable : receivable.creditOffset
+    refunded = plan.resolution === 'CUSTOMER_CREDIT' ? 0 : receivable.refundable
+    customerCredit = plan.resolution === 'CUSTOMER_CREDIT' ? receivable.refundable : 0
+  }
   const settlement = await tx.returnSettlement.create({
     data: {
       return_id: id,
@@ -314,7 +426,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
       idempotency_key: key,
     },
   })
-  if (receivable.refundable > 0 && receivable.creditOffset > 0) {
+  if (!isExchange && receivable.refundable > 0 && receivable.creditOffset > 0) {
     await tx.returnSettlement.create({
       data: {
         return_id: id,
@@ -343,9 +455,10 @@ async function completeApprovedReturn(tx, { id, scope, userId, payload }, deps =
     _settlement: settlement,
     _effects: {
       stock_units: plan.lines.reduce((sum, line) => sum + line.restock_qty, 0),
-      credit_offset: receivable.creditOffset,
-      refunded: plan.resolution === 'CUSTOMER_CREDIT' ? 0 : receivable.refundable,
-      customer_credit: plan.resolution === 'CUSTOMER_CREDIT' ? receivable.refundable : 0,
+      credit_offset: creditOffset,
+      refunded,
+      customer_credit: customerCredit,
+      replacement_sale_id: replacement?.sale?.id || null,
     },
   }
 }

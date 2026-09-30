@@ -28,9 +28,9 @@ const {
 } = require('../../services/saleSearch')
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../../services/bomStock')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
-const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { requireBranch, branchWhere, hasPerm } = require('../../middlewares/tenant')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
+const { createSaleRecordAndStock } = require('./application')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -784,8 +784,15 @@ exports.create = async (req, res, next) => {
 
       const nextRef = await nextDocumentReference(tx, 'V', branch)
 
-      const sale = await tx.sale.create({
-        data: {
+      const sale = await createSaleRecordAndStock(tx, {
+        userId: user.sub,
+        items: resolvedItems.map((item) => ({
+          product_id: item.product_id,
+          qty: Number(item.qty),
+          unit_price: Number(item.price),
+          unit_cost: prodMap.get(String(item.product_id))?.cost ?? null,
+        })),
+        saleData: {
           branch_id: branchId,
           customer: saleData.customer,
           customer_nit: saleData.customer_nit,
@@ -805,44 +812,12 @@ exports.create = async (req, res, next) => {
           total_returned: 0,  // Nueva venta sin devoluciones
           adjusted_total: total,  // Total ajustado = total (sin devoluciones aún)
           status_id: completadaStatus.id,
-          created_by: user.sub,
           cash_register_session_id: cashSessionIdForSale || undefined,
           idempotency_key: idempotencyKey,
           payment_status: salePaymentStatus,
           due_date: creditDueDate,
         },
       })
-
-      const netLineTotals = allocateNetLineTotals(resolvedItems, total)
-      await tx.saleItem.createMany({
-        // El costo se congela acá: es el de hoy, no el que tenga el producto
-        // cuando alguien contabilice o mire el reporte dentro de seis meses.
-        data: resolvedItems.map((it, index) => ({
-          sale_id: sale.id,
-          product_id: it.product_id,
-          price: it.price,
-          unit_cost: prodMap.get(String(it.product_id))?.cost ?? null,
-          net_total: netLineTotals[index],
-          qty: it.qty,
-        })),
-      })
-
-      // Descontar stock (kits → componentes)
-      const stockMap = await expandLinesToStockMap(
-        tx,
-        resolvedItems.map((it) => ({ product_id: it.product_id, qty: it.qty }))
-      )
-      // groupId propio: una venta puede descontar stock más de una vez a lo largo
-      // de su vida (completar → cancelar → completar), y los lotes solo deben
-      // seguir a la salida de ahora.
-      const saleStockCtx = {
-        reason: 'SALE', refType: 'sale', refId: String(sale.id), userId: user.sub,
-        groupId: require('crypto').randomUUID(),
-      }
-      const updatedProducts = await deductStockMap(tx, stockMap, branchId, saleStockCtx)
-      // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
-      await consumeLotsFEFO(tx, stockMap, branchId, await dispatchedByRef(tx, { groupId: saleStockCtx.groupId }))
-      await ensureStockAlertsBatch(tx, updatedProducts, branchId)
 
       // 3) Guardar promociones con descuento efectivo e incrementar solo esos códigos
       if (promotionRowsToRecord.length > 0) {

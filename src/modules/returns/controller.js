@@ -27,6 +27,7 @@ const {
   normalizeReturnLines,
 } = require('./domain')
 const { approveReturn, completeReturn } = require('./application')
+const { resolvePricedSaleItems } = require('../sales/application')
 
 /** Resuelve sale_id (UUID o referencia ej. V-000001) al id interno de la venta */
 async function resolveSaleId(saleIdOrRef, scope) {
@@ -293,12 +294,6 @@ exports.create = async (req, res, next) => {
       return res.status(400).json({ message: 'El motivo de la devolución es requerido.' })
     }
 
-    if (returnType === 'EXCHANGE') {
-      return res.status(409).json({
-        message: 'Los cambios nuevos están temporalmente deshabilitados hasta completar su liquidación y venta vinculada.'
-      })
-    }
-
     const sale_id = await resolveSaleId(saleIdOrRef, branchWhere(req))
     if (!sale_id) {
       return res.status(404).json({ message: 'Venta no encontrada' })
@@ -450,47 +445,24 @@ exports.create = async (req, res, next) => {
       const validatedReplacements = []
       let replacementTotal = 0
       if (returnType === 'EXCHANGE') {
-        const ids = replacements.map((r) => String(r.product_id))
-        const products = await tx.product.findMany({
-          where: { id: { in: ids } },
-          select: { id: true, name: true }
+        const resolved = await resolvePricedSaleItems(tx, {
+          items: replacements,
+          branchId: sale.branch_id,
+          companyId: req.companyId,
+          customerContactId: sale.customer_contact_id,
+          salesChannel: sale.sales_channel,
+          pricing: policy.exchangePricing,
+          originalSaleItems: sale.sale_items,
+          availability: getAvailabilityBatchWithKits,
         })
-        const productById = new Map(products.map((p) => [p.id, p]))
-        const availability = await getAvailabilityBatchWithKits(ids, tx, sale.branch_id)
-
-        for (const rep of replacements) {
-          const product_id = String(rep.product_id || '')
-          const qty = Number(rep.qty)
-          const unit_price = Number(rep.unit_price)
-
-          if (!product_id || !Number.isFinite(qty) || qty <= 0) {
-            const err = new Error('Cada reemplazo debe tener product_id y qty > 0')
-            err.status = 400
-            throw err
-          }
-          if (!Number.isFinite(unit_price) || unit_price < 0) {
-            const err = new Error('Cada reemplazo debe tener un precio unitario válido')
-            err.status = 400
-            throw err
-          }
-          const product = productById.get(product_id)
-          if (!product) {
-            const err = new Error(`Producto de reemplazo ${product_id} no encontrado`)
-            err.status = 400
-            throw err
-          }
-          const available = Number(availability[product_id]?.available ?? 0)
-          if (qty > available) {
-            const err = new Error(
-              `${product.name}: stock insuficiente para el cambio (disponible: ${available}, solicitado: ${qty})`
-            )
-            err.status = 400
-            throw err
-          }
-
-          const line_total = unit_price * qty
-          replacementTotal += line_total
-          validatedReplacements.push({ product_id, qty, unit_price, line_total })
+        for (const rep of resolved) {
+          replacementTotal += rep.line_total
+          validatedReplacements.push({
+            product_id: rep.product_id,
+            qty: rep.qty,
+            unit_price: rep.unit_price,
+            line_total: rep.line_total,
+          })
         }
       }
       // + = el cliente paga la diferencia; − = el depósito se la devuelve.
@@ -628,6 +600,8 @@ exports.updateStatus = async (req, res, next) => {
         resolution: req.body.approved_resolution,
         lines: req.body.lines,
         policy: await getReturnPolicy(tx, req.companyId),
+        companyId: req.companyId,
+        replacements: req.body.replacements,
       }), { maxWait: 10000, timeout: 15000 })
       return res.json(result)
     }
@@ -636,6 +610,7 @@ exports.updateStatus = async (req, res, next) => {
         id,
         scope: branchWhere(req),
         userId: req.user?.sub,
+        companyId: req.companyId,
         payload: req.body,
       })
       return res.json(result)
@@ -739,6 +714,8 @@ exports.approve = async (req, res, next) => {
       resolution: req.body.approved_resolution,
       lines: req.body.lines,
       policy: await getReturnPolicy(tx, req.companyId),
+      companyId: req.companyId,
+      replacements: req.body.replacements,
     }), { maxWait: 10000, timeout: 15000 })
     res.json(result)
   } catch (e) {
@@ -752,6 +729,7 @@ exports.complete = async (req, res, next) => {
       id: req.params.id,
       scope: branchWhere(req),
       userId: req.user?.sub,
+      companyId: req.companyId,
       payload: req.body,
     })
     res.json(result)
