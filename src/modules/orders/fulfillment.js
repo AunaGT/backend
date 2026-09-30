@@ -6,6 +6,7 @@ const { consumeLotsFEFO, restoreLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
+const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
 
@@ -139,6 +140,7 @@ async function invoice(tx, req, requireCashSession) {
     if (remaining) fail('Las entregas no cubren las cantidades solicitadas', 409)
     costs.set(line_id, hasCost ? round(cost / qty) : null)
   }
+  const netLineTotals = allocateNetLineTotals(lines.map(({ line, qty }) => ({ price: line.unit_price, qty })), total)
   const sale = await tx.sale.create({ data: {
     branch_id: order.branch_id, reference: await nextDocumentReference(tx, 'V', branch),
     customer: order.customer, customer_nit: order.customer_nit, is_final_consumer: order.is_final_consumer,
@@ -149,7 +151,7 @@ async function invoice(tx, req, requireCashSession) {
     cash_register_session_id: sessionId, idempotency_key: key,
     items: lines.reduce((sum, line) => sum + line.qty, 0), subtotal: total, discount_total: 0,
     total, adjusted_total: total, total_returned: 0,
-    sale_items: { create: lines.map(({ line, line_id, qty }) => ({ product_id: line.product_id, qty, price: line.unit_price, unit_cost: costs.get(line_id) ?? null })) },
+    sale_items: { create: lines.map(({ line, line_id, qty }, index) => ({ product_id: line.product_id, qty, price: line.unit_price, unit_cost: costs.get(line_id) ?? null, net_total: netLineTotals[index] })) },
     orderLink: { create: { document_id: order.id } },
   } })
   for (const { line_id, qty } of lines) {

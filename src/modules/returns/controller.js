@@ -19,8 +19,10 @@ const {
 } = require('../../services/bomStock')
 const { branchWhere } = require('../../middlewares/tenant')
 const { getReturnPolicy } = require('../../services/returnPolicy')
+const { nextDocumentReference } = require('../../services/referenceGenerator')
 const {
   ACTIVE_RETURN_STATUSES,
+  RETURN_RESOLUTIONS,
   availableReturnQty,
   assertReturnTransition,
   buildReturnWhere,
@@ -322,11 +324,15 @@ exports.getById = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { sale_id: saleIdOrRef, reason, items, notes, type, replacements, policy_override_reason } = req.body
-    const returnType = type === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND'
+    const requestedResolution = String(req.body.requested_resolution || (type === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND_ORIGINAL'))
+    const returnType = requestedResolution === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND'
     const cleanReason = String(reason || '').trim()
 
     if (type && !['REFUND', 'EXCHANGE'].includes(type)) {
       return res.status(400).json({ message: 'Tipo de devolución no válido.' })
+    }
+    if (!RETURN_RESOLUTIONS.includes(requestedResolution)) {
+      return res.status(400).json({ message: 'La solución solicitada no es válida.' })
     }
 
     if (!saleIdOrRef || !Array.isArray(items) || items.length === 0) {
@@ -360,6 +366,7 @@ exports.create = async (req, res, next) => {
         where: { id: sale_id, ...branchWhere(req) },
         include: {
           status: true,
+          branch: { select: { id: true, code: true, seq: true } },
           sale_items: {
             include: {
               product: true,
@@ -410,6 +417,11 @@ exports.create = async (req, res, next) => {
           ? `La venta superó el plazo configurable de ${policy.windowDays} días para devoluciones.`
           : 'La venta ya no tiene unidades elegibles para devolución.')
         err.status = expired ? 409 : 400
+        throw err
+      }
+      if (!policy.enabledResolutions.includes(requestedResolution)) {
+        const err = new Error('La solución solicitada está deshabilitada por la política de la empresa.')
+        err.status = 409
         throw err
       }
 
@@ -564,8 +576,10 @@ exports.create = async (req, res, next) => {
       // 4. Crear la devolución
       const returnRecord = await tx.return.create({
         data: {
+          reference: await nextDocumentReference(tx, 'D', sale.branch),
           sale_id,
           type: returnType,
+          requested_resolution: requestedResolution,
           reason: cleanReason,
           notes: [
             String(notes || '').trim(),
@@ -575,7 +589,12 @@ exports.create = async (req, res, next) => {
           price_difference: priceDifference,
           items_count: validatedItems.length,
           status_id: pendingStatus.id,
-          return_date: returnDate
+          return_date: returnDate,
+          ...(policyResult.exceptionApplied && {
+            policy_override_reason: String(policy_override_reason).trim(),
+            policy_overridden_by: req.user?.sub || null,
+            policy_overridden_at: new Date(),
+          })
         }
       })
 

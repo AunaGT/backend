@@ -246,6 +246,7 @@ model StockLocation {
   movements      StockMovement[]
   count_lines    InventoryCountLine[]
   lots           ProductLot[]
+  return_items   ReturnItem[]
   /// Sucursales que venden desde aquí (su punto de venta despacha de esta ubicación).
   sales_branches Branch[]               @relation("BranchSalesLocation")
   created_at     DateTime               @default(now())
@@ -417,6 +418,27 @@ enum ReturnType {
   EXCHANGE
 }
 
+enum ReturnResolution {
+  REFUND_ORIGINAL
+  REFUND_CASH
+  REFUND_TRANSFER
+  CUSTOMER_CREDIT
+  EXCHANGE
+}
+
+enum ReturnItemDisposition {
+  SELLABLE
+  QUARANTINE
+  SCRAP
+}
+
+enum ReturnSettlementKind {
+  REFUND
+  CREDIT_OFFSET
+  COLLECTION
+  CUSTOMER_CREDIT
+}
+
 model PaymentMethod {
   id                    Int                  @id @default(autoincrement())
   name                  String               @unique @db.VarChar(50)
@@ -427,6 +449,7 @@ model PaymentMethod {
   sales                 Sale[]
   customer_payments     CustomerPayment[]
   cash_closure_payments CashClosurePayment[] // Relación para saber qué método de pago se usó en cada línea del cierre
+  return_settlements    ReturnSettlement[]
 
   @@map("payment_methods")
 }
@@ -885,6 +908,7 @@ model Sale {
   sale_items        SaleItem[]
   sale_dtes         SaleDte[] // Facturación DTE (InFile/SAT): autorización, serie, número
   returns           Return[]
+  replacement_for_return Return? @relation("ReturnReplacementSale")
   sale_promotions   SalePromotion[]
   sold_at           DateTime        @default(now())
 
@@ -1121,6 +1145,8 @@ model SaleItem {
   /// el costo de hoy y editar un costo cambia el CMV de ventas viejas.
   /// Null = venta anterior a este campo; ahí se cae al costo del producto.
   unit_cost    Decimal?     @db.Decimal(12, 2)
+  /// Importe neto de la línea después de descuentos. Null en ventas legacy.
+  net_total    Decimal?     @db.Decimal(12, 2)
   qty          Int
   return_items ReturnItem[]
 
@@ -1293,6 +1319,7 @@ model SalePaymentEntry {
 
 model Return {
   id               String       @id @default(uuid()) @db.Uuid
+  reference        String?      @unique @db.VarChar(30)
   sale_id          String       @db.Uuid
   sale             Sale         @relation(fields: [sale_id], references: [id])
   return_date      DateTime     @default(now())
@@ -1307,9 +1334,22 @@ model Return {
   processed_by     String?      @db.Uuid
   processed_at     DateTime?
   notes            String?      @db.Text
+  requested_resolution  ReturnResolution?
+  approved_resolution   ReturnResolution?
+  approved_by           String?           @db.Uuid
+  approved_at           DateTime?
+  policy_override_reason String?          @db.Text
+  policy_overridden_by   String?          @db.Uuid
+  policy_overridden_at   DateTime?
+  replacement_sale_id    String?          @unique @db.Uuid
+  replacement_sale       Sale?            @relation("ReturnReplacementSale", fields: [replacement_sale_id], references: [id], onDelete: SetNull)
+  legacy_stock_reconciled Boolean         @default(false)
+  legacy_stock_moved      Boolean?
+  version                 Int             @default(1)
 
   return_items      ReturnItem[]
   replacement_items ReturnReplacementItem[]
+  settlements       ReturnSettlement[]
 
   @@index([sale_id])
   @@index([status_id])
@@ -1327,10 +1367,16 @@ model ReturnItem {
   qty_returned  Int
   refund_amount Decimal  @db.Decimal(12, 2)
   reason        String?  @db.Text
+  received_qty  Int?
+  restock_qty   Int?
+  disposition   ReturnItemDisposition?
+  stock_location_id String?        @db.Uuid
+  stock_location    StockLocation? @relation(fields: [stock_location_id], references: [id], onDelete: SetNull)
 
   @@index([return_id])
   @@index([sale_item_id])
   @@index([product_id])
+  @@index([stock_location_id])
   @@map("return_items")
 }
 
@@ -1348,6 +1394,27 @@ model ReturnReplacementItem {
   @@index([return_id])
   @@index([product_id])
   @@map("return_replacement_items")
+}
+
+model ReturnSettlement {
+  id                       String               @id @default(uuid()) @db.Uuid
+  return_id                String               @db.Uuid
+  return                   Return               @relation(fields: [return_id], references: [id], onDelete: Cascade)
+  kind                     ReturnSettlementKind
+  amount                   Decimal              @db.Decimal(12, 2)
+  payment_method_id        Int?
+  payment_method           PaymentMethod?       @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
+  cash_register_session_id String?              @db.Uuid
+  cash_register_session    CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
+  external_reference       String?              @db.VarChar(255)
+  registered_by            String               @db.Uuid
+  idempotency_key          String               @db.VarChar(64)
+  created_at               DateTime             @default(now())
+
+  @@unique([return_id, idempotency_key])
+  @@index([return_id, created_at])
+  @@index([cash_register_session_id])
+  @@map("return_settlements")
 }
 
 // ========================================
@@ -1402,6 +1469,7 @@ model CashRegisterSession {
 
   sales             Sale[]
   customer_payments CustomerPayment[]
+  return_settlements ReturnSettlement[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

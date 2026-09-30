@@ -27,7 +27,7 @@ function fromBase62(s) {
 }
 
 // Offset por prefijo dentro del rango de lock de cada sucursal
-const REF_LOCK_OFFSETS = { V: 1, Q: 2, P: 3, T: 4 }
+const REF_LOCK_OFFSETS = { V: 1, Q: 2, P: 3, T: 4, D: 5 }
 
 /**
  * Genera la siguiente referencia del prefijo EN LA SUCURSAL dada.
@@ -35,7 +35,7 @@ const REF_LOCK_OFFSETS = { V: 1, Q: 2, P: 3, T: 4 }
  * bloquear a las demás: 910000 + seq*10 + offset(prefijo).
  *
  * @param {import('@prisma/client').Prisma.TransactionClient} tx
- * @param {'V'|'Q'|'P'|'T'} prefix
+ * @param {'V'|'Q'|'P'|'T'|'D'} prefix
  * @param {{ id: string, code: string, seq: number }} branch
  */
 async function nextDocumentReference(tx, prefix, branch) {
@@ -61,6 +61,10 @@ async function nextDocumentReference(tx, prefix, branch) {
       const last = await tx.stockTransfer.findFirst({ where, orderBy: { reference: 'desc' }, select: { reference: true } })
       return last?.reference || null
     }
+    if (prefix === 'D') {
+      const last = await tx.return.findFirst({ where, orderBy: { reference: 'desc' }, select: { reference: true } })
+      return last?.reference || null
+    }
     const last = await tx.commercialDocument.findFirst({ where, orderBy: { reference: 'desc' }, select: { reference: true } })
     return last?.reference || null
   }
@@ -78,13 +82,23 @@ async function nextDocumentReference(tx, prefix, branch) {
         select: { id: true },
       }))
     }
+    if (prefix === 'D') {
+      return Boolean(await tx.return.findFirst({
+        where: { sale: { branch_id: branch.id }, reference },
+        select: { id: true },
+      }))
+    }
     return Boolean(await tx.commercialDocument.findFirst({
       where: { branch_id: branch.id, reference },
       select: { id: true },
     }))
   }
 
-  const branchScope = prefix === 'T' ? { from_branch_id: branch.id } : { branch_id: branch.id }
+  const branchScope = prefix === 'T'
+    ? { from_branch_id: branch.id }
+    : prefix === 'D'
+      ? { sale: { branch_id: branch.id } }
+      : { branch_id: branch.id }
   const lastRef = await findLast({ ...branchScope, reference: { startsWith: refPrefix } })
 
   let nextNum = 1

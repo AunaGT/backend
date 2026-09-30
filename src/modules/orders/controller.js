@@ -13,6 +13,7 @@ const { consumeLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../../services/priceResolution')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
+const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
 const { buildOrderDateFilter, normalizeOrderAdminDetails, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
 const { getCompanyModuleBlock } = require('../platform/service')
@@ -922,12 +923,14 @@ exports.convertToSale = async (req, res, next) => {
           select: { id: true, cost: true },
         })).map((p) => [String(p.id), p.cost])
       )
+      const netLineTotals = allocateNetLineTotals(fulfillments.map(({ line, qty }) => ({ price: line.unit_price, qty })), total)
       await tx.saleItem.createMany({
-        data: fulfillments.map(({ line, qty }) => ({
+        data: fulfillments.map(({ line, qty }, index) => ({
           sale_id: sale.id,
           product_id: line.product_id,
           price: line.unit_price,
           unit_cost: costos.get(String(line.product_id)) ?? null,
+          net_total: netLineTotals[index],
           qty,
         })),
       })

@@ -28,6 +28,7 @@ const {
 } = require('../../services/saleSearch')
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../../services/bomStock')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
+const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { requireBranch, branchWhere, hasPerm } = require('../../middlewares/tenant')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 
@@ -812,14 +813,16 @@ exports.create = async (req, res, next) => {
         },
       })
 
+      const netLineTotals = allocateNetLineTotals(resolvedItems, total)
       await tx.saleItem.createMany({
         // El costo se congela acá: es el de hoy, no el que tenga el producto
         // cuando alguien contabilice o mire el reporte dentro de seis meses.
-        data: resolvedItems.map(it => ({
+        data: resolvedItems.map((it, index) => ({
           sale_id: sale.id,
           product_id: it.product_id,
           price: it.price,
           unit_cost: prodMap.get(String(it.product_id))?.cost ?? null,
+          net_total: netLineTotals[index],
           qty: it.qty,
         })),
       })
