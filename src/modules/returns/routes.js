@@ -31,6 +31,10 @@ router.get('/:id', canView, controller.getById)
 // POST /api/returns - Crear nueva devolución
 router.post('/', canManage, controller.create)
 
+// Aprobación y liquidación son pasos separados: aprobar nunca mueve inventario ni dinero.
+router.post('/:id/approve', canManage, controller.approve)
+router.post('/:id/complete', canManage, controller.complete)
+
 // PATCH /api/returns/:id/status - Actualizar estado de devolución
 router.patch('/:id/status', canManage, controller.updateStatus)
 

@@ -26,6 +26,17 @@ ALTER TABLE "return_items"
   ADD COLUMN "disposition" "ReturnItemDisposition",
   ADD COLUMN "stock_location_id" UUID;
 
+-- Marca qué aprobaciones históricas ya tocaron existencias. No se asume que
+-- estén conciliadas: la API exige revisión explícita antes de completarlas.
+UPDATE "returns" r
+SET "legacy_stock_moved" = EXISTS (
+  SELECT 1
+  FROM "stock_movements" sm
+  WHERE sm."reason" = 'SALE_RETURN'
+    AND sm."ref_type" = 'return'
+    AND sm."ref_id" = r."id"::text
+);
+
 CREATE TABLE "return_settlements" (
   "id" UUID NOT NULL,
   "return_id" UUID NOT NULL,

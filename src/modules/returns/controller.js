@@ -10,11 +10,7 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { DateTime } = require('luxon')
-const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const {
-  expandLinesToStockMap,
-  restoreStockMap,
-  deductStockMap,
   getAvailabilityBatchWithKits,
 } = require('../../services/bomStock')
 const { branchWhere } = require('../../middlewares/tenant')
@@ -30,55 +26,7 @@ const {
   estimateRefundAmount,
   normalizeReturnLines,
 } = require('./domain')
-
-// El stock de una devolución/cambio se mueve en la sucursal DONDE SE VENDIÓ
-// (sale.branch_id), no en la del request.
-async function restoreReturnItemsStock(tx, returnItems, branchId, ctx) {
-  const stockMap = await expandLinesToStockMap(
-    tx,
-    returnItems.map((item) => ({ product_id: item.product_id, qty: item.qty_returned }))
-  )
-  const updatedProducts = await restoreStockMap(tx, stockMap, branchId, { reason: 'SALE_RETURN', ...ctx })
-  await ensureStockAlertsBatch(tx, updatedProducts, branchId)
-  return updatedProducts
-}
-
-/** Descuenta stock de los productos que el cliente se lleva en un cambio (EXCHANGE). */
-async function deductReplacementStock(tx, replacementItems, branchId, ctx) {
-  const stockMap = await expandLinesToStockMap(
-    tx,
-    replacementItems.map((item) => ({ product_id: item.product_id, qty: item.qty }))
-  )
-  const updatedProducts = await deductStockMap(tx, stockMap, branchId, { reason: 'SALE_RETURN', ...ctx })
-  await ensureStockAlertsBatch(tx, updatedProducts, branchId)
-  return updatedProducts
-}
-
-/**
- * Aplica el efecto de una devolución (REFUND) a la venta original: reduce las
- * cantidades vendidas y recalcula total_returned / adjusted_total. En un cambio
- * (EXCHANGE) la venta NO se toca (el cliente cambió mercadería por valor equivalente).
- */
-async function applyRefundToSale(tx, currentReturn) {
-  for (const returnItem of currentReturn.return_items) {
-    const saleItem = await tx.saleItem.findUnique({ where: { id: returnItem.sale_item_id } })
-    if (!saleItem) {
-      console.warn(`[RETURN PROCESS] SaleItem ${returnItem.sale_item_id} no encontrado`)
-      continue
-    }
-    const newQty = Math.max(0, saleItem.qty - returnItem.qty_returned)
-    await tx.saleItem.update({ where: { id: returnItem.sale_item_id }, data: { qty: newQty } })
-  }
-  const sale = await tx.sale.findUnique({ where: { id: currentReturn.sale_id } })
-  if (sale) {
-    const newTotalReturned = Number(sale.total_returned || 0) + Number(currentReturn.total_refund)
-    const newAdjustedTotal = Number(sale.total) - newTotalReturned
-    await tx.sale.update({
-      where: { id: currentReturn.sale_id },
-      data: { total_returned: newTotalReturned, adjusted_total: newAdjustedTotal },
-    })
-  }
-}
+const { approveReturn, completeReturn } = require('./application')
 
 /** Resuelve sale_id (UUID o referencia ej. V-000001) al id interno de la venta */
 async function resolveSaleId(saleIdOrRef, scope) {
@@ -672,6 +620,30 @@ exports.updateStatus = async (req, res, next) => {
       return res.status(400).json({ message: 'id y status_name son requeridos' })
     }
 
+    if (status_name === 'Aprobada') {
+      const result = await prismaTransaction.$transaction(async (tx) => approveReturn(tx, {
+        id,
+        scope: branchWhere(req),
+        userId: req.user?.sub,
+        resolution: req.body.approved_resolution,
+        lines: req.body.lines,
+        policy: await getReturnPolicy(tx, req.companyId),
+      }), { maxWait: 10000, timeout: 15000 })
+      return res.json(result)
+    }
+    if (status_name === 'Completada') {
+      const result = await completeReturn(prismaTransaction, {
+        id,
+        scope: branchWhere(req),
+        userId: req.user?.sub,
+        payload: req.body,
+      })
+      return res.json(result)
+    }
+    if (status_name !== 'Rechazada') {
+      return res.status(400).json({ message: `Estado "${status_name}" no permitido` })
+    }
+
     const result = await prismaTransaction.$transaction(async (tx) => {
       const currentReturn = await tx.return.findFirst({
         where: { id, sale: { ...branchWhere(req) } },
@@ -704,12 +676,6 @@ exports.updateStatus = async (req, res, next) => {
       } catch (error) {
         error.status = 400
         throw error
-      }
-
-      if (newStatusName === 'Completada') {
-        const err = new Error('Completar está temporalmente deshabilitado hasta reconciliar liquidación, caja e inventario histórico.')
-        err.status = 409
-        throw err
       }
 
       // Algunas aprobaciones históricas sí restauraron stock. No pueden
@@ -758,6 +724,36 @@ exports.updateStatus = async (req, res, next) => {
       timeout: 15000
     })
 
+    res.json(result)
+  } catch (e) {
+    next(e)
+  }
+}
+
+exports.approve = async (req, res, next) => {
+  try {
+    const result = await prismaTransaction.$transaction(async (tx) => approveReturn(tx, {
+      id: req.params.id,
+      scope: branchWhere(req),
+      userId: req.user?.sub,
+      resolution: req.body.approved_resolution,
+      lines: req.body.lines,
+      policy: await getReturnPolicy(tx, req.companyId),
+    }), { maxWait: 10000, timeout: 15000 })
+    res.json(result)
+  } catch (e) {
+    next(e)
+  }
+}
+
+exports.complete = async (req, res, next) => {
+  try {
+    const result = await completeReturn(prismaTransaction, {
+      id: req.params.id,
+      scope: branchWhere(req),
+      userId: req.user?.sub,
+      payload: req.body,
+    })
     res.json(result)
   } catch (e) {
     next(e)

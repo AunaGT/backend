@@ -175,6 +175,40 @@ async function syncSaleStatus(tx, saleId) {
   await tx.sale.update({ where: { id: saleId }, data: { payment_status: status } })
 }
 
+/** Plan mínimo para soltar abonos que quedaron por encima del nuevo total. */
+function planApplicationRelease(entries, amount) {
+  let pending = round2(amount)
+  if (!Number.isFinite(pending) || pending < 0) throw new ReceivableError('Monto a liberar inválido')
+  const ordered = [...(entries || [])].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+  const plan = []
+  for (const entry of ordered) {
+    if (pending <= ROUND_EPS) break
+    const current = round2(entry.amount)
+    const release = round2(Math.min(current, pending))
+    if (release <= 0) continue
+    plan.push({ id: entry.id, release, remaining: round2(current - release) })
+    pending = round2(pending - release)
+  }
+  if (pending > ROUND_EPS) throw new ReceivableError('El monto a liberar excede los abonos aplicados', 409)
+  return plan
+}
+
+/** Devuelve a saldo a favor la parte de abonos que ya excede el total ajustado. */
+async function releaseSaleOverpayment(tx, saleId, amount) {
+  const entries = await tx.salePaymentEntry.findMany({
+    where: { sale_id: saleId },
+    select: { id: true, amount: true, created_at: true },
+    orderBy: { created_at: 'desc' },
+  })
+  const plan = planApplicationRelease(entries, amount)
+  for (const item of plan) {
+    if (item.remaining <= ROUND_EPS) await tx.salePaymentEntry.delete({ where: { id: item.id } })
+    else await tx.salePaymentEntry.update({ where: { id: item.id }, data: { amount: item.remaining } })
+  }
+  await syncSaleStatus(tx, saleId)
+  return round2(plan.reduce((sum, item) => sum + item.release, 0))
+}
+
 /**
  * Cobros del cliente con dinero todavía sin aplicar a ninguna factura: el saldo
  * a favor. Se deriva igual que la deuda (`amount − Σ aplicaciones`) para no
@@ -398,6 +432,8 @@ module.exports = {
   planManual,
   openSalesOf,
   syncSaleStatus,
+  planApplicationRelease,
+  releaseSaleOverpayment,
   customerBalance,
   unappliedPayments,
   availableCredit,
