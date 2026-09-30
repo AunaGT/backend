@@ -17,6 +17,8 @@
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
 const { applyPromotion, applyMultiplePromotions, PROMOTION_TYPES } = require('../../services/promotionCalculator')
+const { buildPromotionListWhere, attachPromotionUsage } = require('./listFilters')
+const { validatePromotionDates, parsePromotionDate } = require('./validation')
 
 /**
  * Una promo se ve donde aplica: en toda la empresa o solo en sus sucursales.
@@ -103,19 +105,9 @@ async function generateUniqueCodes(count = 1, prefix = '', companyId) {
  */
 exports.list = async (req, res, next) => {
     try {
-        const { active, type_id } = req.query || {}
         const page = Math.max(1, Number(req.query.page ?? 1))
         const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 20)))
-
-        const where = { deleted: false, company_id: req.companyId, ...branchScope(req) }
-
-        if (active !== undefined) {
-            where.active = active === 'true'
-        }
-
-        if (type_id) {
-            where.type_id = Number(type_id)
-        }
+        const where = buildPromotionListWhere(req.query, req.companyId, branchScope(req))
 
         const totalItems = await prisma.promotion.count({ where })
         const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
@@ -127,7 +119,8 @@ exports.list = async (req, res, next) => {
                 type: true,
                 codes: {
                     where: { active: true },
-                    orderBy: { created_at: 'desc' }
+                    orderBy: { created_at: 'desc' },
+                    take: 1,
                 },
                 applicable_products: {
                     include: { product: { select: { id: true, name: true } } }
@@ -142,8 +135,15 @@ exports.list = async (req, res, next) => {
             take: pageSize,
         })
 
+        const usage = items.length ? await prisma.promotionCode.groupBy({
+            by: ['promotion_id'],
+            where: { promotion_id: { in: items.map((item) => item.id) }, company_id: req.companyId, active: true },
+            _sum: { current_uses: true },
+            _count: { id: true },
+        }) : []
+
         res.json({
-            items,
+            items: attachPromotionUsage(items, usage),
             page: safePage,
             pageSize,
             totalPages,
@@ -262,6 +262,8 @@ exports.create = async (req, res, next) => {
         if (!name || !type_id) {
             return res.status(400).json({ message: 'name y type_id son requeridos' })
         }
+        const dateError = validatePromotionDates(start_date, end_date)
+        if (dateError) return res.status(400).json({ message: dateError })
 
         // Validate required fields by promotion type
         const promotionType = await prisma.promotionType.findUnique({ where: { id: Number(type_id) } })
@@ -379,8 +381,8 @@ exports.create = async (req, res, next) => {
                     applies_to_all: applies_to_all ?? false,
                     trigger_product_id,
                     target_product_id,
-                    start_date: start_date ? new Date(start_date) : new Date(),
-                    end_date: end_date ? new Date(end_date) : null,
+                    start_date: start_date ? parsePromotionDate(start_date) : new Date(),
+                    end_date: end_date ? parsePromotionDate(end_date, true) : null,
                     max_uses: max_uses ? Number(max_uses) : null,
                     max_uses_per_customer: max_uses_per_customer ? Number(max_uses_per_customer) : null,
                     min_purchase_amount: min_purchase_amount ? Number(min_purchase_amount) : null,
@@ -570,6 +572,12 @@ exports.update = async (req, res, next) => {
             return res.status(404).json({ message: 'Promoción no encontrada' })
         }
 
+        const dateError = validatePromotionDates(
+            raw.start_date === undefined ? existing.start_date : raw.start_date,
+            raw.end_date === undefined ? existing.end_date : raw.end_date,
+        )
+        if (dateError) return res.status(400).json({ message: dateError })
+
         const typeName = existing.type.name
         const supportsRestrictedScope = ['PERCENTAGE', 'BUY_X_GET_Y', 'MIN_QTY_DISCOUNT'].includes(typeName)
 
@@ -600,10 +608,10 @@ exports.update = async (req, res, next) => {
         if (raw.trigger_product_id !== undefined) data.trigger_product_id = raw.trigger_product_id || null
         if (raw.target_product_id !== undefined) data.target_product_id = raw.target_product_id || null
         if (raw.start_date !== undefined) {
-            data.start_date = raw.start_date ? new Date(raw.start_date) : undefined
+            data.start_date = raw.start_date ? parsePromotionDate(raw.start_date) : undefined
         }
         if (raw.end_date !== undefined) {
-            data.end_date = raw.end_date ? new Date(raw.end_date) : null
+            data.end_date = raw.end_date ? parsePromotionDate(raw.end_date, true) : null
         }
         if (raw.max_uses !== undefined) {
             data.max_uses = raw.max_uses == null || raw.max_uses === '' ? null : Number(raw.max_uses)
@@ -727,7 +735,7 @@ exports.delete = async (req, res, next) => {
  */
 exports.validateCode = async (req, res, next) => {
     try {
-        const { code, items = [] } = req.body
+        const { code, items = [], customer_contact_id: customerId } = req.body
 
         if (!code) {
             return res.status(400).json({ valid: false, message: 'Código requerido' })
@@ -778,6 +786,18 @@ exports.validateCode = async (req, res, next) => {
         // Check max uses for this specific code
         if (promotion.max_uses && promotionCode.current_uses >= promotion.max_uses) {
             return res.json({ valid: false, message: 'Este código ha alcanzado su límite de usos' })
+        }
+
+        if (promotion.max_uses_per_customer) {
+            const { customerLimitError } = require('./customerLimit')
+            const priorUses = customerId ? await prisma.salePromotion.count({
+                where: {
+                    promotion_id: promotion.id,
+                    sale: { is: { customer_contact_id: customerId, status: { is: { name: { not: 'Cancelada' } } } } },
+                },
+            }) : 0
+            const message = customerLimitError(promotion.max_uses_per_customer, customerId, priorUses)
+            if (message) return res.json({ valid: false, message })
         }
 
         // Calculate discount

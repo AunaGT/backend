@@ -584,6 +584,19 @@ exports.create = async (req, res, next) => {
           }
         }
 
+        const limitedPromotionIds = [...new Set(promotionCodeRows
+          .filter((row) => row.promotion.max_uses_per_customer)
+          .map((row) => row.promotion.id))].sort()
+        if (limitedPromotionIds.length && !customerContactId) {
+          const err = new Error('Esta promoción requiere seleccionar un cliente')
+          err.status = 400
+          throw err
+        }
+        for (const promotionId of limitedPromotionIds) {
+          // Orden estable para evitar interbloqueos si una venta trae varios códigos.
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${promotionId} || ':' || ${customerContactId}))::text`
+        }
+
         const candidatePromotions = []
         const seenPromotionIds = new Set()
         for (const code of requestedCodes) {
@@ -615,6 +628,20 @@ exports.create = async (req, res, next) => {
             const err = new Error(`El código ${code} alcanzó su límite de usos`)
             err.status = 400
             throw err
+          }
+
+          if (promo.max_uses_per_customer) {
+            const { customerLimitError } = require('../promotions/customerLimit')
+            const missingCustomer = customerLimitError(promo.max_uses_per_customer, customerContactId, 0)
+            if (missingCustomer) throw Object.assign(new Error(missingCustomer), { status: 400 })
+            const priorUses = await tx.salePromotion.count({
+              where: {
+                promotion_id: promo.id,
+                sale: { is: { customer_contact_id: customerContactId, status: { is: { name: { not: 'Cancelada' } } } } },
+              },
+            })
+            const limitError = customerLimitError(promo.max_uses_per_customer, customerContactId, priorUses)
+            if (limitError) throw Object.assign(new Error(limitError), { status: 400 })
           }
 
           candidatePromotions.push(promo)
