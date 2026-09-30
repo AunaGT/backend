@@ -62,6 +62,50 @@ function cashOrBank(defaults, paymentMethod) {
   return defaults.bank
 }
 
+function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequenoTaxOf }) {
+  const refund = round2(ret.total_refund)
+  const { base, iva } = splitIva(refund, ivaRate)
+  const lines = splitVat
+    ? [
+        { account_id: defaults.salesReturns.id, debit: base, credit: 0 },
+        { account_id: defaults.ivaDebit.id, debit: iva, credit: 0 },
+      ]
+    : [{ account_id: defaults.salesReturns.id, debit: refund, credit: 0 }]
+
+  let assigned = 0
+  const addCredit = (account, rawAmount) => {
+    const amount = round2(Math.min(Number(rawAmount) || 0, refund - assigned))
+    if (amount <= 0) return
+    lines.push({ account_id: account.id, debit: 0, credit: amount })
+    assigned = round2(assigned + amount)
+  }
+  if (ret.type !== 'EXCHANGE') {
+    for (const settlement of ret.settlements || []) {
+      if (settlement.kind === 'CREDIT_OFFSET' || settlement.kind === 'CUSTOMER_CREDIT') {
+        addCredit(defaults.receivables, settlement.amount)
+      } else if (settlement.kind === 'REFUND') {
+        addCredit(cashOrBank(defaults, settlement.payment_method), settlement.amount)
+      }
+    }
+  }
+  if (assigned < refund) addCredit(cashOrBank(defaults, ret.sale?.payment_method), refund - assigned)
+
+  const tax = pequenoTaxOf(refund)
+  if (tax > 0) {
+    lines.push({ account_id: defaults.pequenoTax.id, debit: tax, credit: 0 })
+    lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: 0, credit: tax })
+  }
+  const cost = costBase(round2((ret.return_items || []).reduce((sum, item) => {
+    const qty = Number(item.restock_qty ?? item.qty_returned ?? 0)
+    return sum + qty * Number(item.sale_item?.unit_cost ?? item.product?.cost ?? 0)
+  }, 0)))
+  if (cost > 0) {
+    lines.push({ account_id: defaults.inventory.id, debit: cost, credit: 0 })
+    lines.push({ account_id: defaults.cogs.id, debit: 0, credit: cost })
+  }
+  return lines
+}
+
 /** Postea una operación en su propia transacción; devuelve null si ok, o razón si se omite. */
 async function tryPost(prisma, build) {
   try {
@@ -161,19 +205,19 @@ async function postPendingOperations(prisma, userId, companyId) {
     track(label, reason)
   }
 
-  // ---- Devoluciones aprobadas/completadas ----
+  // ---- Devoluciones completadas ----
   const pendingReturns = await pendingIds(prisma, 'RETURN', companyId, Prisma.sql`
     SELECT r.id::text AS id, r.return_date AS ord
     FROM returns r
     JOIN sales s ON s.id = r.sale_id
     JOIN branches b ON b.id = s.branch_id
     JOIN return_statuses rs ON rs.id = r.status_id
-    WHERE b.company_id = ${companyId}::uuid AND rs.name IN ('Aprobada', 'Completada')
+    WHERE b.company_id = ${companyId}::uuid AND rs.name = 'Completada'
   `)
   const returns = await prisma.return.findMany({
     where: { id: { in: pendingReturns } },
     select: {
-      id: true, return_date: true, total_refund: true,
+      id: true, return_date: true, total_refund: true, type: true,
       sale: {
         select: {
           reference: true, customer: true, branch_id: true,
@@ -183,10 +227,16 @@ async function postPendingOperations(prisma, userId, companyId) {
       },
       return_items: {
         select: {
-          qty_returned: true,
+          qty_returned: true, restock_qty: true,
           // Lo devuelto vuelve al inventario al costo con el que salió.
           sale_item: { select: { unit_cost: true } },
           product: { select: { cost: true } },
+        },
+      },
+      settlements: {
+        select: {
+          kind: true, amount: true,
+          payment_method: { select: { name: true, is_credit: true } },
         },
       },
     },
@@ -196,36 +246,14 @@ async function postPendingOperations(prisma, userId, companyId) {
     const label = `Devolución venta ${ret.sale?.reference || ret.id.slice(0, 8)}`
     const refund = round2(ret.total_refund)
     if (refund <= 0) { track(label, 'monto 0'); continue }
-    const { base, iva } = splitIva(refund, ivaRate)
-    const cost = costBase(round2(ret.return_items.reduce(
-      (s, i) => s + i.qty_returned * Number(i.sale_item?.unit_cost ?? i.product.cost ?? 0), 0
-    )))
-    const refundAccount = cashOrBank(defaults, ret.sale?.payment_method)
-    const lines = splitVat
-      ? [
-          { account_id: defaults.salesReturns.id, debit: base, credit: 0 },
-          { account_id: defaults.ivaDebit.id, debit: iva, credit: 0 },
-          { account_id: refundAccount.id, debit: 0, credit: refund },
-        ]
-      : [
-          { account_id: defaults.salesReturns.id, debit: refund, credit: 0 },
-          { account_id: refundAccount.id, debit: 0, credit: refund },
-        ]
-    if (refundAccount.id === defaults.receivables.id) {
+    const lines = buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequenoTaxOf })
+    if (lines.some((line) => line.account_id === defaults.receivables.id && line.credit > 0)) {
       const customerName = ret.sale?.customerContact?.name || ret.sale?.customer
       if (customerName) {
-        const refundLine = lines.find((l) => l.account_id === refundAccount.id)
-        if (refundLine) refundLine.description = `Cliente: ${customerName}`
+        for (const line of lines.filter((item) => item.account_id === defaults.receivables.id && item.credit > 0)) {
+          line.description = `Cliente: ${customerName}`
+        }
       }
-    }
-    const refundTax = pequenoTaxOf(refund)
-    if (refundTax > 0) {
-      lines.push({ account_id: defaults.pequenoTax.id, debit: refundTax, credit: 0 })
-      lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: 0, credit: refundTax })
-    }
-    if (cost > 0) {
-      lines.push({ account_id: defaults.inventory.id, debit: cost, credit: 0 })
-      lines.push({ account_id: defaults.cogs.id, debit: 0, credit: cost })
     }
     const reason = await tryPost(prisma, () => ({
       company_id: companyId,
@@ -340,7 +368,9 @@ async function postPendingOperations(prisma, userId, companyId) {
     SELECT cp.id::text AS id, cp.paid_at AS ord
     FROM customer_payments cp
     JOIN branches b ON b.id = cp.branch_id
+    LEFT JOIN returns r ON r.reference = cp.reference
     WHERE b.company_id = ${companyId}::uuid
+      AND NOT (cp.kind = 'CREDIT_NOTE' AND r.id IS NOT NULL)
   `)
   const collections = await prisma.customerPayment.findMany({
     where: { id: { in: pendingCollections } },
@@ -568,4 +598,4 @@ async function postPendingOperations(prisma, userId, companyId) {
   return { posted, skipped, hasMore }
 }
 
-module.exports = { postPendingOperations }
+module.exports = { buildReturnPosting, postPendingOperations }

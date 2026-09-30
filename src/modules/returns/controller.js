@@ -25,6 +25,7 @@ const {
   evaluateReturnEligibility,
   estimateRefundAmount,
   normalizeReturnLines,
+  returnFiscalStatus,
 } = require('./domain')
 const { approveReturn, completeReturn } = require('./application')
 const { resolvePricedSaleItems } = require('../sales/application')
@@ -259,7 +260,10 @@ exports.getById = async (req, res, next) => {
       return res.status(404).json({ message: 'Devolución no encontrada' })
     }
 
-    res.json(returnRecord)
+    res.json({
+      ...returnRecord,
+      fiscal: returnFiscalStatus(returnRecord.sale?.sale_dtes),
+    })
   } catch (e) {
     next(e)
   }

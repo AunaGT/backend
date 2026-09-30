@@ -10,7 +10,7 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
-const { normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
+const { applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
 const { getTimezone } = require('../../utils/getTimezone')
 
 const number = (v) => {
@@ -275,17 +275,16 @@ exports.calculateTheoretical = async (req, res, next) => {
     // La venta al crédito no entra al arqueo: no hubo dinero que contar. Lo que
     // sí entra es el cobro posterior, más abajo.
     salesWhere.payment_method = { is_credit: false }
-    const sales = await prisma.sale.findMany({
+    const saleRows = await prisma.sale.findMany({
       where: salesWhere,
       include: {
         payment_method: true,
-        returns: {
-          where: {
-            status: { name: 'Completada' }
-          }
-        }
+        replacement_for_return: { select: { id: true } },
       }
     })
+    // La venta vinculada de un cambio no es una entrada de caja por su total:
+    // el cliente solo paga (o recibe) la diferencia, registrada en settlements.
+    const sales = saleRows.filter((sale) => !sale.replacement_for_return)
 
     // Calcular totales teóricos
     let theoreticalSales = 0
@@ -293,11 +292,7 @@ exports.calculateTheoretical = async (req, res, next) => {
     const paymentMethodsMap = new Map()
 
     for (const sale of sales) {
-      const saleAdjusted = number(sale.adjusted_total)
-      const saleReturned = number(sale.total_returned)
-      
       theoreticalSales += number(sale.total)
-      theoreticalReturns += saleReturned
 
       // Agrupar por método de pago
       const methodKey = sale.payment_method_id
@@ -314,13 +309,13 @@ exports.calculateTheoretical = async (req, res, next) => {
       }
 
       const method = paymentMethodsMap.get(methodKey)
-      method.theoretical_amount += saleAdjusted  // Usar adjusted_total (con devoluciones)
+      method.theoretical_amount += number(sale.total)
       method.theoretical_count += 1
       method.sales.push({
         id: sale.id,
         total: sale.total,
-        adjusted_total: sale.adjusted_total,
-        returned: sale.total_returned
+        adjusted_total: sale.total,
+        returned: 0
       })
     }
 
@@ -378,6 +373,29 @@ exports.calculateTheoretical = async (req, res, next) => {
       method.theoretical_count += 1
     }
 
+    let returnSettlementWhere
+    if (isOwn && cashRegisterSessionId) {
+      returnSettlementWhere = { cash_register_session_id: cashRegisterSessionId }
+    } else {
+      returnSettlementWhere = {
+        created_at: { gte: start, lte: end },
+        return: { sale: { ...branchWhere(req) } },
+      }
+      if (cashierId) returnSettlementWhere.registered_by = String(cashierId)
+    }
+    returnSettlementWhere.kind = { in: ['REFUND', 'COLLECTION'] }
+    const returnSettlements = await prisma.returnSettlement.findMany({
+      where: returnSettlementWhere,
+      include: {
+        payment_method: true,
+        return: { select: { reference: true, sale: { select: { reference: true } } } },
+      },
+      orderBy: { created_at: 'asc' },
+    })
+    const settlementTotals = applyReturnSettlements(paymentMethodsMap, returnSettlements)
+    theoreticalReturns = settlementTotals.refunds
+    theoreticalCollections += settlementTotals.collections
+
     let theoreticalTotal = theoreticalSales - theoreticalReturns + theoreticalCollections
 
     const cashDetail = await applyOpeningFloatToCashBreakdown(paymentMethodsMap, sessionOpeningFloat)
@@ -417,6 +435,15 @@ exports.calculateTheoretical = async (req, res, next) => {
         payment_method: c.payment_method?.name || null,
         paid_at: c.paid_at,
         reference: c.reference
+      })),
+      return_settlements: returnSettlements.map((settlement) => ({
+        id: settlement.id,
+        return_reference: settlement.return?.reference || null,
+        sale_reference: settlement.return?.sale?.reference || null,
+        kind: settlement.kind,
+        amount: number(settlement.amount),
+        payment_method: settlement.payment_method?.name || null,
+        created_at: settlement.created_at,
       })),
       cash_session: cashDetail.openingFloat > 0
         ? {

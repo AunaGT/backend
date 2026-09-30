@@ -136,6 +136,22 @@ function evaluateReturnEligibility({ saleDate, statusName, availableUnits, polic
   return { eligible: reasons.length === 0, daysElapsed, reasons, exceptionApplied }
 }
 
+function returnFiscalStatus(saleDtes) {
+  const originalDocuments = (saleDtes || [])
+    .filter((dte) => dte.authorization || /autoriz/i.test(String(dte.status || '')))
+    .map((dte) => ({
+      id: dte.id,
+      authorization: dte.authorization || null,
+      series: dte.series || null,
+      number: dte.number || null,
+    }))
+  return {
+    requires_credit_note: originalDocuments.length > 0,
+    status: originalDocuments.length ? 'PENDING_EXTERNAL_CREDIT_NOTE' : 'NOT_APPLICABLE',
+    original_documents: originalDocuments,
+  }
+}
+
 module.exports = {
   ACTIVE_RETURN_STATUSES,
   DEFAULT_RETURN_POLICY,
@@ -147,4 +163,5 @@ module.exports = {
   estimateRefundAmount,
   normalizeReturnPolicy,
   normalizeReturnLines,
+  returnFiscalStatus,
 }
