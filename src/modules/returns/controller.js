@@ -18,6 +18,16 @@ const {
   getAvailabilityBatchWithKits,
 } = require('../../services/bomStock')
 const { branchWhere } = require('../../middlewares/tenant')
+const { getReturnPolicy } = require('../../services/returnPolicy')
+const {
+  ACTIVE_RETURN_STATUSES,
+  availableReturnQty,
+  assertReturnTransition,
+  buildReturnWhere,
+  evaluateReturnEligibility,
+  estimateRefundAmount,
+  normalizeReturnLines,
+} = require('./domain')
 
 // El stock de una devolución/cambio se mueve en la sucursal DONDE SE VENDIÓ
 // (sale.branch_id), no en la del request.
@@ -87,16 +97,12 @@ async function resolveSaleId(saleIdOrRef, scope) {
  */
 exports.list = async (req, res, next) => {
   try {
-    const { status, sale_id } = req.query || {}
+    const { status, sale_id, search, type, reason, date_from, date_to } = req.query || {}
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(1000, Math.max(1, Number(req.query.pageSize ?? 50)))
 
     // Una devolución "vive" en la sucursal de su venta.
-    const where = { sale: { ...branchWhere(req) } }
-
-    if (status) {
-      where.status = { name: String(status) }
-    }
+    const where = buildReturnWhere(branchWhere(req), { status, search, type, reason, date_from, date_to })
 
     if (sale_id) {
       const resolvedId = await resolveSaleId(sale_id, branchWhere(req))
@@ -114,6 +120,7 @@ exports.list = async (req, res, next) => {
           include: {
             status: true,
             payment_method: true,
+            customerContact: { select: { id: true, name: true } },
             branch: { select: { id: true, name: true, code: true } }
           }
         },
@@ -164,6 +171,99 @@ exports.list = async (req, res, next) => {
   }
 }
 
+/** GET /api/returns/eligible-sales - ventas completadas con unidades aún retornables. */
+exports.eligibleSales = async (req, res, next) => {
+  try {
+    const search = String(req.query.search || '').trim()
+    const requestedSaleId = req.query.sale_id
+    const page = Math.max(1, Number(req.query.page || 1))
+    const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize || 10)))
+    const resolvedSaleId = requestedSaleId ? await resolveSaleId(requestedSaleId, branchWhere(req)) : null
+    const where = {
+      ...branchWhere(req),
+      ...(!requestedSaleId && { status: { name: 'Completada' } }),
+      ...(requestedSaleId && { id: resolvedSaleId || '__not_found__' }),
+      ...(search && {
+        OR: [
+          { reference: { contains: search, mode: 'insensitive' } },
+          { customer: { contains: search, mode: 'insensitive' } },
+          { customerContact: { is: { name: { contains: search, mode: 'insensitive' } } } },
+        ],
+      }),
+    }
+    const [sales, policy] = await Promise.all([prisma.sale.findMany({
+      where,
+      select: {
+        id: true,
+        reference: true,
+        date: true,
+        total: true,
+        customer: true,
+        status: { select: { name: true } },
+        customerContact: { select: { id: true, name: true } },
+        sale_items: {
+          select: {
+            id: true,
+            qty: true,
+            price: true,
+            product_id: true,
+            product: { select: { id: true, name: true, barcode: true, image_url: true } },
+            return_items: {
+              select: { qty_returned: true, return: { select: { status: { select: { name: true } } } } },
+            },
+          },
+        },
+      },
+      orderBy: { date: 'desc' },
+    }), getReturnPolicy(prisma, req.companyId)])
+    const eligible = sales.map((sale) => {
+      const grossTotal = sale.sale_items.reduce((sum, item) => sum + Number(item.price) * item.qty, 0)
+      const saleItems = sale.sale_items.map((item) => ({
+        ...item,
+        estimated_unit_refund: estimateRefundAmount({
+          saleTotal: sale.total,
+          grossTotal,
+          unitPrice: item.price,
+          qty: 1,
+        }),
+        available_to_return: availableReturnQty(item.qty, item.return_items.map((row) => ({
+          qty_returned: row.qty_returned,
+          status: row.return.status,
+        }))),
+        return_items: undefined,
+      })).filter((item) => item.available_to_return > 0)
+      const eligibility = evaluateReturnEligibility({
+        saleDate: sale.date,
+        statusName: sale.status?.name,
+        availableUnits: saleItems.reduce((sum, item) => sum + item.available_to_return, 0),
+        policy,
+      })
+      return {
+        ...sale,
+        sale_items: saleItems,
+        eligible: eligibility.eligible,
+        days_elapsed: eligibility.daysElapsed,
+        eligibility_reasons: eligibility.reasons,
+        return_policy: policy,
+      }
+    }).filter((sale) => requestedSaleId || sale.eligible)
+    const totalItems = eligible.length
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+    const safePage = Math.min(page, totalPages)
+    res.json({
+      items: eligible.slice((safePage - 1) * pageSize, safePage * pageSize),
+      page: safePage,
+      pageSize,
+      totalItems,
+      totalPages,
+      nextPage: safePage < totalPages ? safePage + 1 : null,
+      prevPage: safePage > 1 ? safePage - 1 : null,
+    })
+  } catch (e) {
+    next(e)
+  }
+}
+
 /**
  * GET /api/returns/:id
  * Get a specific return by ID
@@ -179,6 +279,8 @@ exports.getById = async (req, res, next) => {
           include: {
             status: true,
             payment_method: true,
+            customerContact: { select: { id: true, name: true } },
+            sale_dtes: true,
             branch: { select: { id: true, name: true, code: true } },
             sale_items: {
               include: {
@@ -219,8 +321,13 @@ exports.getById = async (req, res, next) => {
  */
 exports.create = async (req, res, next) => {
   try {
-    const { sale_id: saleIdOrRef, reason, items, notes, type, replacements } = req.body
+    const { sale_id: saleIdOrRef, reason, items, notes, type, replacements, policy_override_reason } = req.body
     const returnType = type === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND'
+    const cleanReason = String(reason || '').trim()
+
+    if (type && !['REFUND', 'EXCHANGE'].includes(type)) {
+      return res.status(400).json({ message: 'Tipo de devolución no válido.' })
+    }
 
     if (!saleIdOrRef || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -228,9 +335,13 @@ exports.create = async (req, res, next) => {
       })
     }
 
-    if (returnType === 'EXCHANGE' && (!Array.isArray(replacements) || replacements.length === 0)) {
-      return res.status(400).json({
-        message: 'Un cambio requiere al menos un producto de reemplazo (replacements).'
+    if (!cleanReason) {
+      return res.status(400).json({ message: 'El motivo de la devolución es requerido.' })
+    }
+
+    if (returnType === 'EXCHANGE') {
+      return res.status(409).json({
+        message: 'Los cambios nuevos están temporalmente deshabilitados hasta completar su liquidación y venta vinculada.'
       })
     }
 
@@ -240,18 +351,32 @@ exports.create = async (req, res, next) => {
     }
 
     const created = await prismaTransaction.$transaction(async (tx) => {
+      // Serializa solicitudes sobre la misma venta para que dos peticiones no
+      // consuman simultáneamente las últimas unidades disponibles.
+      await tx.$queryRaw`SELECT id FROM sales WHERE id = ${sale_id}::uuid FOR UPDATE`
+
       // 1. Validar que la venta existe y está completada
-      const sale = await tx.sale.findFirst({
+      const [sale, policy] = await Promise.all([tx.sale.findFirst({
         where: { id: sale_id, ...branchWhere(req) },
         include: {
           status: true,
           sale_items: {
             include: {
-              product: true
+              product: true,
+              return_items: {
+                select: {
+                  qty_returned: true,
+                  return: { select: { status: { select: { name: true } } } },
+                },
+              },
             }
-          }
+          },
+          returns: {
+            where: { status: { name: { in: ACTIVE_RETURN_STATUSES } } },
+            select: { total_refund: true },
+          },
         }
-      })
+      }), getReturnPolicy(tx, req.companyId)])
 
       if (!sale) {
         const err = new Error('Venta no encontrada')
@@ -265,15 +390,42 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
+      const canOverridePolicy = String(req.user?.role?.name || req.user?.role_name || '').toLowerCase() === 'admin' ||
+        (Array.isArray(req.user?.permissions) && req.user.permissions.includes('returns.override_policy'))
+      const policyResult = evaluateReturnEligibility({
+        saleDate: sale.date,
+        statusName: sale.status.name,
+        availableUnits: sale.sale_items.reduce((sum, item) => sum + availableReturnQty(item.qty, item.return_items.map((row) => ({ qty_returned: row.qty_returned, status: row.return.status }))), 0),
+        policy,
+        override: { authorized: canOverridePolicy, reason: policy_override_reason },
+      })
+      if (policyResult.reasons.includes('RETURN_WINDOW_EXPIRED') && String(policy_override_reason || '').trim() && !canOverridePolicy) {
+        const err = new Error('No tienes permiso para autorizar una devolución fuera de plazo.')
+        err.status = 403
+        throw err
+      }
+      if (!policyResult.eligible) {
+        const expired = policyResult.reasons.includes('RETURN_WINDOW_EXPIRED')
+        const err = new Error(expired
+          ? `La venta superó el plazo configurable de ${policy.windowDays} días para devoluciones.`
+          : 'La venta ya no tiene unidades elegibles para devolución.')
+        err.status = expired ? 409 : 400
+        throw err
+      }
+
       // 2. Validar items y calcular totales
+      const normalizedItems = normalizeReturnLines(items)
       const saleItemsMap = new Map(
         sale.sale_items.map(si => [si.id, si])
       )
+      const grossTotal = sale.sale_items.reduce((sum, item) => sum + Number(item.price) * item.qty, 0)
+      const alreadyReservedAmount = sale.returns.reduce((sum, item) => sum + Number(item.total_refund), 0)
+      const availableNetAmount = Math.max(0, Number(sale.total) - alreadyReservedAmount)
 
       let totalRefund = 0
       const validatedItems = []
 
-      for (const item of items) {
+      for (const item of normalizedItems) {
         const { sale_item_id, product_id, qty_returned } = item
 
         if (!sale_item_id || !product_id || !qty_returned || qty_returned <= 0) {
@@ -295,18 +447,12 @@ exports.create = async (req, res, next) => {
           throw err
         }
 
-        // Verificar que no se devuelva más de lo vendido
-        const alreadyReturned = await tx.returnItem.aggregate({
-          where: {
-            sale_item_id: Number(sale_item_id)
-          },
-          _sum: {
-            qty_returned: true
-          }
-        })
-
-        const previouslyReturned = alreadyReturned._sum.qty_returned || 0
-        const availableToReturn = saleItem.qty - previouslyReturned
+        const activeReturns = saleItem.return_items.map((row) => ({
+          qty_returned: row.qty_returned,
+          status: row.return.status,
+        }))
+        const availableToReturn = availableReturnQty(saleItem.qty, activeReturns)
+        const previouslyReturned = saleItem.qty - availableToReturn
 
         if (qty_returned > availableToReturn) {
           const err = new Error(
@@ -317,7 +463,12 @@ exports.create = async (req, res, next) => {
           throw err
         }
 
-        const refundAmount = Number(saleItem.price) * Number(qty_returned)
+        const refundAmount = estimateRefundAmount({
+          saleTotal: sale.total,
+          grossTotal,
+          unitPrice: saleItem.price,
+          qty: qty_returned,
+        })
         totalRefund += refundAmount
 
         validatedItems.push({
@@ -327,6 +478,12 @@ exports.create = async (req, res, next) => {
           refund_amount: refundAmount,
           reason: item.reason || null
         })
+      }
+
+      if (totalRefund > availableNetAmount + 0.001) {
+        const err = new Error(`El reembolso excede el neto disponible de la venta (${availableNetAmount.toFixed(2)})`)
+        err.status = 409
+        throw err
       }
 
       // 2b. Validar productos de reemplazo (solo cambios) y calcular la diferencia
@@ -409,8 +566,11 @@ exports.create = async (req, res, next) => {
         data: {
           sale_id,
           type: returnType,
-          reason: reason || null,
-          notes: notes || null,
+          reason: cleanReason,
+          notes: [
+            String(notes || '').trim(),
+            policyResult.exceptionApplied ? `Excepción de plazo autorizada: ${String(policy_override_reason).trim()}` : '',
+          ].filter(Boolean).join('\n') || null,
           total_refund: totalRefund,
           price_difference: priceDifference,
           items_count: validatedItems.length,
@@ -487,35 +647,18 @@ exports.create = async (req, res, next) => {
 exports.updateStatus = async (req, res, next) => {
   try {
     const { id } = req.params
-    const { status_name, restore_stock } = req.body
+    const { status_name } = req.body
 
     if (!id || !status_name) {
       return res.status(400).json({ message: 'id y status_name son requeridos' })
     }
 
-    // restore_stock es opcional y solo aplica cuando status_name = 'Aprobada'
-    // Por defecto es true si no se especifica
-    const shouldRestoreStock = status_name === 'Aprobada'
-      ? (restore_stock !== undefined ? restore_stock : true)
-      : false
-
     const result = await prismaTransaction.$transaction(async (tx) => {
-      // 1. Cargar devolución actual
       const currentReturn = await tx.return.findFirst({
         where: { id, sale: { ...branchWhere(req) } },
         include: {
           sale: { select: { branch_id: true } },
           status: true,
-          return_items: {
-            include: {
-              product: true
-            }
-          },
-          replacement_items: {
-            include: {
-              product: true
-            }
-          }
         }
       })
 
@@ -525,7 +668,6 @@ exports.updateStatus = async (req, res, next) => {
         throw err
       }
 
-      // 2. Obtener el nuevo estado
       const newStatus = await tx.returnStatus.findFirst({
         where: { name: String(status_name) }
       })
@@ -538,88 +680,36 @@ exports.updateStatus = async (req, res, next) => {
 
       const prevStatusName = currentReturn.status.name
       const newStatusName = newStatus.name
-      const saleBranchId = currentReturn.sale?.branch_id
-      const ledgerCtx = { refType: 'return', refId: String(id), userId: req.user?.sub || null }
+      try {
+        assertReturnTransition(prevStatusName, newStatusName)
+      } catch (error) {
+        error.status = 400
+        throw error
+      }
 
-      // 3. Validar transición de estados
-      if (prevStatusName === 'Completada' || prevStatusName === 'Rechazada') {
-        const err = new Error(`No se puede cambiar el estado de una devolución ${prevStatusName}`)
-        err.status = 400
+      if (newStatusName === 'Completada') {
+        const err = new Error('Completar está temporalmente deshabilitado hasta reconciliar liquidación, caja e inventario histórico.')
+        err.status = 409
         throw err
       }
 
-      // 4. Lógica de procesamiento según transición de estados
-      const isCompletingFromApproved = (newStatusName === 'Completada') && prevStatusName === 'Aprobada'
-      const isCompletingFromPending = (newStatusName === 'Completada') && prevStatusName === 'Pendiente'
-      const isApproving = (newStatusName === 'Aprobada') && prevStatusName === 'Pendiente'
-
-
-      const isExchange = currentReturn.type === 'EXCHANGE'
-
-      // CASO 1: "Aprobada" -> "Completada". REFUND actualiza la venta (el stock de
-      // devueltos ya se restauró al aprobar). EXCHANGE no toca la venta.
-      if (isCompletingFromApproved) {
-        if (isExchange) {
-          console.log(`[EXCHANGE PROCESS] Return ${id}: ${prevStatusName} -> ${newStatusName}. Descontando stock de reemplazos (venta sin cambios)...`)
-        } else {
-          console.log(`[RETURN PROCESS] Return ${id}: ${prevStatusName} -> ${newStatusName}. Actualizando venta (sin restaurar stock, ya restaurado al aprobar)...`)
-          await applyRefundToSale(tx, currentReturn)
-        }
-      }
-      // CASO 2: "Pendiente" -> "Completada" directo. REFUND ajusta la venta;
-      // ambos tipos restauran el stock de los productos devueltos.
-      else if (isCompletingFromPending) {
-        if (isExchange) {
-          console.log(`[EXCHANGE PROCESS] Return ${id}: ${prevStatusName} -> ${newStatusName}. Cambio directo (venta sin cambios)...`)
-        } else {
-          console.log(`[RETURN PROCESS] Return ${id}: ${prevStatusName} -> ${newStatusName}. Procesando devolución...`)
-          await applyRefundToSale(tx, currentReturn)
-        }
-
-        console.log(`[RETURN STOCK RESTORE] Return ${id}: restaurando stock de devueltos al completar...`)
-        const restored = await restoreReturnItemsStock(tx, currentReturn.return_items, saleBranchId, ledgerCtx)
-        restored.forEach((p) => console.log(`[RETURN STOCK RESTORE] ${p.name}: stock = ${p.stock}`))
-      }
-
-      // Cambios: al completar, descontar el stock de los productos de reemplazo.
-      if (isExchange && (isCompletingFromApproved || isCompletingFromPending)) {
-        const deducted = await deductReplacementStock(tx, currentReturn.replacement_items, saleBranchId, ledgerCtx)
-        deducted.forEach((p) => console.log(`[EXCHANGE STOCK] ${p.name}: stock = ${p.stock}`))
-      }
-
-      // CASO 3: Si se aprueba desde "Pendiente", restaurar stock solo si restore_stock es true
-      if (isApproving && shouldRestoreStock) {
-        console.log(`[RETURN STOCK RESTORE] Return ${id}: ${prevStatusName} -> ${newStatusName}. Restaurando stock solamente...`)
-        const updatedProducts = await restoreReturnItemsStock(tx, currentReturn.return_items, saleBranchId, ledgerCtx)
-        updatedProducts.forEach((p) => {
-          console.log(`[RETURN STOCK RESTORE] ${p.name}: stock restaurado = ${p.stock}`)
+      // Algunas aprobaciones históricas sí restauraron stock. No pueden
+      // rechazarse hasta clasificarlas para evitar dejar inventario ficticio.
+      if (prevStatusName === 'Aprobada' && newStatusName === 'Rechazada') {
+        const priorStockEffects = await tx.stockMovement.count({
+          where: { reason: 'SALE_RETURN', ref_type: 'return', ref_id: id },
         })
-        console.log(`[RETURN STOCK RESTORE] Alertas de stock actualizadas`)
-      } else if (isApproving && !shouldRestoreStock) {
-        console.log(`[RETURN STATUS UPDATE] Return ${id}: ${prevStatusName} -> ${newStatusName}. Stock NO será restaurado (restore_stock=false)`)
+        if (priorStockEffects > 0) {
+          const err = new Error('Esta devolución aprobada ya movió inventario y requiere conciliación antes de rechazarse.')
+          err.status = 409
+          throw err
+        }
       }
 
-      // Get Guatemala time for processed_at
-      const nowGtProcessed = DateTime.now().setZone('America/Guatemala');
-      const processedDate = DateTime.utc(
-        nowGtProcessed.year,
-        nowGtProcessed.month,
-        nowGtProcessed.day,
-        nowGtProcessed.hour,
-        nowGtProcessed.minute,
-        nowGtProcessed.second,
-        nowGtProcessed.millisecond
-      ).toJSDate();
-
-      // 5. Actualizar la devolución
-      // processed_at se actualiza si se procesa la devolución (actualizar venta) o se restaura stock
-      const shouldUpdateProcessedAt = isCompletingFromPending || isCompletingFromApproved || (isApproving && shouldRestoreStock)
-      console.log('[RETURN DEBUG] shouldUpdateProcessedAt:', shouldUpdateProcessedAt)
       const updated = await tx.return.update({
         where: { id },
         data: {
           status_id: newStatus.id,
-          processed_at: shouldUpdateProcessedAt ? processedDate : (currentReturn.processed_at || (isCompletingFromApproved ? processedDate : undefined))
         },
         include: {
           sale: true,
@@ -639,9 +729,9 @@ exports.updateStatus = async (req, res, next) => {
 
       return {
         ...updated,
-        _saleAdjustment: (!isExchange && (isCompletingFromPending || isCompletingFromApproved)) ? 'sale_updated' : 'none',
-        _stockAdjustment: (isCompletingFromPending || (isApproving && shouldRestoreStock)) ? 'stock_restored' : 'none',
-        _replacementStock: (isExchange && (isCompletingFromPending || isCompletingFromApproved)) ? 'stock_deducted' : 'none',
+        _saleAdjustment: 'none',
+        _stockAdjustment: 'none',
+        _replacementStock: 'none',
         _transition: `${prevStatusName} -> ${newStatusName}`
       }
     }, {

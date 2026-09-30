@@ -9,6 +9,7 @@
  */
 
 const { prisma } = require('../../models/prisma')
+const { normalizeReturnPolicy } = require('../returns/domain')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
 const { fetchLogoForHttp } = require('../../utils/pdfBranding')
@@ -319,6 +320,19 @@ exports.update = async (req, res, next) => {
         return res.status(400).json({ message: `${boolKey} debe ser true o false` })
       }
     }
+    if (payload['returns.policy'] !== undefined) {
+      const policy = payload['returns.policy']
+      if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+        return res.status(400).json({ message: 'returns.policy debe ser un objeto' })
+      }
+      if (!Number.isInteger(Number(policy.windowDays)) || Number(policy.windowDays) < 1) {
+        return res.status(400).json({ message: 'returns.policy.windowDays debe ser un entero ≥ 1' })
+      }
+      if (!['CURRENT_PRICE', 'ORIGINAL_SALE_PRICE'].includes(policy.exchangePricing)) {
+        return res.status(400).json({ message: 'returns.policy.exchangePricing no es válido' })
+      }
+      payload['returns.policy'] = normalizeReturnPolicy(policy)
+    }
 
     const allowedKeys = new Set([
       'currency_code',
@@ -347,12 +361,13 @@ exports.update = async (req, res, next) => {
       'sales_allow_credit',
       'sales_show_fiscal_fields',
       'sales_show_channels',
+      'returns.policy',
     ])
 
     for (const [key, value] of Object.entries(payload)) {
       if (!allowedKeys.has(key)) continue
       const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value)
-      const type = key === 'cash_closure_denominations' ? 'json' : 'string'
+      const type = ['cash_closure_denominations', 'returns.policy'].includes(key) ? 'json' : 'string'
       await prisma.systemSetting.upsert({
         where: { company_id_key: { company_id: req.companyId, key } },
         update: { value: valueStr, type },

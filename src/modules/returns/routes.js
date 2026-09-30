@@ -22,6 +22,9 @@ const canManage = hasPermission('returns.manage')
 // GET /api/returns - Listar devoluciones
 router.get('/', canView, controller.list)
 
+// Debe ir antes de /:id para que "eligible-sales" no se interprete como UUID.
+router.get('/eligible-sales', canManage, controller.eligibleSales)
+
 // GET /api/returns/:id - Detalle de una devolución
 router.get('/:id', canView, controller.getById)
 

@@ -8,6 +8,8 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
+const { DEFAULT_RETURN_POLICY } = require('../modules/returns/domain')
+
 /**
  * Configuración inicial de una empresa. Sin esto una empresa recién creada
  * abre /configuracion en blanco: sin moneda, sin zona horaria y sin
@@ -55,6 +57,7 @@ function defaultCompanySettings(company = {}) {
     ['sales_allow_credit', 'true', 'string'],
     ['sales_show_fiscal_fields', 'true', 'string'],
     ['sales_show_channels', 'true', 'string'],
+    ['returns.policy', JSON.stringify(DEFAULT_RETURN_POLICY), 'json'],
   ]
 }
 

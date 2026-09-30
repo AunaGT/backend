@@ -1,5 +1,20 @@
 const ACTIVE_RETURN_STATUSES = Object.freeze(['Pendiente', 'Aprobada', 'Completada'])
 
+const RETURN_RESOLUTIONS = Object.freeze([
+  'REFUND_ORIGINAL',
+  'REFUND_CASH',
+  'REFUND_TRANSFER',
+  'CUSTOMER_CREDIT',
+  'EXCHANGE',
+])
+
+const DEFAULT_RETURN_POLICY = Object.freeze({
+  windowDays: 30,
+  allowAuthorizedExceptions: true,
+  exchangePricing: 'CURRENT_PRICE',
+  enabledResolutions: RETURN_RESOLUTIONS,
+})
+
 const TRANSITIONS = Object.freeze({
   Pendiente: new Set(['Aprobada', 'Rechazada']),
   Aprobada: new Set(['Completada', 'Rechazada']),
@@ -90,11 +105,46 @@ function estimateRefundAmount({ saleTotal, grossTotal, unitPrice, qty }) {
   return Math.round(Number(unitPrice) * Number(qty) * (Number(saleTotal) / gross) * 100) / 100
 }
 
+function normalizeReturnPolicy(raw) {
+  let value = raw
+  if (typeof raw === 'string') {
+    try { value = JSON.parse(raw) } catch { value = null }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return DEFAULT_RETURN_POLICY
+  const windowDays = Number(value.windowDays)
+  const enabled = Array.isArray(value.enabledResolutions)
+    ? [...new Set(value.enabledResolutions.filter((item) => RETURN_RESOLUTIONS.includes(item)))]
+    : RETURN_RESOLUTIONS
+  return {
+    windowDays: Number.isInteger(windowDays) && windowDays >= 1 ? windowDays : DEFAULT_RETURN_POLICY.windowDays,
+    allowAuthorizedExceptions: value.allowAuthorizedExceptions !== false,
+    exchangePricing: value.exchangePricing === 'ORIGINAL_SALE_PRICE' ? 'ORIGINAL_SALE_PRICE' : 'CURRENT_PRICE',
+    enabledResolutions: enabled.length ? enabled : RETURN_RESOLUTIONS,
+  }
+}
+
+function evaluateReturnEligibility({ saleDate, statusName, availableUnits, policy, now = new Date(), override }) {
+  const normalized = normalizeReturnPolicy(policy)
+  const elapsedMs = new Date(now).getTime() - new Date(saleDate).getTime()
+  const daysElapsed = Math.max(0, Math.floor(elapsedMs / 86400000))
+  const reasons = []
+  if (statusName !== 'Completada') reasons.push('SALE_NOT_COMPLETED')
+  if (!(Number(availableUnits) > 0)) reasons.push('NO_RETURNABLE_UNITS')
+  const expired = daysElapsed > normalized.windowDays
+  const exceptionApplied = expired && normalized.allowAuthorizedExceptions && override?.authorized === true && String(override.reason || '').trim().length > 0
+  if (expired && !exceptionApplied) reasons.push('RETURN_WINDOW_EXPIRED')
+  return { eligible: reasons.length === 0, daysElapsed, reasons, exceptionApplied }
+}
+
 module.exports = {
   ACTIVE_RETURN_STATUSES,
+  DEFAULT_RETURN_POLICY,
+  RETURN_RESOLUTIONS,
   availableReturnQty,
   assertReturnTransition,
   buildReturnWhere,
+  evaluateReturnEligibility,
   estimateRefundAmount,
+  normalizeReturnPolicy,
   normalizeReturnLines,
 }
