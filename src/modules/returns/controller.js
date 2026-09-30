@@ -28,6 +28,7 @@ const {
   returnFiscalStatus,
 } = require('./domain')
 const { approveReturn, completeReturn } = require('./application')
+const { presentReturnDetail } = require('./presentation')
 const { resolvePricedSaleItems } = require('../sales/application')
 
 /** Resuelve sale_id (UUID o referencia ej. V-000001) al id interno de la venta */
@@ -252,6 +253,15 @@ exports.getById = async (req, res, next) => {
           include: {
             product: true
           }
+        },
+        settlements: {
+          include: {
+            payment_method: true,
+            cash_register_session: {
+              include: { cashRegister: { select: { id: true, name: true, code: true } } }
+            }
+          },
+          orderBy: { created_at: 'asc' }
         }
       }
     })
@@ -260,9 +270,14 @@ exports.getById = async (req, res, next) => {
       return res.status(404).json({ message: 'Devolución no encontrada' })
     }
 
+    const actorIds = [returnRecord.approved_by, returnRecord.processed_by, returnRecord.policy_overridden_by].filter(Boolean)
+    const actors = actorIds.length ? await prisma.user.findMany({
+      where: { id: { in: actorIds } },
+      select: { id: true, name: true, email: true },
+    }) : []
     res.json({
-      ...returnRecord,
-      fiscal: returnFiscalStatus(returnRecord.sale?.sale_dtes),
+      ...presentReturnDetail(returnRecord, actors),
+      return_policy: await getReturnPolicy(prisma, req.companyId),
     })
   } catch (e) {
     next(e)
