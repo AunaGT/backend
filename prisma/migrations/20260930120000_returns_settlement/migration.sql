@@ -34,7 +34,7 @@ SET "legacy_stock_moved" = EXISTS (
   FROM "stock_movements" sm
   WHERE sm."reason" = 'SALE_RETURN'
     AND sm."ref_type" = 'return'
-    AND sm."ref_id" = r."id"::text
+    AND sm."ref_id" = r."id"
 );
 
 CREATE TABLE "return_settlements" (
