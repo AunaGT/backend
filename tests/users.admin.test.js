@@ -42,3 +42,22 @@ test('la actividad identifica al actor y conserva eventos de actores borrados', 
   assert.equal(response.items[0].actor_name, 'Ana')
   assert.equal(response.items[1].actor_name, null)
 })
+test('bloquear acceso revoca las sesiones existentes del usuario', async t => {
+  const calls = []
+  const tx = {
+    $queryRaw: async () => [],
+    user: {
+      findFirst: async () => ({ id: 'target', role: { id: 2, name: 'lector' }, user_companies: [{ role: { id: 2, name: 'lector' } }] }),
+      update: async options => { calls.push(['version', options]) },
+    },
+    userCompany: { update: async options => { calls.push(['status', options]) } },
+    refreshToken: { updateMany: async options => { calls.push(['sessions', options]) } },
+    userAccessEvent: { create: async () => {} },
+  }
+  const controller = load(t, { $transaction: async fn => fn(tx) })
+  let response
+  await controller.setAccess({ companyId: 'company-a', params: { id: 'target' }, user: { sub: 'actor' }, body: { status: 'BLOCKED' } }, { json: value => { response = value } }, e => { throw e })
+  assert.deepEqual(response, { ok: true })
+  assert.equal(calls.find(([name]) => name === 'version')[1].data.auth_version.increment, 1)
+  assert.equal(calls.find(([name]) => name === 'sessions')[1].where.user_id, 'target')
+})

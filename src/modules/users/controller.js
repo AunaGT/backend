@@ -24,7 +24,7 @@ const { IMPLIES, expandPermissions } = require('../../config/permissionDeps')
 const { bulkValidateUsers, bulkCreateUsers } = require('../../services/userBulkImport')
 const { runImportStream } = require('../../utils/importStream')
 const { requireCompany } = require('../../middlewares/tenant')
-const { effectiveUser } = require('../../services/userAccess')
+const { effectiveUser, requiresPasswordChange, hasActiveMembership } = require('../../services/userAccess')
 
 // Consulta reutilizable de usuario con rol + permisos para el login/refresh/me.
 const userWithPerms = {
@@ -56,6 +56,7 @@ function serializeUser(user) {
     created_at: user.created_at,
     updated_at: user.updated_at,
     password_changed_at: user.password_changed_at,
+    must_change_password: Boolean(user.must_change_password),
     id: user.id,
     name: user.name,
     email: user.email,
@@ -283,9 +284,14 @@ exports.login = async (req, res, next) => {
     const ok = await bcrypt.compare(password, user.password)
     if (!ok) return res.status(401).json({ message: 'Credenciales inválidas' })
 
+    if (!hasActiveMembership(user)) {
+      return res.status(403).json({ message: 'Tu acceso está suspendido o bloqueado. Contacta al administrador.' })
+    }
+    user.must_change_password = await requiresPasswordChange(user, prisma)
+
     await prisma.user.update({ where: { id: user.id }, data: { last_login_at: new Date() } })
     await setSessionCookies(res, user, req)
-    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
+    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE' && m.company?.active !== false)?.company_id)) })
   } catch (e) { next(e) }
 }
 
@@ -306,10 +312,16 @@ exports.refresh = async (req, res, next) => {
       clearSessionCookies(res)
       return res.status(401).json({ message: 'Sesión inválida' })
     }
+    if (!hasActiveMembership(user)) {
+      await refreshTokens.revoke(result.token)
+      clearSessionCookies(res)
+      return res.status(403).json({ message: 'Sin acceso activo a la plataforma' })
+    }
+    user.must_change_password = await requiresPasswordChange(user, prisma)
 
     res.cookie(ACCESS_COOKIE, crearToken({ ...user, sid: result.sessionId }), accessCookieOptions())
     res.cookie(REFRESH_COOKIE, result.token, refreshCookieOptions())
-    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
+    res.json({ user: serializeUser(effectiveUser(user, user.user_companies.find(m => m.status === 'ACTIVE' && m.company?.active !== false)?.company_id)) })
   } catch (e) { next(e) }
 }
 
@@ -318,6 +330,7 @@ exports.me = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.sub }, include: userWithPerms })
     if (!user) return res.status(401).json({ message: 'No autenticado' })
+    user.must_change_password = await requiresPasswordChange(user, prisma)
     res.json({ user: serializeUser(effectiveUser(user, req.companyId || user.user_companies.find(m => m.status === 'ACTIVE')?.company_id)) })
   } catch (e) { next(e) }
 }

@@ -31,6 +31,9 @@ exports.Auth = async function (req, res, next) {
       return res.status(401).send({ message: 'El token ya ha expirado' })
     }
     const user = req.sessionUser || await loadSessionUser(payload)
+    if (user.must_change_password && !['/me', '/me/password'].includes(req.path)) {
+      return res.status(403).send({ message: 'Debes cambiar tu contraseña antes de continuar' })
+    }
     req.user = { ...effectiveUser(user, req.companyId), sid: payload.sid }
     next()
   } catch (error) {

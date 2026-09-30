@@ -1,4 +1,6 @@
 const { expandPermissions } = require('../config/permissionDeps')
+const PASSWORD_CHANGE_REQUIRED = 'Cambio obligatorio de contraseña'
+const hasActiveMembership = user => user.user_companies?.some(m => m.status === 'ACTIVE' && m.company?.active !== false)
 
 function fail(status, message) { throw Object.assign(new Error(message), { status }) }
 function permissions(role) {
@@ -31,7 +33,13 @@ async function loadSessionUser(payload) {
     user_companies: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
   } })
   if (!user || (payload.auth_version || 0) !== user.auth_version) fail(401, 'La sesión ha caducado')
+  if (!hasActiveMembership(user)) fail(403, 'Sin acceso activo a la plataforma')
   if (payload.sid && !await prisma.refreshToken.findFirst({ where: { user_id: user.id, session_id: payload.sid, revoked_at: null, expires_at: { gt: new Date() } }, select: { id: true } })) fail(401, 'Sesión cerrada')
+  user.must_change_password = await requiresPasswordChange(user, prisma)
   return user
 }
-module.exports = { effectiveUser, assertGrant, listQuery, permissions, fail, loadSessionUser }
+async function requiresPasswordChange(user, client) {
+  if (user.password_changed_at) return false
+  return Boolean(await client.userAccessEvent.findFirst({ where: { user_id: user.id, action: PASSWORD_CHANGE_REQUIRED }, select: { id: true } }))
+}
+module.exports = { effectiveUser, assertGrant, listQuery, permissions, fail, loadSessionUser, requiresPasswordChange, hasActiveMembership, PASSWORD_CHANGE_REQUIRED }

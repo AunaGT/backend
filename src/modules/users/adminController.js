@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs')
 const { prisma } = require('../../models/prisma')
 const { requireCompany } = require('../../middlewares/tenant')
-const { listQuery, assertGrant, permissions, fail } = require('../../services/userAccess')
+const { listQuery, assertGrant, permissions, fail, PASSWORD_CHANGE_REQUIRED } = require('../../services/userAccess')
 const { expandPermissions } = require('../../config/permissionDeps')
 
 const roleInclude = { permissions: { include: { permission: true } } }
@@ -92,6 +92,7 @@ exports.register = handle(async (req, res) => {
   const companyId = requireCompany(req), data = identity(req.body || {}, true)
   const status = req.body.access_status || 'ACTIVE'
   if (!['ACTIVE', 'INACTIVE'].includes(status)) fail(400, 'Estado inicial inválido')
+  if (req.body.must_change_password !== undefined && typeof req.body.must_change_password !== 'boolean') fail(400, 'Cambio obligatorio inválido')
   const role = await assignableRole(prisma, req, req.body.role_id)
   const password = await bcrypt.hash(req.body.password, 10)
   const user = await prisma.$transaction(async tx => {
@@ -100,6 +101,7 @@ exports.register = handle(async (req, res) => {
       ...(req.branchId ? { default_branch_id: req.branchId, user_branches: { create: { branch_id: req.branchId } } } : {}),
     } })
     await event(tx, req, created.id, 'Usuario creado')
+    if (req.body.must_change_password) await event(tx, req, created.id, PASSWORD_CHANGE_REQUIRED)
     return tx.user.findUnique({ where: { id: created.id }, include: includes(companyId) })
   })
   // Crear una cuenta no autoriza iniciar una sesión como esa persona.
@@ -111,7 +113,7 @@ exports.update = handle(async (req, res) => {
     await tx.$queryRaw`SELECT id FROM companies WHERE id = ${requireCompany(req)}::uuid FOR UPDATE`
     const user = await target(tx, req)
     if (user._count.user_companies > 1 && req.user.sub !== user.id && ((body.name !== undefined && body.name !== user.name) || (body.email !== undefined && body.email !== user.email) || body.password)) fail(403, 'La identidad de una cuenta compartida solo puede editarla su titular')
-    if (body.password) { data.password = await bcrypt.hash(body.password, 10); data.auth_version = { increment: 1 }; data.password_changed_at = new Date() }
+    if (body.password) { data.password = await bcrypt.hash(body.password, 10); data.auth_version = { increment: 1 }; data.password_changed_at = null }
     if (body.cash_register_id !== undefined) {
       if (body.cash_register_id && !await tx.cashRegister.findFirst({ where: { id: body.cash_register_id, active: true, branch: { company_id: req.companyId } } })) fail(400, 'Caja no disponible')
       data.cash_register_id = body.cash_register_id || null
@@ -129,6 +131,7 @@ exports.update = handle(async (req, res) => {
     await tx.user.update({ where: { id: user.id }, data })
     if (body.password) await tx.refreshToken.updateMany({ where: { user_id: user.id, revoked_at: null }, data: { revoked_at: new Date() } })
     await event(tx, req, user.id, 'Usuario actualizado')
+    if (body.password) await event(tx, req, user.id, PASSWORD_CHANGE_REQUIRED)
     return target(tx, req)
   })
   res.json(serialize(updated))
@@ -147,6 +150,10 @@ exports.setAccess = handle(async (req, res) => {
       if (!others) fail(409, 'Debe permanecer un administrador activo')
     }
     await tx.userCompany.update({ where: { user_id_company_id: { user_id: user.id, company_id: req.companyId } }, data: { status } })
+    if (status !== 'ACTIVE') {
+      await tx.user.update({ where: { id: user.id }, data: { auth_version: { increment: 1 } } })
+      await tx.refreshToken.updateMany({ where: { user_id: user.id, revoked_at: null }, data: { revoked_at: new Date() } })
+    }
     await event(tx, req, user.id, `Acceso: ${status}`)
   })
   res.json({ ok: true })

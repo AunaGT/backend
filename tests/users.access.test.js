@@ -21,6 +21,13 @@ test('acceso suspendido se bloquea aun conservando sucursal y rol admin', () => 
   assert.throws(() => access.effectiveUser(user, 'a'), { status: 403 })
 })
 
+test('el cambio obligatorio existe hasta que el usuario actualiza su contraseña', async () => {
+  const client = { userAccessEvent: { findFirst: async () => ({ id: 'event-1' }) } }
+  assert.equal(await access.requiresPasswordChange({ id: 'u1', password_changed_at: null }, client), true)
+  assert.equal(await access.requiresPasswordChange({ id: 'u1', password_changed_at: new Date() }, client), false)
+  assert.equal(await access.requiresPasswordChange({ id: 'u2', password_changed_at: null }, { userAccessEvent: { findFirst: async () => null } }), false)
+})
+
 test('filtros rechazan números inválidos y orden arbitrario', () => {
   assert.throws(() => access.listQuery({ page: 'NaN' }), { status: 400 })
   assert.throws(() => access.listQuery({ sort: 'password' }), { status: 400 })
