@@ -16,6 +16,7 @@ const XLSX = require('xlsx')
 const { prisma } = require('../models/prisma')
 const { applyBranchDelta } = require('./stockLocations')
 const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, nameCandidates, checkSimilarity, checkText, validMoney } = require('../utils/importValidation')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -144,6 +145,7 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     }
 
     // Required: name
+    checkText(normalizedRow, { name: 150, category: 100, supplier: 150, brand: 100, size: 50, barcode: 100, description: 10000 }, errors)
     const nombre = String(normalizedRow.name || '').trim()
     if (!nombre) {
         errors.push('El campo "nombre" es requerido')
@@ -189,11 +191,11 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Required: price (must be positive number)
     const precioRaw = normalizedRow.price
-    const precio = parseFloat(precioRaw)
+    const precio = Number(precioRaw)
     if (precioRaw === '' || precioRaw === undefined || precioRaw === null) {
         errors.push('El campo "precio" es requerido')
-    } else if (isNaN(precio) || precio <= 0) {
-        errors.push(`El precio "${precioRaw}" debe ser un número mayor a 0`)
+    } else if (!validMoney(precio) || precio <= 0) {
+        errors.push(`El precio "${precioRaw}" debe ser un número finito mayor a 0 y menor que 10000000000, con hasta 2 decimales`)
     } else {
         data.price = precio
     }
@@ -213,9 +215,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: stock (default 0, must be >= 0)
     const stockRaw = normalizedRow.stock
     if (stockRaw !== '' && stockRaw !== undefined && stockRaw !== null) {
-        const stock = parseInt(stockRaw)
-        if (isNaN(stock) || stock < 0) {
-            errors.push(`El stock "${stockRaw}" debe ser un número mayor o igual a 0`)
+        const stock = Number(stockRaw)
+        if (!Number.isInteger(stock) || stock < 0 || stock > 2147483647) {
+            errors.push(`El stock "${stockRaw}" debe ser un entero entre 0 y 2147483647`)
         } else {
             data.stock = stock
         }
@@ -226,9 +228,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: min_stock (default 0, must be >= 0)
     const minStockRaw = normalizedRow.min_stock
     if (minStockRaw !== '' && minStockRaw !== undefined && minStockRaw !== null) {
-        const minStock = parseInt(minStockRaw)
-        if (isNaN(minStock) || minStock < 0) {
-            errors.push(`El stock mínimo "${minStockRaw}" debe ser un número mayor o igual a 0`)
+        const minStock = Number(minStockRaw)
+        if (!Number.isInteger(minStock) || minStock < 0 || minStock > 2147483647) {
+            errors.push(`El stock mínimo "${minStockRaw}" debe ser un entero entre 0 y 2147483647`)
         } else {
             data.min_stock = minStock
         }
@@ -239,9 +241,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: cost (default 0, must be >= 0)
     const costoRaw = normalizedRow.cost
     if (costoRaw !== '' && costoRaw !== undefined && costoRaw !== null) {
-        const costo = parseFloat(costoRaw)
-        if (isNaN(costo) || costo < 0) {
-            errors.push(`El costo "${costoRaw}" debe ser un número mayor o igual a 0`)
+        const costo = Number(costoRaw)
+        if (!validMoney(costo)) {
+            errors.push(`El costo "${costoRaw}" debe ser un número finito entre 0 y 9999999999.99, con hasta 2 decimales`)
         } else {
             data.cost = costo
         }
@@ -253,7 +255,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     const barcode = String(normalizedRow.barcode || '').trim()
     let existingProductId = null
     if (barcode) {
-        if (existingBarcodes.has(barcode)) {
+        if (batchBarcodes.has(barcode)) {
+            errors.push(`El código de barras "${barcode}" está duplicado en el archivo`)
+        } else if (existingBarcodes.has(barcode)) {
             // El catálogo es de la empresa: que el producto ya exista no es un
             // error, es que esta sucursal todavía no lo maneja (o ya lo maneja y
             // se está recargando su existencia). Ver `bulkCreateProducts`.
@@ -279,6 +283,10 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Optional: controla_caducidad (default false; exige fecha de caducidad en ingresos futuros)
     data.tracks_expiry = parseBooleanCell(normalizedRow.tracks_expiry, false)
+    for (const field of ['available_for_sale', 'tracks_expiry']) {
+        const value = normalizedRow[field]
+        if (value != null && String(value).trim() && !TRUE_CELL_VALUES.has(String(value).trim().toLowerCase()) && !FALSE_CELL_VALUES.has(String(value).trim().toLowerCase())) errors.push(`${field}: usa sí/no, true/false o 1/0`)
+    }
 
     // Default status_id to 1 (active)
     data.status_id = 1
@@ -326,6 +334,10 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
         products.filter((p) => p.barcode).map((p) => [p.barcode, p.id])
     )
     const batchBarcodes = new Set()
+    // ponytail: similarity candidates capped at 5000; use indexed search for very large catalogues.
+    const candidates = nameCandidates(rows, ['nombre', 'name'])
+    const similarProducts = candidates.length ? await prisma.product.findMany({ where: { company_id: companyId, deleted: false, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
+    const matchName = nameMatcher(similarProducts)
 
     const validRows = []
     const invalidRows = []
@@ -346,6 +358,7 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
             batchBarcodes,
             importOptions,
         )
+        checkSimilarity(result, result.data.name, matchName, importOptionsRaw)
         if (result.valid) {
             validRows.push(result)
         } else {

@@ -54,6 +54,22 @@ test('reporta avance confirmado si el guardado falla después de algunas filas',
   assert.match(chunks.at(-1).message, /2 filas procesadas/)
 })
 
+test('el resumen incluye las filas omitidas durante la validación', async () => {
+  const res = new EventEmitter()
+  const events = []
+  res.setHeader = () => {}
+  res.flushHeaders = () => {}
+  res.write = chunk => events.push(JSON.parse(chunk.slice(6)))
+  res.end = () => {}
+  await runImportStream(res, {
+    total: 3,
+    validate: async () => ({ validRows: [1], invalidRows: [], skippedRows: [{ rowIndex: 2 }, { rowIndex: 3 }] }),
+    save: async () => ({ created: 1, skipped: 0 }),
+  })
+  assert.equal(events.at(-1).result.skipped, 2)
+  assert.equal(events.at(-1).result.created, 1)
+})
+
 test('no guarda cuando la revalidación detecta filas inválidas', async () => {
   const res = new EventEmitter()
   const chunks = []

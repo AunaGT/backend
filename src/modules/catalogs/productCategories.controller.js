@@ -368,14 +368,15 @@ exports.validateImportMapped = async (req, res, next) => {
     }
 
     // Validate without importing
-    const validation = await bulkValidateCatalogs(items, 'categories', req.companyId)
+    const validation = await bulkValidateCatalogs(items, 'categories', req.companyId, req.body?.importOptions)
 
     res.json({
       ok: true,
       totals: {
         total: items.length,
         valid: validation.validRows.length,
-        invalid: validation.invalidRows.length
+        invalid: validation.invalidRows.length,
+        skipped: validation.skippedRows.length
       },
       validRows: validation.validRows,
       invalidRows: validation.invalidRows
@@ -404,7 +405,7 @@ exports.bulkImportMapped = async (req, res, next) => {
     }
 
     // Validate all categories
-    const validation = await bulkValidateCatalogs(items, 'categories', req.companyId)
+    const validation = await bulkValidateCatalogs(items, 'categories', req.companyId, req.body?.importOptions)
 
     if (validation.invalidRows.length > 0) {
       return res.status(400).json({
@@ -419,7 +420,7 @@ exports.bulkImportMapped = async (req, res, next) => {
     res.json({
       ok: true,
       created: result.created,
-      skipped: result.skipped || 0,
+      skipped: (result.skipped || 0) + validation.skippedRows.length,
       errors: result.errors || [],
       message: result.skipped > 0
         ? `Se importaron ${result.created} categorías (${result.skipped} omitidas por duplicados)`
@@ -435,7 +436,7 @@ exports.bulkImportMappedStream = async (req, res) => {
   if (!Array.isArray(items) || !items.length) return res.status(400).json({ message: 'No se proporcionaron categorías para importar' })
   await runImportStream(res, {
     total: items.length,
-    validate: () => bulkValidateCatalogs(items, 'categories', req.companyId),
+    validate: () => bulkValidateCatalogs(items, 'categories', req.companyId, req.body?.importOptions),
     save: (rows, onProgress, isCancelled) => bulkCreateCatalogs(rows, 'categories', req.companyId, onProgress, isCancelled),
   })
 }

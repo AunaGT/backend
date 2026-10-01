@@ -997,6 +997,8 @@ model CommercialDocument {
   customer_contact_id String?                  @db.Uuid
   customerContact     Supplier?                @relation("CommercialDocCustomer", fields: [customer_contact_id], references: [id], onDelete: SetNull)
   sales_channel       SalesChannel             @default(WHOLESALE)
+  payment_condition   String                   @default("CASH") @db.VarChar(10)
+  credit_days         Int?
   subtotal            Decimal?                 @db.Decimal(12, 2)
   discount_total      Decimal?                 @db.Decimal(12, 2)
   total               Decimal                  @db.Decimal(12, 2)

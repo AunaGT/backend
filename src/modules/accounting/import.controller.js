@@ -21,6 +21,7 @@ const { createEntry, periodKeyForDate, AccountingError } = require('../../servic
 const { toCents } = require('../../services/accounting/logic')
 const { runImportStream, ImportCancelledError } = require('../../utils/importStream')
 
+const { rowSet, nameMatcher, checkSimilarity, checkText, validMoney } = require('../../utils/importValidation')
 const MAX_ROWS = 2000
 
 const norm = (v) => String(v ?? '').trim()
@@ -41,7 +42,9 @@ const FALSY = new Set(['no', 'false', '0', ''])
 /** Número desde celda Excel ("1,234.56", 1234.56, ''). null si inválido. */
 function parseNumberCell(v) {
   if (v == null || v === '') return 0
-  const n = Number(String(v).replace(/,/g, ''))
+  const text = String(v).trim()
+  if (text.includes(',') && !/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(text)) return null
+  const n = Number(text.replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
 }
 
@@ -54,10 +57,15 @@ function parseDateCell(v) {
   }
   const s = norm(v)
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
-  if (m) return new Date(`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}T12:00:00-06:00`)
+  if (m && s === m[0]) return calendarDate(Number(m[1]), Number(m[2]), Number(m[3]))
   m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/)
-  if (m) return new Date(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}T12:00:00-06:00`)
+  if (m && s === m[0]) return calendarDate(Number(m[3]), Number(m[2]), Number(m[1]))
   return null
+}
+
+function calendarDate(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day, 18))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : null
 }
 
 function sendTemplate(res, filename, headers, examples, colWidths) {
@@ -100,7 +108,8 @@ exports.accountsTemplate = (req, res, next) => {
 }
 
 /** Valida cuentas y calcula orden de creación (padres antes que hijas). */
-async function validateAccounts(items, companyId) {
+async function validateAccounts(items, companyId, options = {}) {
+  const skips = rowSet(options, 'skipRowIndexes')
   const rows = items.map((it, i) => ({
     rowIndex: i,
     code: norm(it.code),
@@ -108,7 +117,7 @@ async function validateAccounts(items, companyId) {
     typeRaw: normKey(it.type),
     parent: norm(it.parent),
     isGroupRaw: normKey(it.isGroup),
-  }))
+  })).filter(row => !skips.has(row.rowIndex))
 
   const codesInFile = new Map() // code → primera fila que lo usa
   const existing = await prisma.account.findMany({
@@ -116,7 +125,9 @@ async function validateAccounts(items, companyId) {
     select: { id: true, code: true },
   })
   const existingByCode = new Map(existing.map((a) => [a.code, a]))
-  const allDbCodes = new Set((await prisma.account.findMany({ where: { company_id: companyId }, select: { code: true } })).map((a) => a.code))
+  const allAccounts = await prisma.account.findMany({ where: { company_id: companyId }, select: { code: true, name: true } })
+  const allDbCodes = new Set(allAccounts.map(a => a.code))
+  const matchName = nameMatcher(allAccounts)
 
   const invalidRows = []
   for (const r of rows) {
@@ -137,7 +148,10 @@ async function validateAccounts(items, companyId) {
     r.type = TYPE_MAP[r.typeRaw] || null
     r.isGroup = TRUTHY.has(r.isGroupRaw)
     r.exists = existingByCode.has(r.code)
-    if (errors.length) invalidRows.push({ rowIndex: r.rowIndex, errors })
+    checkText(r, { name: 150, code: 20 }, errors)
+    const issue = { rowIndex: r.rowIndex, errors, existingProductId: r.exists }
+    checkSimilarity(issue, r.name, matchName, options, 2)
+    if (errors.length) invalidRows.push(issue)
   }
 
   // Orden de creación por pases (padres primero); detecta referencias circulares.
@@ -163,7 +177,7 @@ async function validateAccounts(items, companyId) {
   }
 
   invalidRows.sort((a, b) => a.rowIndex - b.rowIndex)
-  const skipped = rows.filter((r) => r.exists && !invalidRows.some((x) => x.rowIndex === r.rowIndex))
+  const skipped = [...rows.filter((r) => r.exists && !invalidRows.some((x) => x.rowIndex === r.rowIndex)), ...items.flatMap((_, rowIndex) => skips.has(rowIndex) ? [{ rowIndex }] : [])]
   return { rows, ordered, skipped, invalidRows }
 }
 
@@ -171,10 +185,11 @@ exports.validateAccountsImport = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
     if (!items) return
-    const v = await validateAccounts(items, req.companyId)
+    const v = await validateAccounts(items, req.companyId, req.body?.importOptions)
     res.json({
       ok: true,
-      totals: { total: items.length, valid: items.length - v.invalidRows.length, invalid: v.invalidRows.length },
+      totals: { total: items.length, valid: items.length - v.invalidRows.length - v.skipped.length, invalid: v.invalidRows.length, skipped: v.skipped.length },
+      skippedRows: v.skipped,
       skipped: v.skipped.length,
       invalidRows: v.invalidRows,
       validRows: [],
@@ -204,11 +219,12 @@ exports.bulkImportAccounts = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
     if (!items) return
-    const v = await validateAccounts(items, req.companyId)
+    const v = await validateAccounts(items, req.companyId, req.body?.importOptions)
     if (v.invalidRows.length > 0) {
       return res.status(400).json({
         message: `${v.invalidRows.length} filas tienen errores`,
-        totals: { total: items.length, valid: items.length - v.invalidRows.length, invalid: v.invalidRows.length },
+        totals: { total: items.length, valid: items.length - v.invalidRows.length - v.skipped.length, invalid: v.invalidRows.length, skipped: v.skipped.length },
+        skippedRows: v.skipped,
         invalidRows: v.invalidRows,
       })
     }
@@ -234,7 +250,7 @@ exports.bulkImportAccountsStream = async (req, res) => {
   let validated
   await runImportStream(res, {
     total: items.length,
-    validate: async () => { validated = await validateAccounts(items, req.companyId); return { validRows: validated.ordered, invalidRows: validated.invalidRows } },
+    validate: async () => { validated = await validateAccounts(items, req.companyId, req.body?.importOptions); return { validRows: validated.ordered, invalidRows: validated.invalidRows } },
     save: (_rows, onProgress, isCancelled) => persistAccounts(validated, req.companyId, onProgress, isCancelled),
   })
 }
@@ -255,7 +271,11 @@ exports.journalTemplate = (req, res, next) => {
 }
 
 /** Valida filas de asientos: cuentas, montos y cuadre por referencia. */
-async function validateJournal(items, companyId) {
+async function validateJournal(items, companyId, options = {}) {
+  const skips = rowSet(options, 'skipRowIndexes')
+  const skipReferences = new Set(items.filter((_, i) => skips.has(i)).map(item => norm(item.reference)).filter(Boolean))
+  const skipped = items.flatMap((item, rowIndex) => skips.has(rowIndex) || skipReferences.has(norm(item.reference)) ? [{ rowIndex, reason: 'Asiento omitido por el usuario' }] : [])
+  const skippedSet = new Set(skipped.map(row => row.rowIndex))
   const rows = items.map((it, i) => ({
     rowIndex: i,
     reference: norm(it.reference),
@@ -265,7 +285,7 @@ async function validateJournal(items, companyId) {
     accountCode: norm(it.accountCode),
     debit: parseNumberCell(it.debit),
     credit: parseNumberCell(it.credit),
-  }))
+  })).filter(row => !skippedSet.has(row.rowIndex))
 
   const accounts = await prisma.account.findMany({
     where: { code: { in: [...new Set(rows.map((r) => r.accountCode).filter(Boolean))] }, company_id: companyId },
@@ -273,36 +293,51 @@ async function validateJournal(items, companyId) {
   const accByCode = new Map(accounts.map((a) => [a.code, a]))
 
   const errorsByRow = new Map()
+  const similarRows = new Set()
+  const duplicateLines = new Map()
+  const allowedSimilarRows = rowSet(options, 'allowSimilarRowIndexes')
   const addError = (i, msg) => {
     if (!errorsByRow.has(i)) errorsByRow.set(i, [])
     errorsByRow.get(i).push(msg)
   }
 
   for (const r of rows) {
+    const textErrors = []
+    checkText(r, { reference: 100, description: 255, accountCode: 20 }, textErrors)
+    textErrors.forEach(message => addError(r.rowIndex, message))
     if (!r.reference) addError(r.rowIndex, 'referencia: requerida (agrupa las líneas de un mismo asiento)')
-    if (!r.date) addError(r.rowIndex, `fecha: "${r.dateRaw}" inválida (usa dd/mm/aaaa o aaaa-mm-dd)`)
+    if (!r.date || Number.isNaN(r.date.getTime())) { r.date = null; addError(r.rowIndex, `fecha: "${r.dateRaw}" inválida (usa dd/mm/aaaa o aaaa-mm-dd)`) }
     const acc = accByCode.get(r.accountCode)
     if (!r.accountCode) addError(r.rowIndex, 'cuenta: requerida (código del catálogo)')
     else if (!acc) addError(r.rowIndex, `cuenta: "${r.accountCode}" no existe en el catálogo`)
     else if (!acc.active) addError(r.rowIndex, `cuenta: ${acc.code} ${acc.name} está inactiva`)
     else if (acc.is_group) addError(r.rowIndex, `cuenta: ${acc.code} ${acc.name} es agrupadora y no recibe movimientos`)
-    if (r.debit == null || r.credit == null || r.debit < 0 || r.credit < 0) {
-      addError(r.rowIndex, 'debe/haber: montos inválidos')
+    if (!validMoney(r.debit) || !validMoney(r.credit)) {
+      addError(r.rowIndex, 'debe/haber: montos inválidos (0–9999999999.99, hasta 2 decimales)')
     } else if ((r.debit > 0) === (r.credit > 0)) {
       addError(r.rowIndex, 'debe/haber: cada línea lleva debe o haber (no ambos, no vacíos)')
     }
+    const signature = JSON.stringify([r.reference, r.date?.toISOString(), r.accountCode, r.debit, r.credit])
+    if (duplicateLines.has(signature) && !errorsByRow.has(r.rowIndex) && !allowedSimilarRows.has(r.rowIndex)) {
+      addError(r.rowIndex, `Movimiento idéntico a la fila ${duplicateLines.get(signature) + 2}. Revisa antes de crear igualmente.`)
+      similarRows.add(r.rowIndex)
+    }
+    duplicateLines.set(signature, r.rowIndex)
     r.account = acc || null
   }
 
   // Agrupar por referencia (en orden de aparición) y validar cuadre/fechas/período
   const groups = new Map()
   for (const r of rows) {
+    const textErrors = []
+    checkText(r, { reference: 100, description: 255, accountCode: 20 }, textErrors)
+    textErrors.forEach(message => addError(r.rowIndex, message))
     if (!r.reference) continue
     if (!groups.has(r.reference)) groups.set(r.reference, [])
     groups.get(r.reference).push(r)
   }
   const closedPeriods = new Set(
-    (await prisma.accountingPeriod.findMany({ where: { status: 'CLOSED' }, select: { year: true, month: true } }))
+    (await prisma.accountingPeriod.findMany({ where: { status: 'CLOSED', company_id: companyId }, select: { year: true, month: true } }))
       .map((p) => `${p.year}-${p.month}`),
   )
   for (const [ref, group] of groups) {
@@ -322,19 +357,20 @@ async function validateJournal(items, companyId) {
   }
 
   const invalidRows = [...errorsByRow.entries()]
-    .map(([rowIndex, errors]) => ({ rowIndex, errors }))
+    .map(([rowIndex, errors]) => ({ rowIndex, errors, canCreateAnyway: similarRows.has(rowIndex) }))
     .sort((a, b) => a.rowIndex - b.rowIndex)
-  return { rows, groups, invalidRows }
+  return { rows, groups, invalidRows, skipped }
 }
 
 exports.validateJournalImport = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
     if (!items) return
-    const v = await validateJournal(items, req.companyId)
+    const v = await validateJournal(items, req.companyId, req.body?.importOptions)
     res.json({
       ok: true,
-      totals: { total: items.length, valid: items.length - v.invalidRows.length, invalid: v.invalidRows.length },
+      totals: { total: items.length, valid: items.length - v.invalidRows.length - v.skipped.length, invalid: v.invalidRows.length, skipped: v.skipped.length },
+      skippedRows: v.skipped,
       entries: v.groups.size,
       invalidRows: v.invalidRows,
       validRows: [],
@@ -361,18 +397,19 @@ async function persistJournal(v, req, onProgress = () => {}, isCancelled = () =>
     }
     if (isCancelled()) throw new ImportCancelledError()
   }, { timeout: 60000, maxWait: 10000 })
-  return { created: numbers.length, message: `Se importaron ${numbers.length} asientos (${numbers[0]} a ${numbers[numbers.length - 1]})` }
+  return { created: numbers.length, skipped: v.skipped.length, message: `Se importaron ${numbers.length} asientos (${numbers[0]} a ${numbers[numbers.length - 1]})` }
 }
 
 exports.bulkImportJournal = async (req, res, next) => {
   try {
     const items = checkItems(req, res)
     if (!items) return
-    const v = await validateJournal(items, req.companyId)
+    const v = await validateJournal(items, req.companyId, req.body?.importOptions)
     if (v.invalidRows.length > 0) {
       return res.status(400).json({
         message: `${v.invalidRows.length} filas tienen errores`,
-        totals: { total: items.length, valid: items.length - v.invalidRows.length, invalid: v.invalidRows.length },
+        totals: { total: items.length, valid: items.length - v.invalidRows.length - v.skipped.length, invalid: v.invalidRows.length, skipped: v.skipped.length },
+        skippedRows: v.skipped,
         invalidRows: v.invalidRows,
       })
     }
@@ -394,7 +431,7 @@ exports.bulkImportJournalStream = async (req, res) => {
   let validated
   await runImportStream(res, {
     total: items.length,
-    validate: async () => { validated = await validateJournal(items, req.companyId); return { validRows: validated.rows, invalidRows: validated.invalidRows } },
+    validate: async () => { validated = await validateJournal(items, req.companyId, req.body?.importOptions); return { validRows: validated.rows, invalidRows: validated.invalidRows } },
     save: (_rows, onProgress, isCancelled) => persistJournal(validated, req, onProgress, isCancelled),
   })
 }

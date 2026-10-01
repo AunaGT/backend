@@ -6,6 +6,8 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { Prisma } = require('@prisma/client')
+const { documentPaymentTerms, creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
+const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const crypto = require('crypto')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, deductStockMap } = require('../../services/bomStock')
@@ -16,7 +18,7 @@ const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
 const { buildOrderDateFilter, normalizeOrderAdminDetails, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
-const { getCompanyModuleBlock } = require('../platform/service')
+const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
 
 async function loadBranch(tx, branchId) {
   return tx.branch.findUnique({ where: { id: branchId }, select: { id: true, code: true, seq: true } })
@@ -388,10 +390,13 @@ exports.getById = async (req, res, next) => {
 exports.updateAdminDetails = async (req, res, next) => {
   try {
     const where = { ...orderWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
-    const order = await prisma.commercialDocument.findFirst({ where, select: { id: true } })
+    const order = await prisma.commercialDocument.findFirst({ where, select: { id: true, customer_contact_id: true, payment_condition: true, credit_days: true } })
     if (!order) return res.status(404).json({ message: 'Pedido no encontrado' })
 
     const data = normalizeOrderAdminDetails(req.body)
+    if (req.body?.payment_condition !== undefined || req.body?.credit_days !== undefined) {
+      Object.assign(data, await documentPaymentTerms(prisma, req.body, order.customer_contact_id, req.companyId, order))
+    }
     if (!Object.keys(data).length) return res.status(400).json({ message: 'No hay cambios válidos' })
 
     const updated = await prisma.commercialDocument.update({
@@ -439,6 +444,8 @@ exports.getPublicByToken = async (req, res, next) => {
         updated_at: true,
         confirmed_at: true,
         valid_until: true,
+        payment_condition: true,
+        credit_days: true,
         customer: true,
         customer_nit: true,
         is_final_consumer: true,
@@ -496,6 +503,8 @@ exports.getPublicByToken = async (req, res, next) => {
       updated_at: order.updated_at,
       confirmed_at: order.confirmed_at,
       valid_until: order.valid_until,
+      payment_condition: order.payment_condition,
+      credit_days: order.credit_days,
       customer: order.customer,
       customer_nit: order.is_final_consumer ? null : order.customer_nit,
       is_final_consumer: order.is_final_consumer,
@@ -554,6 +563,7 @@ exports.create = async (req, res, next) => {
 
     const created = await prismaTransaction.$transaction(async (tx) => {
       await validateCustomerContact(tx, customerContactId)
+      const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
         customerContactId,
         salesChannel,
@@ -581,6 +591,7 @@ exports.create = async (req, res, next) => {
           customer_nit: customer_nit != null ? String(customer_nit).trim() || null : null,
           is_final_consumer: Boolean(is_final_consumer),
           customer_contact_id: customerContactId,
+          ...paymentTerms,
           sales_channel: salesChannel,
           subtotal: new Prisma.Decimal(subtotal),
           discount_total: new Prisma.Decimal(0),
@@ -633,6 +644,7 @@ exports.update = async (req, res, next) => {
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
       await validateCustomerContact(tx, customerContactId)
+      const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
         customerContactId,
         salesChannel,
@@ -665,6 +677,7 @@ exports.update = async (req, res, next) => {
           sales_channel: salesChannel,
           subtotal: new Prisma.Decimal(subtotal),
           total: new Prisma.Decimal(total),
+          ...paymentTerms,
           notes: notes !== undefined ? (notes != null ? String(notes).trim() || null : null) : undefined,
           valid_until: validUntil,
           lines: { create: lines },
@@ -860,14 +873,6 @@ exports.convertToSale = async (req, res, next) => {
         err.status = 400
         throw err
       }
-      // Este flujo aún no crea la cuenta por cobrar ni valida límite/vencimiento.
-      // Bloquear es más seguro que registrar una venta a crédito como pagada.
-      if (paymentMethod.is_credit) {
-        const err = new Error('Los pedidos al crédito deben cobrarse desde una venta directa por ahora')
-        err.status = 400
-        err.code = 'ORDER_CREDIT_NOT_SUPPORTED'
-        throw err
-      }
 
       await assertLinesAvailable(
         tx,
@@ -887,6 +892,23 @@ exports.convertToSale = async (req, res, next) => {
         fulfillments.reduce((acc, f) => acc + Number(f.line.unit_price) * f.qty, 0) * 100
       ) / 100
       const total = subtotal
+      const initialAmount = initialPaymentAmount(req.body, total, paymentMethod.is_credit)
+      let dueDate = null
+      if (paymentMethod.is_credit) {
+        const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }) }
+        if (await getCompanyModuleBlock(req.companyId, 'receivables', companyId => readCompanyModules(companyId, tx, { useCache: false }))) fail('Cartera no está disponible para esta empresa', 403)
+        const setting = await tx.systemSetting.findUnique({ where: { company_id_key: { company_id: req.companyId, key: 'sales_allow_credit' } } })
+        if (String(setting?.value ?? 'true').toLowerCase() !== 'true') fail('Las ventas a crédito están desactivadas', 403)
+        if (!order.customer_contact_id) fail('Selecciona un cliente registrado para vender a crédito')
+        const customer = await tx.supplier.findFirst({ where: { id: order.customer_contact_id, company_id: req.companyId }, select: { id: true, credit_limit: true, supplier_payment_terms: CUSTOMER_TERM_PICK } })
+        if (!customer) fail('Cliente no encontrado', 404)
+        dueDate = creditDueDate(req.body.due_date, order.payment_condition === 'CREDIT' ? order.credit_days : customer.supplier_payment_terms[0]?.payment_term?.net_days, saleDate, await getTimezone(tx, req.companyId))
+        await lockCustomer(tx, customer.id)
+        const credit = await checkCredit(tx, customer, Math.round((total - initialAmount) * 100) / 100, { branch_id: order.branch_id })
+        if (!credit.ok) fail(credit.motivo || 'Crédito no disponible', 409)
+      } else if (amount_received != null && (!Number.isFinite(Number(amount_received)) || Number(amount_received) < total)) {
+        throw Object.assign(new Error('El monto recibido debe cubrir la venta. Selecciona crédito para dejar saldo pendiente.'), { status: 400 })
+      }
       const branch = await loadBranch(tx, order.branch_id)
       const saleRef = await nextDocumentReference(tx, 'V', branch)
 
@@ -897,7 +919,9 @@ exports.convertToSale = async (req, res, next) => {
           customer_nit: order.customer_nit,
           is_final_consumer: order.is_final_consumer,
           payment_method_id: paymentMethodId,
-          amount_received: amount_received != null ? Number(amount_received) : null,
+          payment_status: paymentMethod.is_credit ? 'PENDING' : 'PAID',
+          due_date: dueDate,
+          amount_received: paymentMethod.is_credit ? null : amount_received != null ? Number(amount_received) : total,
           change: changeRaw != null ? Number(changeRaw) : null,
           customer_contact_id: order.customer_contact_id || undefined,
           sales_channel: order.sales_channel,
@@ -957,6 +981,7 @@ exports.convertToSale = async (req, res, next) => {
       await tx.commercialDocumentSale.create({
         data: { document_id: order.id, sale_id: sale.id },
       })
+      await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
 
       const refreshedLines = await tx.commercialDocumentLine.findMany({
         where: { document_id: order.id },

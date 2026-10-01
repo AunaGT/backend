@@ -62,6 +62,36 @@ function quoteControllerMocks(prisma, prismaTransaction) {
   }
 }
 
+test('el listado combina búsqueda, estado, cliente y fechas sin perder el alcance de sucursal', async (t) => {
+  let selection
+  const prisma = { commercialDocument: {
+    count: async ({ where }) => { selection = where; return 26 },
+    findMany: async ({ where, skip, take }) => {
+      assert.deepEqual(where, selection)
+      assert.equal(skip, 20)
+      assert.equal(take, 10)
+      return []
+    },
+  } }
+  const Quotes = loadQuotesController(t, quoteControllerMocks(prisma, {}))
+  const res = responseStub()
+  let error
+  await Quotes.list({ query: { search: 'Constructor', status: 'SENT', customer_contact_id: 'customer-a', date_from: '2026-09-01', date_to: '2026-09-30', page: '3', pageSize: '10' } }, res, (e) => { error = e })
+  assert.equal(error, undefined)
+  assert.equal(selection.status, 'SENT')
+  assert.equal(selection.customer_contact_id, 'customer-a')
+  assert.equal(selection.created_at.gte.toISOString(), '2026-09-01T06:00:00.000Z')
+  assert.equal(selection.created_at.lt.toISOString(), '2026-10-01T06:00:00.000Z')
+  assert.equal(res.payload.totalPages, 3)
+})
+
+test('el listado rechaza fechas inválidas antes de consultar', async (t) => {
+  const Quotes = loadQuotesController(t, quoteControllerMocks({}, {}))
+  const res = responseStub()
+  await Quotes.list({ query: { date_from: '2026-02-30' } }, res, () => {})
+  assert.equal(res.statusCode, 400)
+})
+
 test('la conversión continúa cuando Pedidos está activo', () => {
   const { requireOrdersForConversion } = require('../src/modules/quotes/access')
   const req = {
@@ -126,7 +156,7 @@ test('el branding público se consulta para la empresa resuelta por el token', a
     commercialDocument: {
       findFirst: async () => ({
         reference: 'COT-1',
-        status: 'DRAFT',
+        status: 'SENT',
         customer: null,
         customer_nit: null,
         is_final_consumer: true,
@@ -161,9 +191,40 @@ test('el branding público se consulta para la empresa resuelta por el token', a
 
   assert.equal(error, undefined)
   assert.deepEqual(settingsQuery.where, {
-    key: { in: ['company_name', 'company_logo_url'] },
+    key: { in: ['company_name', 'company_logo_url', 'currency_code', 'locale', 'timezone'] },
     company_id: 'company-a',
   })
+  assert.equal(res.payload.currency_code, 'GTQ')
+})
+
+test('el cliente solo responde una cotización enviada, vigente y sin cambios concurrentes', async (t) => {
+  const tx = { commercialDocument: { updateMany: async ({ where, data }) => {
+    assert.equal(where.id, 'quote-a')
+    assert.equal(where.status, 'SENT')
+    assert.equal(data.status, 'ACCEPTED')
+    return { count: 1 }
+  } } }
+  const Quotes = loadQuotesController(t, {
+    '../src/models/prisma': { prisma: { commercialDocument: { findFirst: async () => ({ id: 'quote-a', status: 'SENT', valid_until: new Date('2099-01-01'), branch: { company_id: 'company-a' } }) } }, prismaTransaction: { $transaction: async (fn) => fn(tx) } },
+    '../src/modules/quotes/access': { getCompanyModuleBlock: async () => null },
+  })
+  const res = responseStub()
+  let error
+  assert.equal(typeof Quotes.respondPublic, 'function')
+  await Quotes.respondPublic({ params: { token: 'secret-token' }, body: { status: 'ACCEPTED' } }, res, (e) => { error = e })
+  assert.equal(error, undefined)
+  assert.equal(res.payload.status, 'ACCEPTED')
+})
+
+test('una cotización vencida no admite respuesta pública', async (t) => {
+  const Quotes = loadQuotesController(t, {
+    '../src/models/prisma': { prisma: { commercialDocument: { findFirst: async () => ({ id: 'quote-a', status: 'SENT', valid_until: new Date('2020-01-01'), branch: { company_id: 'company-a' } }) } }, prismaTransaction: {} },
+    '../src/modules/quotes/access': { getCompanyModuleBlock: async () => null },
+  })
+  const res = responseStub()
+  assert.equal(typeof Quotes.respondPublic, 'function')
+  await Quotes.respondPublic({ params: { token: 'secret-token' }, body: { status: 'ACCEPTED' } }, res, () => {})
+  assert.equal(res.statusCode, 409)
 })
 
 test('la configuración comercial se consulta dentro de la empresa indicada', async () => {
@@ -188,6 +249,7 @@ test('la configuración comercial se consulta dentro de la empresa indicada', as
 
 test('crear una cotización consulta la vigencia de la empresa del request', async (t) => {
   let settingsQuery
+  let transactionOptions
   const tx = {
     product: {
       findMany: async () => [{ id: 'product-a', name: 'Producto', available_for_sale: true }],
@@ -205,7 +267,10 @@ test('crear una cotización consulta la vigencia de la empresa del request', asy
       create: async () => ({ id: 'quote-a' }),
     },
   }
-  const prismaTransaction = { $transaction: async (callback) => callback(tx) }
+  const prismaTransaction = { $transaction: async (callback, options) => {
+    transactionOptions = options
+    return callback(tx)
+  } }
   const Quotes = loadQuotesController(t, quoteControllerMocks({}, prismaTransaction))
   const res = responseStub()
   let error
@@ -219,6 +284,9 @@ test('crear una cotización consulta la vigencia de la empresa del request', asy
 
   assert.equal(error, undefined)
   assert.equal(settingsQuery.where.company_id, 'company-a')
+  // La creación necesita varios viajes a la BD remota; 5 s no cubren este flujo.
+  assert.equal(transactionOptions?.timeout, 30000)
+  assert.equal(transactionOptions?.maxWait, 15000)
 })
 
 test('reiniciar la vigencia al editar usa la empresa del request', async (t) => {
@@ -386,6 +454,7 @@ test('la cotización pública evita tenant y las rutas privadas lo conservan', a
   require.cache[controllerPath] = {
     exports: Object.fromEntries([
       'getPublicByToken',
+      'respondPublic',
       'list',
       'create',
       'getShareLink',

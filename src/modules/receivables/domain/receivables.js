@@ -256,6 +256,7 @@ async function customerBalance(db, customerId, branchWhereClause = {}, now = new
   return {
     saldo,
     vencido: round2(vencidas.reduce((s, v) => s + v.balance, 0)),
+    vencido_30_mas: round2(vencidas.filter(v => Math.floor((now - new Date(v.due_date)) / 86400000) > 30).reduce((s, v) => s + v.balance, 0)),
     facturas_abiertas: open.length,
     facturas_vencidas: vencidas.length,
     credito_disponible: credito,

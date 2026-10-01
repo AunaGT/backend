@@ -16,6 +16,7 @@ const bcrypt = require('bcryptjs')
 const { prisma } = require('../models/prisma')
 const { assertGrant, fail } = require('./userAccess')
 const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, checkSimilarity, checkText, cell, nameCandidates } = require('../utils/importValidation')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -211,6 +212,9 @@ async function bulkValidateUsers(rows, importOptionsRaw, context) {
     const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()))
 
     const batchEmails = new Set()
+    const candidates = nameCandidates(rows, ['name', 'nombre'])
+    const companyUsers = candidates.length ? await prisma.user.findMany({ where: { user_companies: { some: { company_id: context.companyId } }, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
+    const matchName = nameMatcher(companyUsers)
 
     const validRows = []
     const invalidRows = []
@@ -223,6 +227,9 @@ async function bulkValidateUsers(rows, importOptionsRaw, context) {
             return
         }
         const validation = validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, importOptions)
+        checkText({ name: cell(row, ['name', 'nombre']), role: cell(row, ['role', 'rol']), email: cell(row, ['email', 'correo', 'correo_electronico']) }, { name: 150, role: 50, email: 150 }, validation.errors)
+        validation.valid = validation.errors.length === 0
+        checkSimilarity(validation, cell(row, ['name', 'nombre']), matchName, importOptionsRaw)
 
         if (validation.valid && validation.data) {
             validRows.push({
@@ -234,7 +241,8 @@ async function bulkValidateUsers(rows, importOptionsRaw, context) {
                 rowIndex: validation.rowIndex,
                 errors: validation.errors,
                 hints: validation.hints,
-                data: row,
+                canCreateAnyway: validation.canCreateAnyway,
+                similarMatches: validation.similarMatches,
             })
         }
     })

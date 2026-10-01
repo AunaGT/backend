@@ -7,6 +7,7 @@ const { dispatchedByRef } = require('../../services/stockLocations')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { allocateNetLineTotals } = require('../../services/saleLineTotals')
+const { creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
 
@@ -95,6 +96,7 @@ async function invoice(tx, req, requireCashSession) {
   if (!method) fail('Método de pago inválido')
   const round = value => Math.round(value * 100) / 100
   const total = round(lines.reduce((sum, { line, qty }) => sum + Number(line.unit_price) * qty, 0))
+  const initialAmount = initialPaymentAmount(req.body, total, method.is_credit)
   const now = new Date()
   let dueDate = null
   let sessionId = null
@@ -109,12 +111,12 @@ async function invoice(tx, req, requireCashSession) {
       id: true, name: true, credit_limit: true, supplier_payment_terms: CUSTOMER_TERM_PICK,
     } })
     if (!customer) fail('Cliente no encontrado', 404)
-    const days = customer.supplier_payment_terms[0]?.payment_term?.net_days
-    dueDate = req.body.due_date ? new Date(req.body.due_date) : days != null ? new Date(now.getTime() + Number(days) * 86400000) : null
-    if (!dueDate || Number.isNaN(dueDate.getTime())) fail('Indica la fecha de vencimiento del crédito')
+    const days = order.payment_condition === 'CREDIT' ? order.credit_days : customer.supplier_payment_terms[0]?.payment_term?.net_days
+    dueDate = creditDueDate(req.body.due_date, days, now, await getTimezone(tx, req.companyId))
     await lockCustomer(tx, customer.id)
-    const credit = await checkCredit(tx, customer, total, { branch_id: order.branch_id })
+    const credit = await checkCredit(tx, customer, round(total - initialAmount), { branch_id: order.branch_id })
     if (!credit.ok) fail(credit.motivo || 'El cliente no dispone de crédito', 409)
+    if (initialAmount) sessionId = await requireCashSession(tx, req.user, req.body.cash_register_id, order.branch_id)
   } else {
     sessionId = await requireCashSession(tx, req.user, req.body.cash_register_id, order.branch_id)
     received = req.body.amount_received == null ? total : Number(req.body.amount_received)
@@ -160,6 +162,7 @@ async function invoice(tx, req, requireCashSession) {
   for (const allocation of allocations) {
     await tx.orderDeliveryLine.update({ where: { id: allocation.id }, data: { qty_invoiced: { increment: allocation.qty } } })
   }
+  await recordInitialPayment(tx, req, sale, initialAmount, sessionId)
   // Inventory was consumed by deliveries; invoicing must never deduct it again.
   return { orderId: order.id, sale }
 }

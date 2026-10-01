@@ -662,7 +662,7 @@ exports.bulkImportMapped = async (req, res, next) => {
     res.json({
       ok: true,
       created: result.created,
-      skipped: result.skipped || 0,
+      skipped: (result.skipped || 0) + validation.skippedRows.length,
       errors: result.errors || [],
       message: result.skipped > 0
         ? `Se importaron ${result.created} contactos (${result.skipped} omitidos por error)`

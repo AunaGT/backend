@@ -12,6 +12,7 @@ const { prisma, prismaTransaction } = require('../../models/prisma')
 const { Prisma } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
+const { creditDueDate: resolveCreditDueDate, initialPaymentAmount, recordInitialPayment } = require('../../services/commercialPayment')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { consumeLotsFEFO, restoreLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
@@ -59,6 +60,7 @@ const SALE_LIST_INCLUDE = {
 
 /** Misma forma que GET /sales/:id — reutilizado al responder POST /sales (evita un GET extra en el cliente). */
 const SALE_DETAIL_INCLUDE = {
+  paymentEntries: { select: { amount: true } },
   payment_method: true,
   status: true,
   sale_items: {
@@ -716,6 +718,7 @@ exports.create = async (req, res, next) => {
       }
       let creditDueDate = null
       let salePaymentStatus = 'PAID'
+      const initialAmount = initialPaymentAmount(saleData, total, paymentMethod.is_credit)
       if (paymentMethod.is_credit) {
         if (!customerContactId) {
           const err = new Error('Una venta al crédito requiere elegir al cliente')
@@ -736,38 +739,12 @@ exports.create = async (req, res, next) => {
         }
 
         // Vencimiento: el que mande el POS, o el plazo por defecto del cliente.
-        if (saleData.due_date != null && String(saleData.due_date).trim() !== '') {
-          const d = new Date(saleData.due_date)
-          if (Number.isNaN(d.getTime())) {
-            const err = new Error('La fecha de vencimiento es inválida')
-            err.status = 400
-            throw err
-          }
-          creditDueDate = d
-        } else {
-          const netDays = customer.supplier_payment_terms[0]?.payment_term?.net_days
-          if (netDays != null) {
-            creditDueDate = new Date(saleDate.getTime() + Number(netDays) * 86400000)
-          }
-        }
-
-        // Una venta al crédito sin vencimiento no vence nunca: no entra en la
-        // antigüedad de saldos, no cuenta como vencida y nunca bloquea al
-        // cliente por mora. Se exige la fecha en vez de dejarla nula.
-        if (!creditDueDate) {
-          const err = new Error(
-            'La venta al crédito necesita fecha de vencimiento. ' +
-            `Indíquela en la venta o configure un término de pago predeterminado para ${customer.name}.`
-          )
-          err.status = 400
-          err.code = 'CREDIT_SALE_WITHOUT_DUE_DATE'
-          throw err
-        }
+        creditDueDate = resolveCreditDueDate(saleData.due_date, customer.supplier_payment_terms[0]?.payment_term?.net_days, saleDate, await getTimezone(tx, req.companyId))
 
         // Sin esto dos cajeros vendiéndole al mismo cliente a la vez leen el
         // mismo saldo y ambos pasan el límite. Se libera al commitear.
         await lockCustomer(tx, customer.id)
-        const check = await checkCredit(tx, customer, total, { branch_id: branchId })
+        const check = await checkCredit(tx, customer, Math.round((total - initialAmount) * 100) / 100, { branch_id: branchId })
         if (!check.ok) {
           // Quien tenga el permiso puede pasarla igual, pero explícitamente:
           // el override viaja en el cuerpo, no se asume por tener el permiso.
@@ -819,6 +796,7 @@ exports.create = async (req, res, next) => {
         },
       })
 
+      await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
       // 3) Guardar promociones con descuento efectivo e incrementar solo esos códigos
       if (promotionRowsToRecord.length > 0) {
         for (const row of promotionRowsToRecord) {

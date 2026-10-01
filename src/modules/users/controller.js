@@ -975,6 +975,7 @@ exports.bulkImportMapped = async (req, res, next) => {
 
     // Importar solo las filas válidas
     const result = await bulkCreateUsers(validation.validRows, context)
+    result.skipped += validation.skippedRows.length
     res.json({
       message: `Importación completada: ${result.created} creados, ${result.skipped} omitidos`,
       ...result

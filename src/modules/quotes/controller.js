@@ -6,7 +6,10 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { Prisma } = require('@prisma/client')
+const { documentPaymentTerms } = require('../../services/commercialPayment')
 const crypto = require('crypto')
+const { DateTime } = require('luxon')
+const { getTimezone } = require('../../utils/getTimezone')
 const {
   resolvePriceTierForContext,
   resolveUnitPriceFromProduct,
@@ -33,6 +36,8 @@ const {
 
 const QUOTE_DOC_TYPE = 'QUOTE'
 const ORDER_DOC_TYPE = 'ORDER'
+// La BD remota requiere varios viajes por documento; mantener un límite acotado como Pedidos.
+const QUOTE_TX_OPTIONS = { maxWait: 15_000, timeout: 30_000 }
 
 const BRANCH_SELECT = { select: { id: true, name: true, code: true } }
 
@@ -52,7 +57,7 @@ const QUOTE_DETAIL_INCLUDE = {
   lines: {
     orderBy: { sort_order: 'asc' },
     include: {
-      product: { select: { id: true, name: true, barcode: true } },
+      product: { select: { id: true, name: true, barcode: true, image_url: true } },
     },
   },
   convertedChildren: {
@@ -160,19 +165,19 @@ exports.getPublicByToken = async (req, res, next) => {
         branch: { select: { company_id: true } },
         lines: {
           orderBy: { sort_order: 'asc' },
-          include: { product: { select: { id: true, name: true, barcode: true } } },
+          include: { product: { select: { id: true, name: true, barcode: true, image_url: true } } },
         },
       },
     })
     if (!quote) return res.status(404).json({ message: 'Cotización no encontrada' })
     const moduleBlock = await getCompanyModuleBlock(quote.branch.company_id, 'quotes')
     if (moduleBlock) return res.status(403).json(moduleBlock)
-    if (['CANCELLED', 'REJECTED'].includes(quote.status)) {
+    if (['DRAFT', 'CANCELLED'].includes(quote.status)) {
       return res.status(410).json({ message: 'Esta cotización ya no está disponible' })
     }
 
     const companyRows = await prisma.systemSetting.findMany({
-      where: { key: { in: ['company_name', 'company_logo_url'] }, company_id: quote.branch.company_id },
+      where: { key: { in: ['company_name', 'company_logo_url', 'currency_code', 'locale', 'timezone'] }, company_id: quote.branch.company_id },
     })
     const companyMap = Object.fromEntries(companyRows.map((r) => [r.key, r.value]))
 
@@ -183,14 +188,22 @@ exports.getPublicByToken = async (req, res, next) => {
       customer_nit: quote.is_final_consumer ? null : quote.customer_nit,
       is_final_consumer: quote.is_final_consumer,
       valid_until: quote.valid_until,
+      payment_condition: quote.payment_condition,
+      credit_days: quote.credit_days,
       subtotal: quote.subtotal,
       total: quote.total,
       notes: quote.notes,
+      created_at: quote.created_at,
+      discount_total: quote.discount_total,
+      currency_code: companyMap.currency_code || 'GTQ',
+      locale: companyMap.locale || 'es-GT',
+      timezone: companyMap.timezone || 'America/Guatemala',
       company_name: companyMap.company_name || 'Depósito',
       company_logo_url: (companyMap.company_logo_url && String(companyMap.company_logo_url).trim()) || '',
       lines: quote.lines.map((l) => ({
         product_name: l.product?.name,
         barcode: l.product?.barcode,
+        image_url: l.product?.image_url,
         qty: l.qty,
         unit_price: l.unit_price,
         line_total: l.line_total,
@@ -201,6 +214,29 @@ exports.getPublicByToken = async (req, res, next) => {
   }
 }
 
+exports.respondPublic = async (req, res, next) => {
+  try {
+    const token = String(req.params.token || '').trim()
+    const status = req.body?.status
+    if (!token || !['ACCEPTED', 'REJECTED'].includes(status)) return res.status(400).json({ message: 'Respuesta inválida' })
+    const quote = await prisma.commercialDocument.findFirst({ where: { public_token: token, doc_type: QUOTE_DOC_TYPE }, include: { branch: { select: { company_id: true } } } })
+    if (!quote) return res.status(404).json({ message: 'Cotización no encontrada' })
+    const block = await getCompanyModuleBlock(quote.branch.company_id, 'quotes')
+    if (block) return res.status(403).json(block)
+    const now = new Date()
+    if (quote.status !== 'SENT' || (quote.valid_until && new Date(quote.valid_until) <= now)) return res.status(409).json({ message: 'Esta cotización ya no admite respuestas. Consulta su estado actualizado.' })
+    await prismaTransaction.$transaction(async (tx) => {
+      const changed = await tx.commercialDocument.updateMany({
+        where: { id: quote.id, public_token: token, doc_type: QUOTE_DOC_TYPE, status: 'SENT', OR: [{ valid_until: null }, { valid_until: { gt: now } }] },
+        data: { status },
+      })
+      if (!changed.count) { const error = new Error('La cotización cambió mientras respondías. Actualiza la página.'); error.status = 409; throw error }
+      if (status === 'REJECTED') await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
+    }, QUOTE_TX_OPTIONS)
+    res.json({ status })
+  } catch (e) { next(e) }
+}
+
 exports.getShareLink = async (req, res, next) => {
   try {
     const where = quoteWhereIdOrReference(req.params.id)
@@ -209,7 +245,7 @@ exports.getShareLink = async (req, res, next) => {
     })
     if (!quote) return res.status(404).json({ message: 'Cotización no encontrada' })
 
-    const token = await prisma.$transaction(async (tx) => ensurePublicToken(tx, quote.id))
+    const token = await prismaTransaction.$transaction(async (tx) => ensurePublicToken(tx, quote.id), QUOTE_TX_OPTIONS)
     const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '')
     const path = `/q/${token}`
     const public_url = base ? `${base}${path}` : path
@@ -330,8 +366,8 @@ async function resolveQuoteLines(tx, items, ctx) {
 exports.list = async (req, res, next) => {
   try {
     const { status, search } = req.query || {}
-    const page = Math.max(1, Number(req.query.page ?? 1))
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 25)))
+    const page = Math.max(1, Math.trunc(Number(req.query.page) || 1))
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(req.query.pageSize) || 25)))
     const searchTerm = String(search || '').trim()
 
     const where = { doc_type: QUOTE_DOC_TYPE, ...branchWhere(req) }
@@ -343,9 +379,21 @@ exports.list = async (req, res, next) => {
       where.branch_id = wantedBranch
     }
     let searchMeta = null
-    if (status && String(status).toUpperCase() !== 'ALL' && !searchTerm) {
+    if (status && String(status).toUpperCase() !== 'ALL') {
+      if (!Object.hasOwn(QUOTE_STATUS_TRANSITIONS, String(status).toUpperCase())) return res.status(400).json({ message: 'Estado inválido' })
       where.status = String(status).toUpperCase()
     }
+    if (req.query.customer_contact_id) where.customer_contact_id = String(req.query.customer_contact_id)
+    const timezone = req.query.date_from || req.query.date_to ? await getTimezone(prisma, req.companyId) : null
+    for (const [key, operator] of [['date_from', 'gte'], ['date_to', 'lt']]) {
+      if (!req.query[key]) continue
+      const input = String(req.query[key])
+      const day = DateTime.fromISO(input, { zone: timezone })
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(input) || !day.isValid) return res.status(400).json({ message: 'Fecha inválida' })
+      where.created_at ||= {}
+      where.created_at[operator] = (operator === 'lt' ? day.plus({ days: 1 }) : day).toJSDate()
+    }
+    if (where.created_at?.gte && where.created_at?.lt && where.created_at.gte >= where.created_at.lt) return res.status(400).json({ message: 'Rango de fechas inválido' })
     if (searchTerm) {
       const meta = appendCommercialDocSearchFilter(where, searchTerm)
       searchMeta = meta
@@ -432,6 +480,7 @@ exports.create = async (req, res, next) => {
 
     const created = await prismaTransaction.$transaction(async (tx) => {
       await validateCustomerContact(tx, customerContactId)
+      const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
         customerContactId,
         salesChannel,
@@ -470,6 +519,7 @@ exports.create = async (req, res, next) => {
           customer_nit: customer_nit != null ? String(customer_nit).trim() || null : null,
           is_final_consumer: Boolean(is_final_consumer),
           customer_contact_id: customerContactId,
+          ...paymentTerms,
           sales_channel: salesChannel,
           subtotal: new Prisma.Decimal(subtotal),
           discount_total: new Prisma.Decimal(0),
@@ -481,7 +531,7 @@ exports.create = async (req, res, next) => {
         include: QUOTE_DETAIL_INCLUDE,
       })
       return doc
-    })
+    }, QUOTE_TX_OPTIONS)
 
     res.status(201).json(created)
   } catch (e) {
@@ -499,6 +549,10 @@ exports.update = async (req, res, next) => {
     if (!existing) return res.status(404).json({ message: 'Cotización no encontrada' })
     if (existing.status !== 'DRAFT') {
       return res.status(400).json({ message: 'Solo se pueden editar cotizaciones en borrador' })
+    }
+    if (!req.body.items && req.body.payment_condition !== undefined) {
+      const paymentTerms = await documentPaymentTerms(prisma, req.body, existing.customer_contact_id, req.companyId, existing)
+      return res.json(await prisma.commercialDocument.update({ where: { id: existing.id }, data: paymentTerms, include: QUOTE_DETAIL_INCLUDE }))
     }
 
     const {
@@ -525,6 +579,7 @@ exports.update = async (req, res, next) => {
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
       await validateCustomerContact(tx, customerContactId)
+      const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
         customerContactId,
         salesChannel,
@@ -568,13 +623,14 @@ exports.update = async (req, res, next) => {
           sales_channel: salesChannel,
           subtotal: new Prisma.Decimal(subtotal),
           total: new Prisma.Decimal(total),
+          ...paymentTerms,
           notes: notes !== undefined ? (notes != null ? String(notes).trim() || null : null) : undefined,
           valid_until: validUntil,
           lines: { create: lines },
         },
         include: QUOTE_DETAIL_INCLUDE,
       })
-    })
+    }, QUOTE_TX_OPTIONS)
 
     res.json(updated)
   } catch (e) {
@@ -626,7 +682,7 @@ exports.updateStatus = async (req, res, next) => {
         data: { status: newStatus },
         include: QUOTE_DETAIL_INCLUDE,
       })
-    })
+    }, QUOTE_TX_OPTIONS)
 
     res.json(updated)
   } catch (e) {
@@ -688,6 +744,8 @@ exports.convertToOrder = async (req, res, next) => {
           customer_nit: quote.customer_nit,
           is_final_consumer: quote.is_final_consumer,
           customer_contact_id: quote.customer_contact_id,
+          payment_condition: quote.payment_condition,
+          credit_days: quote.credit_days,
           sales_channel: quote.sales_channel,
           subtotal: quote.subtotal,
           discount_total: quote.discount_total ?? new Prisma.Decimal(0),
@@ -706,7 +764,7 @@ exports.convertToOrder = async (req, res, next) => {
           },
         },
       })
-    })
+    }, QUOTE_TX_OPTIONS)
 
     res.status(201).json(order)
   } catch (e) {

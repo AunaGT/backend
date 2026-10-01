@@ -14,6 +14,7 @@
  */
 const { prisma } = require('../models/prisma')
 const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, checkSimilarity, checkText, cell, rowSet } = require('../utils/importValidation')
 
 /**
  * Validate a single catalog item row
@@ -46,6 +47,7 @@ function validateCatalogRow(row, rowIndex, type, existingNames, batchNames) {
     }
 
     // Validate name (required)
+    checkText(normalizedRow, { name: 100 }, errors)
     const name = normalizedRow.name || ''
     if (!name) {
         errors.push('El nombre es requerido')
@@ -82,7 +84,7 @@ function validateCatalogRow(row, rowIndex, type, existingNames, batchNames) {
  * @param {string} type - 'categories' or 'payment-terms'
  * @returns {Object} Validation result with validRows and invalidRows
  */
-async function bulkValidateCatalogs(rows, type, companyId) {
+async function bulkValidateCatalogs(rows, type, companyId, importOptions = {}) {
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return {
             validRows: [],
@@ -101,13 +103,19 @@ async function bulkValidateCatalogs(rows, type, companyId) {
 
     // Track names in current batch to detect duplicates
     const batchNames = new Set()
+    const matchName = nameMatcher(existing)
+    const skips = rowSet(importOptions, 'skipRowIndexes')
+    const skippedRows = []
 
     const validRows = []
     const invalidRows = []
 
     rows.forEach((row, index) => {
         const rowIndex = index + 1 // 1-based for user display
+        if (skips.has(rowIndex)) { skippedRows.push({ rowIndex, reason: 'Omitida por el usuario' }); return }
         const validation = validateCatalogRow(row, rowIndex, type, existingNames, batchNames)
+        validation.rowIndex = rowIndex
+        checkSimilarity(validation, cell(row, ['nombre', 'name', 'nombre_categoria', 'nombre_termino']), matchName, importOptions, 1)
 
         if (validation.valid && validation.data) {
             validRows.push({
@@ -118,6 +126,8 @@ async function bulkValidateCatalogs(rows, type, companyId) {
             invalidRows.push({
                 rowIndex,
                 errors: validation.errors,
+                canCreateAnyway: validation.canCreateAnyway,
+                similarMatches: validation.similarMatches,
                 data: row
             })
         }
@@ -126,8 +136,10 @@ async function bulkValidateCatalogs(rows, type, companyId) {
     return {
         validRows,
         invalidRows,
+        skippedRows,
         totals: {
             total: rows.length,
+            skipped: skippedRows.length,
             valid: validRows.length,
             invalid: invalidRows.length
         }

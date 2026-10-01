@@ -14,6 +14,9 @@
  */
 
 const { Prisma } = require('@prisma/client')
+const { DateTime } = require('luxon')
+const { getTimezone } = require('../../utils/getTimezone')
+const { creditDueDate } = require('../../services/commercialPayment')
 const { prisma } = require('../../models/prisma')
 const { requireCompany, requireBranch } = require('../../middlewares/tenant')
 const { round2 } = require('../../services/accounting/logic')
@@ -57,6 +60,66 @@ function branchFilter(req) {
 function number(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+/** Facturas abiertas: búsqueda y paginación sin descargar toda la cartera. */
+exports.invoices = async (req, res, next) => {
+  try {
+    const companyId = requireCompany(req)
+    const q = req.query || {}
+    const page = Math.max(1, Math.trunc(number(q.page) || 1))
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(number(q.pageSize) || 10)))
+    const state = String(q.state || 'ALL')
+    if (!['ALL', 'OVERDUE', 'UPCOMING', 'PARTIAL'].includes(state)) fail(400, 'Estado de cartera inválido')
+    const now = new Date()
+    const where = {
+      ...branchFilter(req), customer_contact_id: { not: null },
+      customerContact: { company_id: companyId },
+      payment_status: state === 'PARTIAL' ? 'PARTIAL' : { in: ['PENDING', 'PARTIAL'] },
+      payment_method: { is_credit: true }, status: { name: 'Completada' },
+    }
+    if (q.customer_id) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(q.customer_id))) fail(400, 'Cliente inválido')
+      where.customer_contact_id = String(q.customer_id)
+    }
+    if (state === 'OVERDUE') where.due_date = { lt: now }
+    if (state === 'UPCOMING') where.due_date = { gte: now, lte: new Date(now.getTime() + 30 * 86400000) }
+    const term = String(q.search || '').trim().slice(0, 200)
+    if (term) where.OR = [
+      { reference: { contains: term, mode: 'insensitive' } },
+      { customerContact: { name: { contains: term, mode: 'insensitive' } } },
+    ]
+    if (q.date_from || q.date_to) {
+      const timezone = await getTimezone(prisma, companyId)
+      where.date = {}
+      for (const [key, field] of [['date_from', 'gte'], ['date_to', 'lt']]) {
+        if (!q[key]) continue
+        const input = String(q[key])
+        const day = DateTime.fromISO(input, { zone: timezone })
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(input) || !day.isValid) fail(400, 'Fecha inválida')
+        where.date[field] = (field === 'lt' ? day.plus({ days: 1 }) : day).startOf('day').toJSDate()
+      }
+      if (q.date_from && q.date_to && String(q.date_from) > String(q.date_to)) fail(400, 'Rango de fechas inválido')
+    }
+    const totalItems = await prisma.sale.count({ where })
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+    const safePage = Math.min(page, totalPages)
+    const sales = await prisma.sale.findMany({
+      where, skip: (safePage - 1) * pageSize, take: pageSize,
+      orderBy: [{ due_date: 'asc' }, { date: 'asc' }, { id: 'asc' }],
+      select: { id: true, reference: true, date: true, due_date: true, adjusted_total: true,
+        payment_status: true, customerContact: { select: { id: true, name: true } },
+        paymentEntries: { select: { amount: true } } },
+    })
+    res.json({ page: safePage, pageSize, totalItems, totalPages, items: sales.map((s) => ({
+      id: s.id, reference: s.reference, date: s.date, due_date: s.due_date,
+      total: round2(number(s.adjusted_total)), abonado: round2(number(s.adjusted_total) - balanceOf(s)),
+      saldo: balanceOf(s), payment_status: s.payment_status,
+      customer_id: s.customerContact.id, customer_name: s.customerContact.name,
+      vencida: Boolean(s.due_date && s.due_date < now),
+      dias_vencida: s.due_date ? Math.max(0, Math.floor((now - s.due_date) / 86400000)) : 0,
+    })) })
+  } catch (e) { next(e) }
 }
 
 /**
@@ -249,12 +312,17 @@ exports.statement = async (req, res, next) => {
       select: {
         id: true, name: true, contact: true, phone: true, email: true,
         address: true, tax_id: true, credit_limit: true, party_type: true,
+        supplier_payment_terms: CUSTOMER_TERM_PICK,
       },
     })
     if (!customer) fail(404, 'Cliente no encontrado')
 
     const where = branchFilter(req)
-    const [sales, payments, resumen] = await Promise.all([
+    const historyPage = Math.max(1, Math.trunc(number(req.query?.page) || 1))
+    const historySize = Math.min(500, Math.max(1, Math.trunc(number(req.query?.pageSize) || 500)))
+    const salesWhere = { customer_contact_id: customer.id, payment_method: { is_credit: true }, status: { name: 'Completada' }, ...where }
+    const paymentsWhere = { customer_id: customer.id, ...where }
+    const [sales, payments, resumen, totalSales, totalPayments] = await Promise.all([
       prisma.sale.findMany({
         where: {
           customer_contact_id: customer.id,
@@ -267,8 +335,8 @@ exports.statement = async (req, res, next) => {
           adjusted_total: true, total: true, payment_status: true,
           paymentEntries: { select: { amount: true } },
         },
-        orderBy: [{ date: 'desc' }],
-        take: 500,
+        orderBy: [{ date: 'desc' }, { id: 'desc' }],
+        skip: (historyPage - 1) * historySize, take: historySize,
       }),
       prisma.customerPayment.findMany({
         where: { customer_id: customer.id, ...where },
@@ -280,16 +348,20 @@ exports.statement = async (req, res, next) => {
             select: { amount: true, sale: { select: { id: true, reference: true } } },
           },
         },
-        orderBy: { paid_at: 'desc' },
-        take: 500,
+        orderBy: [{ paid_at: 'desc' }, { id: 'desc' }],
+        skip: (historyPage - 1) * historySize, take: historySize,
       }),
       customerBalance(prisma, customer.id, where),
+      prisma.sale.count({ where: salesWhere }),
+      prisma.customerPayment.count({ where: paymentsWhere }),
     ])
 
     const now = new Date()
     res.json({
+      history: { page: historyPage, pageSize: historySize, total_sales: totalSales, total_payments: totalPayments, hasNextPage: historyPage * historySize < Math.max(totalSales, totalPayments) },
       customer: {
         ...customer,
+        payment_term: customer.supplier_payment_terms[0]?.payment_term ?? null,
         credit_limit: customer.credit_limit == null ? null : round2(number(customer.credit_limit)),
       },
       resumen: {
@@ -370,7 +442,7 @@ exports.creditCheck = async (req, res, next) => {
       customer_name: customer.name,
       payment_term: term ? { name: term.name, net_days: netDays } : null,
       due_date_sugerida:
-        netDays != null ? new Date(Date.now() + netDays * 86400000).toISOString() : null,
+        netDays != null ? DateTime.now().setZone(await getTimezone(prisma, req.companyId)).plus({ days: netDays }).toISODate() : null,
       ...result,
     })
   } catch (e) {
@@ -683,11 +755,7 @@ exports.updateDueDate = async (req, res, next) => {
 
     const raw = req.body?.due_date
     if (raw == null || String(raw).trim() === '') fail(400, 'Indique la nueva fecha de vencimiento')
-    const due = new Date(String(raw).length === 10 ? `${raw}T12:00:00-06:00` : raw)
-    if (Number.isNaN(due.getTime())) fail(400, 'La fecha de vencimiento es inválida')
-    if (due < new Date(sale.date)) {
-      fail(400, 'El vencimiento no puede ser anterior a la fecha de la venta')
-    }
+    const due = creditDueDate(raw, null, new Date(sale.date), await getTimezone(prisma, companyId))
 
     const updated = await prisma.sale.update({
       where: { id: sale.id },

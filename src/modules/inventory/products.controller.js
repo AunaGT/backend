@@ -2069,7 +2069,7 @@ exports.bulkImportMapped = async (req, res, next) => {
       ok: true,
       created: result.created,
       adopted: result.adopted || 0,
-      skipped: result.skipped || 0,
+      skipped: (result.skipped || 0) + validation.skippedRows.length,
       errors: result.errors || [],
       message: [
         `${result.created} producto(s) nuevo(s)`,

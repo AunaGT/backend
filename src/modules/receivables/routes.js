@@ -15,6 +15,7 @@ const Receivables = require('./controller')
 
 // Cartera
 router.get('/', Auth, hasPermission('receivables.view'), Receivables.list)
+router.get('/invoices', Auth, hasPermission('receivables.view'), Receivables.invoices)
 // Antes de /customers/:id para que 'aging' no se lea como un id.
 router.get('/aging', Auth, hasPermission('receivables.view'), Receivables.aging)
 router.get('/overdue-count', Auth, hasPermission('receivables.view'), Receivables.overdueCount)

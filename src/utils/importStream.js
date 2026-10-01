@@ -42,7 +42,7 @@ async function runImportStream(res, { total, validate, save }) {
       stream.emit('error', {
         phase: 'error', processed: 0, total,
         message: `${validation.invalidRows.length} filas tienen errores.`,
-        invalidRows: validation.invalidRows.map(({ rowIndex, errors }) => ({ rowIndex, errors })),
+        invalidRows: validation.invalidRows.map(({ rowIndex, errors, canCreateAnyway, similarMatches }) => ({ rowIndex, errors, canCreateAnyway, similarMatches })),
       })
       return
     }
@@ -53,6 +53,7 @@ async function runImportStream(res, { total, validate, save }) {
       stream.emit('progress', { phase: 'saving', ...progress })
     }, stream.cancelled)
     if (stream.cancelled()) throw new ImportCancelledError()
+    result.skipped = (result.skipped || 0) + (validation.skippedRows?.length || 0)
     stream.emit('complete', { phase: 'complete', processed: rows.length, total: rows.length, result })
   } catch (error) {
     if (!(error instanceof ImportCancelledError) && !stream.cancelled()) {
