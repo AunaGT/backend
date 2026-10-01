@@ -67,6 +67,7 @@ const incomingDetailInclude = {
           brand: true,
           size: true,
           barcode: true,
+          image_url: true,
           cost: true,
           price: true,
           stock: true
@@ -623,9 +624,17 @@ exports.updatePayment = async (req, res, next) => {
  */
 exports.generateReport = async (req, res, next) => {
   try {
-    const { supplier_id, start_date, end_date, payment_status } = req.query || {}
+    const { supplier_id, start_date, end_date, payment_status, search } = req.query || {}
 
-    const where = {}
+    const { branchWhere } = require('../../middlewares/tenant')
+    const where = { ...branchWhere(req) }
+    if (search) {
+      where.OR = [
+        { supplier: { name: { contains: String(search), mode: 'insensitive' } } },
+        { notes: { contains: String(search), mode: 'insensitive' } },
+        { registeredBy: { name: { contains: String(search), mode: 'insensitive' } } }
+      ]
+    }
 
     if (supplier_id) {
       where.supplier_id = String(supplier_id)

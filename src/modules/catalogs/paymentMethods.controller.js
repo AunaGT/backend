@@ -64,7 +64,7 @@ exports.list = async (req, res, next) => {
 
     const items = await prisma.paymentMethod.findMany({
       where,
-      orderBy: { name: 'asc' },
+      orderBy: { name: req.query.order === 'desc' ? 'desc' : 'asc' },
       include: methodIncludeCounts,
       skip: (safePage - 1) * pageSize,
       take: pageSize,

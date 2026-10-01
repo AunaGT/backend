@@ -54,6 +54,8 @@ exports.list = async (req, res, next) => {
     const { includeDeleted } = req.query
     const where = includeDeleted === 'true' ? {} : { deleted: false }
     where.company_id = req.companyId
+    const search = String(req.query.search || '').trim()
+    if (search) where.name = { contains: search, mode: 'insensitive' }
     
     const totalItems = await prisma.productCategory.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
@@ -61,7 +63,7 @@ exports.list = async (req, res, next) => {
     
     const categories = await prisma.productCategory.findMany({ 
       where,
-      orderBy: { name: 'asc' },
+      orderBy: { name: req.query.order === 'desc' ? 'desc' : 'asc' },
       include: { 
         _count: { 
           select: { 
