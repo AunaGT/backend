@@ -21,6 +21,7 @@ const LINE_INCLUDE = {
       id: true,
       name: true,
       barcode: true,
+      image_url: true,
       stock: true,
       cost: true,
       category: { select: { id: true, name: true } },
@@ -324,6 +325,7 @@ async function applyStockTransaction(tx, sessionId, branchId) {
 }
 
 const sessionIncludeSummary = {
+  branch: { select: { id: true, name: true, code: true } },
   warehouse: { select: { id: true, name: true, code: true } },
   createdBy: { select: { id: true, name: true, email: true } },
   approvedBy: { select: { id: true, name: true, email: true } },
@@ -337,10 +339,17 @@ const sessionIncludeSummary = {
 exports.list = async (req, res, next) => {
   try {
     const status = req.query.status
-    const take = Math.min(Number(req.query.limit) || 50, 100)
-    const skip = Number(req.query.offset) || 0
+    const take = Math.max(1, Math.min(Math.floor(Number(req.query.limit) || 50), 100))
+    const skip = Math.max(0, Math.floor(Number(req.query.offset) || 0))
     const { branchWhere } = require('../../middlewares/tenant')
     const where = { ...branchWhere(req) }
+    const q = String(req.query.q || '').trim().slice(0, 200)
+    if (q) where.OR = [
+      { name: { contains: q, mode: 'insensitive' } },
+      { warehouse: { name: { contains: q, mode: 'insensitive' } } },
+      { branch: { name: { contains: q, mode: 'insensitive' } } },
+      { createdBy: { name: { contains: q, mode: 'insensitive' } } },
+    ]
     if (status && String(status).trim()) {
       where.status = String(status).toUpperCase()
     }
@@ -370,7 +379,7 @@ exports.list = async (req, res, next) => {
           progress: {
             totalLines: s._count.lines,
             countedLines: counted,
-            pct: s._count.lines ? Math.round((100 * counted) / s._count.lines) : 0,
+            pct: s._count.lines ? Math.round((1000 * counted) / s._count.lines) / 10 : 0,
           },
         }
       })
@@ -416,7 +425,7 @@ exports.getById = async (req, res, next) => {
         qty_counted: { not: null },
         ...(scopeDoubleCount(session.scope_json) ? { qty_counted_secondary: { not: null } } : {}),
       },
-      select: { stock_snapshot: true, qty_counted: true, product: { select: { cost: true } } },
+      select: { stock_snapshot: true, qty_counted: true, qty_counted_secondary: true, product: { select: { cost: true } } },
     })
     let valueDelta = 0
     for (const L of linesWithDiff) {
@@ -429,11 +438,16 @@ exports.getById = async (req, res, next) => {
       progress: {
         totalLines: session._count.lines,
         countedLines: countedLines,
-        pct: session._count.lines ? Math.round((100 * countedLines) / session._count.lines) : 0,
+        pct: session._count.lines ? Math.round((1000 * countedLines) / session._count.lines) / 10 : 0,
       },
       totals: {
         sumStockSnapshot: sumSnap._sum.stock_snapshot ?? 0,
         valueDeltaApprox: valueDelta,
+        unchangedLines: linesWithDiff.filter(L => L.qty_counted === L.stock_snapshot).length,
+        differenceLines: linesWithDiff.filter(L => L.qty_counted !== L.stock_snapshot).length,
+        notFoundLines: linesWithDiff.filter(L => L.qty_counted === 0 && L.stock_snapshot > 0).length,
+        mismatchLines: scopeDoubleCount(session.scope_json)
+          ? linesWithDiff.filter(L => L.qty_counted !== L.qty_counted_secondary).length : 0,
       },
     })
   } catch (e) {
@@ -668,6 +682,12 @@ exports.updateLine = async (req, res, next) => {
 
     const qtyRaw = req.body?.qty_counted
     const qty2Raw = req.body?.qty_counted_secondary
+    for (const value of [qtyRaw, qty2Raw]) {
+      if (value === undefined) continue
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+        return res.status(400).json({ message: 'La cantidad debe ser un número entero igual o mayor a cero.' })
+      }
+    }
     const hasPrimary = qtyRaw !== undefined && qtyRaw !== null && !Number.isNaN(Number(qtyRaw))
     const hasSecondary = qty2Raw !== undefined && qty2Raw !== null && !Number.isNaN(Number(qty2Raw))
     const note = req.body?.note != null ? String(req.body.note).slice(0, 500) : undefined
