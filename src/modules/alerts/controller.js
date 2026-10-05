@@ -10,17 +10,37 @@
 
 const { prisma } = require('../../models/prisma')
 const { syncLotExpiryAlerts } = require('../../services/lots')
+const { readCompanyModules } = require('../platform/service')
 const { formatAlertTimestamp } = require('./presentation')
+const { availableAlertTypes, withAlertModule } = require('./policy')
+
+async function alertCatalogForCompany(companyId) {
+  const [modules, types] = await Promise.all([
+    readCompanyModules(companyId),
+    prisma.alertType.findMany({ orderBy: { name: 'asc' } }),
+  ])
+  return { modules, types: availableAlertTypes(types, modules) }
+}
 
 exports.list = async (req, res, next) => {
   try {
-    await syncLotExpiryAlerts(prisma) // advisory, autothrottled; no hay cron en serverless
+    const catalog = await alertCatalogForCompany(req.companyId)
+    if (catalog.modules.some((module) => module.code === 'inventory' && module.effectiveEnabled)) {
+      await syncLotExpiryAlerts(prisma) // advisory, autothrottled; no hay cron en serverless
+    }
     // By default only show unresolved alerts (resolved = 0), unless ?all=true
     const showAll = req.query.all === 'true'
+    const availableTypeIds = catalog.types.map((type) => type.id)
+
+    if (availableTypeIds.length === 0) return res.json([])
 
     const { branchWhere } = require('../../middlewares/tenant')
     const alerts = await prisma.alert.findMany({
-      where: { ...(showAll ? {} : { resolved: 0 }), ...branchWhere(req) },
+      where: {
+        ...(showAll ? {} : { resolved: 0 }),
+        ...branchWhere(req),
+        type_id: { in: availableTypeIds },
+      },
       include: { 
         type: true, 
         priority: true, 
@@ -35,12 +55,12 @@ exports.list = async (req, res, next) => {
     // Format timestamps to friendly Guatemala local time
     const adapted = alerts.map(a => {
       const { timestamp, localDate, timestampIso } = formatAlertTimestamp(a.timestamp)
-      return {
+      return withAlertModule({
         ...a,
         timestamp,
         localDate,
         timestampIso,
-      }
+      })
     })
     res.json(adapted)
   } catch (e) { next(e) }
@@ -53,6 +73,20 @@ exports.create = async (req, res, next) => {
     if (!type_id || !priority_id || !title || !product_id) {
       return res.status(400).json({ message: 'type_id, priority_id, title y product_id son requeridos' })
     }
+    const catalog = await alertCatalogForCompany(req.companyId)
+    const selectedType = catalog.types.find((type) => type.id === Number(type_id))
+    if (!selectedType) {
+      return res.status(409).json({
+        code: 'ALERT_TYPE_MODULE_DISABLED',
+        message: 'El tipo de alerta no está disponible para los módulos activos de esta empresa',
+      })
+    }
+    const product = await prisma.product.findFirst({
+      where: { id: String(product_id), company_id: req.companyId, deleted: false },
+      select: { id: true },
+    })
+    if (!product) return res.status(404).json({ message: 'Producto no encontrado en esta empresa' })
+
     // Una alerta creada a mano nace Activa; status_id no es algo que quien
     // reporta el problema deba conocer o elegir.
     let status_id = req.body?.status_id
@@ -61,7 +95,18 @@ exports.create = async (req, res, next) => {
       status_id = statusActiva?.id
     }
     const created = await prisma.alert.create({
-      data: { ...req.body, status_id, resolved: 0, branch_id: requireBranch(req) },
+      data: {
+        type_id: Number(type_id),
+        priority_id: Number(priority_id),
+        title: String(title).trim(),
+        message: req.body?.message ? String(req.body.message).trim() : null,
+        product_id: String(product_id),
+        current_stock: req.body?.current_stock ?? null,
+        min_stock: req.body?.min_stock ?? null,
+        status_id,
+        resolved: 0,
+        branch_id: requireBranch(req),
+      },
       include: {
         type: true,
         priority: true,
@@ -70,14 +115,15 @@ exports.create = async (req, res, next) => {
         assignedTo: true
       }
     })
-    res.status(201).json(created)
+    res.status(201).json(withAlertModule(created))
   } catch (e) { next(e) }
 }
 
 /** Catálogos para el formulario de "Nueva Alerta". */
 exports.types = async (req, res, next) => {
   try {
-    res.json(await prisma.alertType.findMany({ orderBy: { name: 'asc' } }))
+    const { types } = await alertCatalogForCompany(req.companyId)
+    res.json(types)
   } catch (e) { next(e) }
 }
 

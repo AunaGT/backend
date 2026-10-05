@@ -10,6 +10,8 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
+const { readCompanyModules } = require('../platform/service')
+const { resolveAnalyticsSections } = require('./sections')
 
 const number = (v) => {
   if (v === null || v === undefined) return 0
@@ -44,6 +46,7 @@ exports.summary = async (req, res, next) => {
   try {
     const yearParam = req.query.year
     const { now, completedStatus, firstSaleYear } = await analyticsContext(req)
+    const availableSections = resolveAnalyticsSections(await readCompanyModules(req.companyId))
     const { branchWhere } = require('../../middlewares/tenant')
     const tenantSales = branchWhere(req)
     const isAll = String(yearParam || '').toLowerCase() === 'all'
@@ -204,24 +207,26 @@ exports.summary = async (req, res, next) => {
 
     // Inventario: snapshot actual (no depende del año). Por sucursal si hay una
     // activa; espejo total de la empresa en vista consolidada.
-    let products
-    if (req.branchId) {
-      const rows = await prisma.productStock.findMany({
-        where: { branch_id: req.branchId, product: { deleted: false } },
-        select: {
-          stock: true, min_stock: true,
-          product: { select: { name: true, cost: true, price: true, category: { select: { name: true } } } },
-        },
-      })
-      products = rows.map((r) => ({
-        name: r.product.name, stock: r.stock, min_stock: r.min_stock,
-        cost: r.product.cost, price: r.product.price, category: r.product.category,
-      }))
-    } else {
-      products = await prisma.product.findMany({
-        where: { deleted: false, company_id: req.companyId },
-        select: { name: true, stock: true, min_stock: true, cost: true, price: true, category: { select: { name: true } } },
-      })
+    let products = []
+    if (availableSections.inventory) {
+      if (req.branchId) {
+        const rows = await prisma.productStock.findMany({
+          where: { branch_id: req.branchId, product: { deleted: false } },
+          select: {
+            stock: true, min_stock: true,
+            product: { select: { name: true, cost: true, price: true, category: { select: { name: true } } } },
+          },
+        })
+        products = rows.map((r) => ({
+          name: r.product.name, stock: r.stock, min_stock: r.min_stock,
+          cost: r.product.cost, price: r.product.price, category: r.product.category,
+        }))
+      } else {
+        products = await prisma.product.findMany({
+          where: { deleted: false, company_id: req.companyId },
+          select: { name: true, stock: true, min_stock: true, cost: true, price: true, category: { select: { name: true } } },
+        })
+      }
     }
     let stockValue = 0, retailValue = 0, lowStockCount = 0, outOfStockCount = 0
     const stockByCategory = new Map() // name -> { value, units }
@@ -244,22 +249,24 @@ exports.summary = async (req, res, next) => {
     // Compras / cuentas por pagar (ingresos de mercancía del período).
     // Excluye cargas de saldo de apertura (source: INITIAL) — esas no son
     // compras operativas, se reportan aparte en `initialInventory`.
-    const incoming = await prisma.incomingMerchandise.findMany({
-      where: {
-        date: { gte: startUtc, lte: endUtc },
-        ...(req.branchId
-          ? { branch_id: req.branchId }
-          : { branch: { company_id: req.companyId } }),
-      },
-      select: {
-        date: true,
-        payment_status: true,
-        source: true,
-        supplier: { select: { name: true } },
-        items: { select: { quantity: true, unit_cost: true } },
-        paymentEntries: { select: { amount: true } },
-      },
-    })
+    const incoming = availableSections.purchases
+      ? await prisma.incomingMerchandise.findMany({
+        where: {
+          date: { gte: startUtc, lte: endUtc },
+          ...(req.branchId
+            ? { branch_id: req.branchId }
+            : { branch: { company_id: req.companyId } }),
+        },
+        select: {
+          date: true,
+          payment_status: true,
+          source: true,
+          supplier: { select: { name: true } },
+          items: { select: { quantity: true, unit_cost: true } },
+          paymentEntries: { select: { amount: true } },
+        },
+      })
+      : []
     const purchasesMonthly = new Map()
     for (let m = 1; m <= 12; m++) purchasesMonthly.set(m, 0)
     const supplierAgg = new Map()
@@ -303,6 +310,7 @@ exports.summary = async (req, res, next) => {
     res.json({
       year: isAll ? 'all' : year,
       firstSaleYear,
+      availableSections,
       totals: {
         totalSales: Number(adjustedRevenue.toFixed(2)), // Ventas netas (sale.total - devoluciones)
         totalSalesGross: Number(totalRevenueGross.toFixed(2)), // sale.total bruto
