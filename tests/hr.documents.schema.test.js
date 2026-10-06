@@ -1,0 +1,18 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
+const { expandPermissions } = require('../src/config/permissionDeps')
+test('modelos documentales conservan versiones y alta idempotente', () => {
+  const schema = readFileSync(join(__dirname, '../prisma/schema.prisma'), 'utf8')
+  for (const name of ['EmployeeDocumentType', 'EmployeeDocument', 'EmployeeHistory']) assert.match(schema, new RegExp(`model ${name} \\{`))
+  assert.match(schema, /@@unique\(\[company_id, creation_request_id\]\)/)
+  const migration = readFileSync(join(__dirname, '../prisma/migrations/20261005120000_hr_employee_documents/migration.sql'), 'utf8')
+  assert.match(migration, /UNIQUE INDEX[^;]+\("employee_id", "type_id"\)[^;]+WHERE "archived_at" IS NULL/s)
+  assert.doesNotMatch(migration, /DROP\s+(TABLE|COLUMN)/i)
+})
+test('gestión documental concede solo lectura documental', () => {
+  assert.deepEqual(new Set(expandPermissions(['hr.documents.manage'])), new Set(['hr.documents.manage', 'hr.documents.view']))
+  assert.deepEqual(new Set(expandPermissions(['hr.documents.archive'])), new Set(['hr.documents.archive', 'hr.documents.view']))
+  assert.ok(!expandPermissions(['hr.attendance.manage']).includes('hr.employees.view'))
+})

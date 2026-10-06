@@ -54,8 +54,9 @@ async function resolveSaleRegister (client, explicitId, userId, branchId) {
 
 /** Include ligero para listados (tabla / búsqueda). Detalle completo en GET /sales/:id */
 const SALE_LIST_INCLUDE = {
-  payment_method: { select: { id: true, name: true } },
+  payment_method: { select: { id: true, name: true, is_credit: true } },
   status: { select: { id: true, name: true } },
+  createdBy: { select: { id: true, name: true, email: true } },
 }
 
 /** Misma forma que GET /sales/:id — reutilizado al responder POST /sales (evita un GET extra en el cliente). */
@@ -105,11 +106,15 @@ const SALE_DETAIL_INCLUDE = {
 
 exports.list = async (req, res, next) => {
   try {
-    // Query params: period (today|week|month|year), status, page, pageSize, customer_contact_id, search
-    const { period, status, customer_contact_id: customerContactId, search } = req.query || {}
+    // Query params: period (today|week|month|year), status, payment, includeSummary, page, pageSize, customer_contact_id, search
+    const { period, status, payment, includeSummary, customer_contact_id: customerContactId, search } = req.query || {}
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(1000, Math.max(1, Number(req.query.pageSize ?? 100)))
     const searchTerm = String(search || '').trim()
+    const paymentName = String(payment || '').trim()
+    let summary = String(includeSummary) === 'true'
+      ? { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—' }
+      : null
 
     let startDate
     let endDate
@@ -158,6 +163,9 @@ exports.list = async (req, res, next) => {
       // filter by related status name (e.g., ?status=pendiente)
       where.status = { name: String(status) }
     }
+    if (paymentName) {
+      where.payment_method = { name: { equals: paymentName, mode: 'insensitive' } }
+    }
 
     let searchMeta = null
     if (searchTerm) {
@@ -176,6 +184,7 @@ exports.list = async (req, res, next) => {
             tooShort: true,
             minLength: searchResult.minLength ?? MIN_TEXT_SEARCH_LEN,
           },
+          ...(summary ? { summary } : {}),
         })
       }
       if (searchResult.kind === 'ok') {
@@ -241,6 +250,32 @@ exports.list = async (req, res, next) => {
       }
     }
 
+    if (summary) {
+      const [totals, paymentCounts] = await Promise.all([
+        prisma.sale.aggregate({ where, _sum: { adjusted_total: true }, _count: { _all: true } }),
+        prisma.sale.groupBy({ by: ['payment_method_id'], where, _count: { _all: true } }),
+      ])
+      const methods = paymentCounts.length
+        ? await prisma.paymentMethod.findMany({
+          where: { id: { in: paymentCounts.map(row => row.payment_method_id) } },
+          select: { id: true, name: true },
+        })
+        : []
+      const names = new Map(methods.map(method => [method.id, method.name]))
+      // Empates estables por nombre y, como último criterio, por id.
+      paymentCounts.sort((a, b) => b._count._all - a._count._all ||
+        String(names.get(a.payment_method_id) || '').localeCompare(String(names.get(b.payment_method_id) || ''), 'es') ||
+        a.payment_method_id - b.payment_method_id)
+      const totalSales = Number(totals._sum.adjusted_total ?? 0)
+      const transactionCount = totals._count._all
+      summary = {
+        totalSales,
+        transactionCount,
+        averageTicket: transactionCount ? totalSales / transactionCount : 0,
+        preferredPaymentMethod: names.get(paymentCounts[0]?.payment_method_id) || '—',
+      }
+    }
+
     const isGlobalSearch = Boolean(searchTerm)
 
     let totalItems
@@ -293,6 +328,7 @@ exports.list = async (req, res, next) => {
       hasMore: isGlobalSearch ? hasMore : safePage < totalPages,
       ...(searchMeta ? { searchMeta } : {}),
       ...(customerPurchaseSummary != null ? { customerPurchaseSummary } : {}),
+      ...(summary ? { summary } : {}),
     })
   } catch (e) { next(e) }
 }

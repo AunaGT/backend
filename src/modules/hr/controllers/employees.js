@@ -13,14 +13,13 @@
  * se borra nunca, se marca BAJA con su fecha de retiro.
  */
 
-const { prisma } = require('../../../models/prisma')
+const { prisma, prismaTransaction } = require('../../../models/prisma')
 const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../../../middlewares/tenant')
-const { uploadImageBuffer, removePublicObject } = require('../../../services/supabaseStorage')
+const { uploadHrFile, removeNewHrFiles } = require('../documentStorage')
 const { fail, toDate, toMoney, trim, toEnum, toUuid } = require('../domain/validation')
-
-// Mismo bucket que las fotos de usuario: un empleado y su cuenta de acceso
-// (si la tiene) son la misma persona, así que comparten galería de fotos.
-const EMPLOYEE_PHOTOS_BUCKET = 'perfil-usuarios'
+const { createEmployeeWithDocuments, employeeDto } = require('../employeeApplication')
+const { DateTime } = require('luxon')
+const { employeeExtras, validateSupervisor } = require('../domain/employeeExtras')
 
 const CONTRACT_TYPES = ['INDEFINIDO', 'PLAZO_FIJO', 'POR_OBRA']
 const PAY_FREQUENCIES = ['MENSUAL', 'QUINCENAL']
@@ -28,8 +27,17 @@ const EMPLOYEE_STATUSES = ['ACTIVO', 'SUSPENDIDO', 'BAJA']
 const PAYMENT_METHODS = ['EFECTIVO', 'TRANSFERENCIA', 'CHEQUE']
 
 const EMPLOYEE_INCLUDE = {
+  supervisor: { select: { id: true, first_name: true, last_name: true } },
   branch: { select: { id: true, name: true, code: true } },
   user: { select: { id: true, name: true, email: true } },
+}
+async function lockCurrentEmployee(tx, req, companyId) {
+  const branchId = requireBranch(req), id = req.params.id
+  const rows = await tx.$queryRaw`SELECT id FROM employees WHERE id = ${id}::uuid AND company_id = ${companyId}::uuid AND branch_id = ${branchId}::uuid FOR UPDATE`
+  if (!rows.length) fail(404, 'Empleado no encontrado en la sucursal activa')
+  const current = await tx.employee.findFirst({ where: { id, company_id: companyId, branch_id: branchId } })
+  if (!current) fail(404, 'Empleado no encontrado')
+  return current
 }
 
 /**
@@ -89,28 +97,20 @@ exports.linkableUsers = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
-/** Correlativo EMP-0001 por empresa. Reintenta el llamador si choca el unique. */
-async function nextEmployeeCode(tx, companyId) {
-  const last = await tx.employee.findFirst({
-    where: { company_id: companyId, code: { startsWith: 'EMP-' } },
-    orderBy: { code: 'desc' },
-    select: { code: true },
-  })
-  const n = last ? Number(last.code.slice(4)) : 0
-  return `EMP-${String((Number.isFinite(n) ? n : 0) + 1).padStart(4, '0')}`
-}
-
 /** GET /api/hr/employees?status=&q=&department=&page=&pageSize= */
 exports.list = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
-    const page = Math.max(1, Number(req.query.page ?? 1))
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize ?? 50)))
+    const positiveInteger = (value, fallback) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback
+    const page = positiveInteger(req.query.page, 1)
+    const pageSize = Math.min(200, positiveInteger(req.query.pageSize, 50))
     const { status, q, department } = req.query || {}
 
     const where = { company_id: companyId, ...branchWhere(req) }
     if (status) where.status = toEnum(status, EMPLOYEE_STATUSES, 'El estado del empleado no es válido')
     if (department) where.department = String(department)
+    if (req.query.position) where.position = { contains: String(req.query.position).trim().slice(0, 100), mode: 'insensitive' }
+    if (req.query.branch_id) where.AND = [{ branch_id: toUuid(req.query.branch_id, 'La sucursal no es válida') }]
     if (q && String(q).trim()) {
       const term = String(q).trim()
       where.OR = [
@@ -118,6 +118,8 @@ exports.list = async (req, res, next) => {
         { last_name: { contains: term, mode: 'insensitive' } },
         { code: { contains: term, mode: 'insensitive' } },
         { dpi: { contains: term } },
+        { email: { contains: term, mode: 'insensitive' } },
+        { position: { contains: term, mode: 'insensitive' } },
       ]
     }
 
@@ -127,12 +129,21 @@ exports.list = async (req, res, next) => {
     const items = await prisma.employee.findMany({
       where,
       include: EMPLOYEE_INCLUDE,
-      orderBy: [{ status: 'asc' }, { last_name: 'asc' }, { first_name: 'asc' }],
+      orderBy: [{ status: 'asc' }, { last_name: 'asc' }, { first_name: 'asc' }, { id: 'asc' }],
       skip: (safePage - 1) * pageSize,
       take: pageSize,
     })
 
-    res.json({ items, page: safePage, pageSize, totalPages, totalItems })
+    const groups = await prisma.employee.groupBy({ by: ['status'], where: { company_id: companyId, ...branchWhere(req) }, _count: { _all: true } })
+    const counts = Object.fromEntries(groups.map(group => [group.status, group._count._all]))
+    const timezone = await prisma.systemSetting.findUnique({ where: { company_id_key: { company_id: companyId, key: 'timezone' } }, select: { value: true } })
+    const local = DateTime.now().setZone(timezone?.value || 'America/Guatemala')
+    const day = DateTime.fromISO((local.isValid ? local : DateTime.now().setZone('America/Guatemala')).toISODate(), { zone: 'UTC' }).toJSDate()
+    const licenses = await prisma.attendance.findMany({ where: { company_id: companyId, ...branchWhere(req), work_date: day, status: { in: ['VACACIONES', 'INCAPACIDAD', 'PERMISO'] }, employee: { company_id: companyId, status: 'ACTIVO', ...branchWhere(req) } }, select: { employee_id: true }, distinct: ['employee_id'] })
+    const onLeave = licenses.length
+    const summary = { total: groups.reduce((sum, group) => sum + group._count._all, 0), active: Math.max(0, (counts.ACTIVO || 0) - onLeave), onLeave, inactive: (counts.SUSPENDIDO || 0) + (counts.BAJA || 0), suspended: counts.SUSPENDIDO || 0, terminated: counts.BAJA || 0 }
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json({ items: await Promise.all(items.map(employeeDto)), page: safePage, pageSize, totalPages, totalItems, summary })
   } catch (e) { next(e) }
 }
 
@@ -146,7 +157,8 @@ exports.getById = async (req, res, next) => {
       include: EMPLOYEE_INCLUDE,
     })
     if (!employee) fail(404, 'Empleado no encontrado')
-    res.json(employee)
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await employeeDto(employee))
   } catch (e) { next(e) }
 }
 
@@ -163,7 +175,8 @@ exports.mine = async (req, res, next) => {
       include: EMPLOYEE_INCLUDE,
     })
     if (!employee) fail(404, 'No tenés ficha de empleado')
-    res.json(employee)
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await employeeDto(employee))
   } catch (e) { next(e) }
 }
 
@@ -171,12 +184,30 @@ exports.mine = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const companyId = requireCompany(req)
-    const b = req.body || {}
+    let b = req.body || {}, manifest = []
+    if (req.is?.('multipart/form-data')) {
+      try { b = JSON.parse(req.body.payload); manifest = JSON.parse(req.body.manifest || '[]') }
+      catch { fail(400, 'Los datos o el manifiesto documental no son válidos') }
+      if (!Array.isArray(manifest) || manifest.length > 20 || manifest.some(m => !m || typeof m.fieldName !== 'string' || typeof m.typeId !== 'string')) fail(400, 'El manifiesto documental no es válido')
+    }
+    if (!b || typeof b !== 'object' || Array.isArray(b)) fail(400, 'Los datos del empleado no son válidos')
     const branchId = targetBranch(req, b.branch_id)
+    const requestId = req.get?.('Idempotency-Key') || null
+    const prior = requestId ? await prisma.employee.findFirst({ where: { company_id: companyId, creation_request_id: toUuid(requestId, 'La clave de reintento no es válida') }, select: { id: true } }) : null
+    const rawFiles = req.files || []
+    if (manifest.length !== rawFiles.length || new Set(manifest.map(m => m.fieldName)).size !== manifest.length) fail(400, 'Los archivos no coinciden con el manifiesto')
+    const files = manifest.map(m => {
+      const matches = rawFiles.filter(f => f.fieldname === m.fieldName)
+      if (matches.length !== 1) fail(400, 'Cada documento debe corresponder a un único archivo')
+      return { typeId: m.typeId, file: matches[0] }
+    })
 
     const data = {
+      ...employeeExtras(b),
+      supervisor_id: await validateSupervisor(prisma, { company_id: companyId, ...branchWhere(req) }, b.supervisor_id),
       company_id: companyId,
       branch_id: branchId,
+      code: trim(b.code, 20),
       first_name: trim(b.first_name, 100) || fail(400, 'El nombre es obligatorio'),
       last_name: trim(b.last_name, 100) || fail(400, 'El apellido es obligatorio'),
       dpi: trim(b.dpi, 20),
@@ -197,25 +228,11 @@ exports.create = async (req, res, next) => {
       payment_method: b.payment_method ? toEnum(b.payment_method, PAYMENT_METHODS, 'La forma de pago no es válida') : undefined,
       bank_name: trim(b.bank_name, 100),
       bank_account: trim(b.bank_account, 50),
-      user_id: await resolveUserLink(prisma, companyId, b.user_id),
+      user_id: await resolveUserLink(prisma, companyId, b.user_id, { excludeEmployeeId: prior?.id }),
     }
 
     // Correlativo con reintento: dos altas simultáneas pueden leer el mismo último código.
-    let created = null
-    for (let attempt = 0; attempt < 3 && !created; attempt++) {
-      const code = trim(b.code, 20) || (await nextEmployeeCode(prisma, companyId))
-      try {
-        created = await prisma.employee.create({ data: { ...data, code }, include: EMPLOYEE_INCLUDE })
-      } catch (err) {
-        if (err.code !== 'P2002') throw err
-        // user_id también es @unique: sin distinguir, un usuario ya tomado agotaba
-        // los tres intentos y salía como «no se pudo asignar un código».
-        const campos = err.meta?.target || []
-        if (String(campos).includes('user_id')) fail(409, 'Ese usuario ya está vinculado a otro empleado')
-        if (trim(b.code, 20)) fail(409, `Ya existe un empleado con el código ${code}`)
-      }
-    }
-    if (!created) fail(409, 'No se pudo asignar un código de empleado, intenta de nuevo')
+    const created = await createEmployeeWithDocuments({ companyId, branchId, userId: req.user.sub }, data, files, requestId)
 
     res.status(201).json(created)
   } catch (e) { next(e) }
@@ -234,7 +251,8 @@ exports.update = async (req, res, next) => {
     })
     if (!current) fail(404, 'Empleado no encontrado')
 
-    const data = {}
+    const data = employeeExtras(b)
+    if (b.supervisor_id !== undefined) data.supervisor_id = await validateSupervisor(prisma, { company_id: companyId, ...branchWhere(req) }, b.supervisor_id, current.id)
     const setIf = (key, value) => { if (value !== undefined) data[key] = value }
     if (b.first_name !== undefined) setIf('first_name', trim(b.first_name, 100) || fail(400, 'El nombre es obligatorio'))
     if (b.last_name !== undefined) setIf('last_name', trim(b.last_name, 100) || fail(400, 'El apellido es obligatorio'))
@@ -263,17 +281,21 @@ exports.update = async (req, res, next) => {
     }
     if (b.branch_id !== undefined) setIf('branch_id', targetBranch(req, b.branch_id))
 
-    const updated = await prisma.employee.update({
-      where: { id: current.id },
-      data,
-      include: EMPLOYEE_INCLUDE,
-    })
-    res.json(updated)
+    const updated = await (prismaTransaction || prisma).$transaction(async tx => {
+      const fresh = await lockCurrentEmployee(tx, req, companyId)
+      const employee = await tx.employee.update({ where: { id: current.id }, data, include: EMPLOYEE_INCLUDE })
+      const changes = Object.fromEntries(Object.keys(data).filter(key => String(fresh[key] ?? '') !== String(employee[key] ?? '')).map(key => [key, { before: fresh[key] ?? null, after: employee[key] ?? null }]))
+      if (Object.keys(changes).length) await tx.employeeHistory.create({ data: { company_id: companyId, employee_id: current.id, actor_id: req.user.sub, event: 'EMPLOYEE_UPDATED', changes: JSON.parse(JSON.stringify(changes)) } })
+      return employee
+    }, { maxWait: 10000, timeout: 20000 })
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await employeeDto(updated))
   } catch (e) { next(e) }
 }
 
 /** POST /api/hr/employees/:id/photo */
 exports.uploadPhoto = async (req, res, next) => {
+  let newPath
   try {
     const companyId = requireCompany(req)
     const current = await prisma.employee.findFirst({
@@ -282,20 +304,27 @@ exports.uploadPhoto = async (req, res, next) => {
     if (!current) fail(404, 'Empleado no encontrado')
     if (!req.file) fail(400, 'No se proporcionó ningún archivo')
 
-    const publicUrl = await uploadImageBuffer({
-      bucket: EMPLOYEE_PHOTOS_BUCKET,
-      file: req.file,
-      pathPrefix: 'employee-photos',
-    })
-    if (current.photo_url) await removePublicObject(current.photo_url, EMPLOYEE_PHOTOS_BUCKET)
+    if (!['image/png', 'image/jpeg'].includes(req.file.mimetype)) fail(400, 'La fotografía debe ser JPEG o PNG')
+    const object = await uploadHrFile({ companyId, employeeId: current.id, file: req.file })
+    newPath = object.path
 
-    const updated = await prisma.employee.update({
+    const updated = await (prismaTransaction || prisma).$transaction(async tx => {
+      await lockCurrentEmployee(tx, req, companyId)
+      const employee = await tx.employee.update({
       where: { id: current.id },
-      data: { photo_url: publicUrl },
+      data: { photo_storage_path: newPath },
       include: EMPLOYEE_INCLUDE,
-    })
-    res.json(updated)
-  } catch (e) { next(e) }
+      })
+      await tx.employeeHistory.create({ data: { company_id: companyId, employee_id: current.id, actor_id: req.user.sub, event: 'PHOTO_UPDATED', changes: {} } })
+      return employee
+    }, { maxWait: 10000, timeout: 20000 })
+    newPath = null
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await employeeDto(updated))
+  } catch (e) {
+    if (newPath) { try { await removeNewHrFiles([newPath]) } catch { e.message += '. No se pudo limpiar la carga incompleta' } }
+    next(e)
+  }
 }
 
 /**
@@ -314,15 +343,22 @@ exports.remove = async (req, res, next) => {
     if (!current) fail(404, 'Empleado no encontrado')
     if (current.status === 'BAJA') fail(409, 'El empleado ya está dado de baja')
 
-    const updated = await prisma.employee.update({
+    const updated = await (prismaTransaction || prisma).$transaction(async tx => {
+      const fresh = await lockCurrentEmployee(tx, req, companyId)
+      if (fresh.status === 'BAJA') fail(409, 'El empleado ya está dado de baja')
+      const employee = await tx.employee.update({
       where: { id: current.id },
       data: {
         status: 'BAJA',
         termination_date: toDate(req.body?.termination_date, 'La fecha de retiro') || new Date(),
       },
       include: EMPLOYEE_INCLUDE,
-    })
-    res.json(updated)
+      })
+      await tx.employeeHistory.create({ data: { company_id: companyId, employee_id: current.id, actor_id: req.user.sub, event: 'EMPLOYEE_TERMINATED', changes: { status: { before: fresh.status, after: 'BAJA' }, termination_date: { before: fresh.termination_date?.toISOString() || null, after: employee.termination_date.toISOString() } } } })
+      return employee
+    }, { maxWait: 10000, timeout: 20000 })
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await employeeDto(updated))
   } catch (e) { next(e) }
 }
 

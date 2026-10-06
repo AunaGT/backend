@@ -12,6 +12,8 @@
 
 /** code → permisos que otorga implícitamente. */
 const IMPLIES = {
+  'hr.documents.manage': ['hr.documents.view'],
+  'hr.documents.archive': ['hr.documents.view'],
   // --- Usuarios y roles -----------------------------------------------------
   // El alta y la edición traen selector de rol (GET /auth/roles).
   'users.create': ['users.view', 'roles.view'],

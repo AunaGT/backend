@@ -62,6 +62,11 @@ exports.list = async (req, res, next) => {
     const lte = toDate(to, 'La fecha final')
     if (gte || lte) where.work_date = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) }
     if (employee_id) where.employee_id = String(employee_id)
+    else if (req.query.employee_ids !== undefined) {
+      const ids = [...new Set(String(req.query.employee_ids).split(',').filter(Boolean))]
+      if (ids.length > 50) fail(400, 'Consulta hasta 50 empleados por página')
+      where.employee_id = { in: ids }
+    }
 
     const items = await prisma.attendance.findMany({
       where,

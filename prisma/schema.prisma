@@ -49,6 +49,9 @@ model Company {
   accounting_periods AccountingPeriod[]
   journal_entries    JournalEntry[]
   employees          Employee[]
+  employee_document_types EmployeeDocumentType[]
+  employee_documents EmployeeDocument[]
+  employee_history EmployeeHistory[]
   attendance         Attendance[]
   employee_advances  EmployeeAdvance[]
   payroll_runs       PayrollRun[]
@@ -798,6 +801,8 @@ model User {
   accounting_periods_closed              AccountingPeriod[]                @relation("PeriodClosedBy")
   journal_entries_created                JournalEntry[]                    @relation("JournalCreatedBy")
   employee_record                        Employee?                         @relation("EmployeeUser")
+  employee_documents_uploaded            EmployeeDocument[]
+  employee_history_authored              EmployeeHistory[]
   employee_advances_created              EmployeeAdvance[]                 @relation("AdvanceCreatedBy")
   payroll_runs_created                   PayrollRun[]                      @relation("PayrollCreatedBy")
   payroll_runs_confirmed                 PayrollRun[]                      @relation("PayrollConfirmedBy")
@@ -2016,6 +2021,17 @@ model Employee {
   email                  String?               @db.VarChar(150)
   address                String?               @db.Text
   photo_url              String?               @db.VarChar(500)
+  photo_storage_path     String?               @db.VarChar(500)
+  gender                 String?               @db.VarChar(50)
+  marital_status         String?               @db.VarChar(50)
+  nationality            String?               @db.VarChar(100)
+  workday                String?               @db.VarChar(100)
+  work_schedule          String?               @db.VarChar(200)
+  supervisor_id          String?               @db.Uuid
+  supervisor             Employee?             @relation("EmployeeSupervisor", fields: [supervisor_id], references: [id], onDelete: SetNull)
+  supervised_employees   Employee[]            @relation("EmployeeSupervisor")
+  creation_request_id    String?               @db.Uuid
+  creation_request_hash  String?               @db.VarChar(64)
   position               String?               @db.VarChar(100)
   department             String?               @db.VarChar(100)
   hire_date              DateTime              @db.Date
@@ -2037,11 +2053,69 @@ model Employee {
   attendance Attendance[]
   advances   EmployeeAdvance[]
   payslips   Payslip[]
+  documents  EmployeeDocument[]
+  history    EmployeeHistory[]
 
   @@unique([company_id, code])
+  @@unique([company_id, creation_request_id])
   @@index([branch_id])
   @@index([status])
   @@map("employees")
+}
+
+model EmployeeDocumentType {
+  id           String @id @default(uuid()) @db.Uuid
+  company_id   String @db.Uuid
+  company      Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  name         String @db.VarChar(100)
+  instructions String @default("") @db.VarChar(500)
+  required     Boolean @default(false)
+  active       Boolean @default(true)
+  sort_order   Int @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  documents    EmployeeDocument[]
+
+  @@index([company_id, active, sort_order])
+  @@map("employee_document_types")
+}
+
+model EmployeeDocument {
+  id            String @id @default(uuid()) @db.Uuid
+  company_id    String @db.Uuid
+  company       Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  employee_id   String @db.Uuid
+  employee      Employee @relation(fields: [employee_id], references: [id], onDelete: Restrict)
+  type_id       String @db.Uuid
+  type          EmployeeDocumentType @relation(fields: [type_id], references: [id], onDelete: Restrict)
+  storage_path  String @db.VarChar(500)
+  original_name String @db.VarChar(255)
+  mime_type     String @db.VarChar(100)
+  size_bytes    Int
+  sha256        String @db.VarChar(64)
+  uploaded_by   String @db.Uuid
+  uploader      User @relation(fields: [uploaded_by], references: [id], onDelete: Restrict)
+  created_at    DateTime @default(now())
+  archived_at   DateTime?
+
+  @@index([company_id, employee_id, created_at])
+  @@map("employee_documents")
+}
+
+model EmployeeHistory {
+  id          String @id @default(uuid()) @db.Uuid
+  company_id  String @db.Uuid
+  company     Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  employee_id String @db.Uuid
+  employee    Employee @relation(fields: [employee_id], references: [id], onDelete: Restrict)
+  actor_id    String? @db.Uuid
+  actor       User? @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  event       String @db.VarChar(100)
+  changes     Json
+  created_at  DateTime @default(now())
+
+  @@index([company_id, employee_id, created_at])
+  @@map("employee_history")
 }
 
 /// Marcaje diario. Informativo: no descuenta días del sueldo; su único efecto

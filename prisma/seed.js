@@ -131,6 +131,9 @@ async function main() {
 
     // RRHH
     { code: 'hr.employees.view', name: 'Ver empleados', description: 'Puede ver el expediente de los empleados' },
+    { code: 'hr.documents.view', name: 'Ver documentos de empleados', description: 'Puede abrir y descargar documentos privados del expediente' },
+    { code: 'hr.documents.manage', name: 'Gestionar documentos de empleados', description: 'Puede cargar y reemplazar documentos del expediente' },
+    { code: 'hr.documents.archive', name: 'Archivar documentos de empleados', description: 'Puede archivar y restaurar versiones del expediente' },
     { code: 'hr.employees.create', name: 'Crear empleados', description: 'Puede dar de alta empleados' },
     { code: 'hr.employees.edit', name: 'Editar empleados', description: 'Puede editar el expediente de los empleados' },
     { code: 'hr.employees.delete', name: 'Dar de baja empleados', description: 'Puede dar de baja empleados' },

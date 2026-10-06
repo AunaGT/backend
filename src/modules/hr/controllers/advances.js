@@ -40,13 +40,20 @@ exports.list = async (req, res, next) => {
     if (employee_id) where.employee_id = String(employee_id)
     if (status) where.status = toEnum(status, ADVANCE_STATUSES, 'El estado del anticipo no es válido')
 
+    const paginated = req.query.page !== undefined || req.query.pageSize !== undefined
+    const positiveInteger = (value, fallback) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback
+    const pageSize = Math.min(100, positiveInteger(req.query.pageSize, 10))
+    const totalItems = paginated ? await prisma.employeeAdvance.count({ where }) : undefined
+    const totalPages = paginated ? Math.max(1, Math.ceil(totalItems / pageSize)) : undefined
+    const page = paginated ? Math.min(positiveInteger(req.query.page, 1), totalPages) : undefined
     const items = await prisma.employeeAdvance.findMany({
       where,
       include: ADVANCE_INCLUDE,
-      orderBy: { date: 'desc' },
-      take: 1000,
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      take: paginated ? pageSize : 1000,
+      ...(paginated ? { skip: (page - 1) * pageSize } : {}),
     })
-    res.json({ items })
+    res.json({ items, ...(paginated ? { page, pageSize, totalItems, totalPages } : {}) })
   } catch (e) { next(e) }
 }
 

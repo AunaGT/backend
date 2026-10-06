@@ -20,6 +20,9 @@ const { requireBranch } = require('../../middlewares/tenant')
 const { moveBetweenLocations, replenishmentSuggestions } = require('../../services/stockLocations')
 const { deductStockMap, restoreStockMap } = require('../../services/bomStock')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
+const { StockMovementReason } = require('@prisma/client')
+const { DateTime } = require('luxon')
+const { getTimezone } = require('../../utils/getTimezone')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías.
 const TX_OPTIONS = { maxWait: 10000, timeout: 20000 }
@@ -40,26 +43,63 @@ exports.list = async (req, res, next) => {
   try {
     const branchId = requireBranch(req)
     const { product_id, location_id, group_id, reason, from, to } = req.query
-    const take = Math.min(500, Math.max(1, Number(req.query.limit) || 100))
+    const paginated = req.query.page !== undefined || req.query.pageSize !== undefined
+    const positiveInt = (value, fallback, max) => {
+      const n = Number(value)
+      return Number.isSafeInteger(n) && n > 0 ? Math.min(n, max) : fallback
+    }
+    const pageSize = positiveInt(req.query.pageSize, 8, 100)
+    const requestedPage = positiveInt(req.query.page, 1, Number.MAX_SAFE_INTEGER)
+    const take = paginated ? pageSize : positiveInt(req.query.limit, 100, 500)
 
     const where = { branch_id: branchId }
     if (product_id) where.product_id = String(product_id)
     if (location_id) where.location_id = String(location_id)
     if (group_id) where.group_id = String(group_id)
-    if (reason) where.reason = String(reason).toUpperCase()
+    if (reason) {
+      const value = String(reason).toUpperCase()
+      if (!Object.hasOwn(StockMovementReason, value)) return res.status(400).json({ message: 'Motivo de movimiento inválido' })
+      where.reason = value
+    }
+    const search = String(req.query.search || '').trim().slice(0, 200)
+    if (search) where.OR = [
+      { product: { name: { contains: search, mode: 'insensitive' } } },
+      { product: { barcode: { contains: search, mode: 'insensitive' } } },
+      { notes: { contains: search, mode: 'insensitive' } },
+    ]
     if (from || to) {
+      const timezone = await getTimezone(prisma, req.companyId)
       where.created_at = {}
-      if (from) where.created_at.gte = new Date(String(from))
-      if (to) where.created_at.lte = new Date(String(to))
+      for (const [value, start] of [[from, true], [to, false]]) {
+        if (!value) continue
+        const input = String(value)
+        const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(input)
+        const date = DateTime.fromISO(input, { zone: timezone })
+        if (!date.isValid) return res.status(400).json({ message: 'Fecha inválida' })
+        const operator = start ? 'gte' : dayOnly ? 'lt' : 'lte'
+        where.created_at[operator] = (!start && dayOnly ? date.plus({ days: 1 }) : date).toJSDate()
+      }
+      const range = where.created_at
+      if (range.gte && ((range.lt && range.gte >= range.lt) || (range.lte && range.gte > range.lte))) {
+        return res.status(400).json({ message: 'Rango de fechas inválido' })
+      }
     }
 
+    const totalItems = paginated ? await prisma.stockMovement.count({ where }) : 0
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+    const page = Math.min(requestedPage, totalPages)
     const rows = await prisma.stockMovement.findMany({
       where,
       include: MOVEMENT_INCLUDE,
       orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
       take,
+      ...(paginated ? { skip: (page - 1) * pageSize } : {}),
     })
-    res.json(rows)
+    res.json(paginated ? {
+      items: rows, totalItems, totalPages, page, pageSize,
+      nextPage: page < totalPages ? page + 1 : null,
+      prevPage: page > 1 ? page - 1 : null,
+    } : rows)
   } catch (e) { next(e) }
 }
 
