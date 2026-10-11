@@ -1,15 +1,16 @@
 const { randomUUID } = require('crypto')
-const { resolveFulfillmentLines, isOrderFullyFulfilled } = require('../../services/commercialDocumentFulfillment')
+const { resolveFulfillmentLines, isOrderFullyFulfilled, partialLineTotal } = require('../../services/commercialDocumentFulfillment')
 const { assertLinesAvailable, consumePartialByDocument, releaseByDocument, reserveForDocument } = require('../../services/stockAvailability')
 const { expandLinesToStockMap, deductStockMap, restoreStockMap } = require('../../services/bomStock')
 const { consumeLotsFEFO, restoreLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
-const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
+const {Prisma}=require('@prisma/client')
+const {lineSnapshot}=require('../../services/catalogItemRules')
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }) }
 
@@ -24,7 +25,7 @@ function selectLines(lines, raw, invoice = false) {
   if (!Array.isArray(raw) || !raw.length) fail('Selecciona al menos una partida')
   const seen = new Set()
   for (const item of raw) {
-    if (!item || seen.has(item.line_id) || !Number.isSafeInteger(item.qty) || item.qty <= 0) {
+    if (!item || seen.has(item.line_id)) {
       fail('Partidas repetidas o cantidades inválidas')
     }
     seen.add(item.line_id)
@@ -57,22 +58,23 @@ async function deliver(tx, req) {
   const lines = selectLines(order.lines, req.body.lines)
   const notes = req.body.notes == null ? null : String(req.body.notes).trim()
   if (notes?.length > 1000) fail('Las notas exceden 1000 caracteres')
-  const stockLines = lines.map(({ line, qty }) => ({ product_id: line.product_id, qty }))
-  await assertLinesAvailable(tx, stockLines, { excludeDocumentId: order.id, branchId: order.branch_id })
-  const productsAtDelivery = await tx.product.findMany({ where: { id: { in: stockLines.map(line => line.product_id) } }, select: { id: true, cost: true } })
+  const stockLines = lines.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty }))
+  await assertLinesAvailable(tx, stockLines, { excludeDocumentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true })
+  const physicalIds=lines.filter(({line})=>line.item_kind!=='SERVICE').map(({line})=>line.product_id)
+  const productsAtDelivery = physicalIds.length ? await tx.product.findMany({ where: { id: { in: physicalIds },company_id:req.companyId }, select: { id: true, cost: true } }) : []
   const costs = new Map(productsAtDelivery.map(product => [product.id, product.cost]))
   const delivery = await tx.orderDelivery.create({ data: {
     document_id: order.id, request_key: key, created_by: req.user.sub, notes,
-    lines: { create: lines.map(({ line_id, line, qty }) => ({ document_line_id: line_id, qty, unit_cost: costs.get(line.product_id) ?? null })) },
+    lines: { create: lines.map(({ line_id, line, qty }) => ({ document_line_id: line_id, qty, unit_cost:line.item_kind==='SERVICE' ? 0 : costs.get(line.product_id) ?? null })) },
   }, include: { lines: true } })
-  const stockMap = await expandLinesToStockMap(tx, stockLines)
+  const stockMap = await expandLinesToStockMap(tx, stockLines, {companyId:req.companyId,allowArchivedServices:true})
   const groupId = randomUUID()
   const products = await deductStockMap(tx, stockMap, order.branch_id, {
     reason: 'ORDER_FULFILL', refType: 'order_delivery', refId: delivery.id, userId: req.user.sub, groupId,
   })
-  await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId }))
+  if (stockMap.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId }))
   await ensureStockAlertsBatch(tx, products, order.branch_id)
-  await consumePartialByDocument(tx, order.id, lines.map(({ line_id, qty }) => ({ line_id, qty })))
+  await consumePartialByDocument(tx, order.id, lines.map(({ line_id, qty }) => ({ line_id, qty })),{companyId:req.companyId})
   const updatedLines = await tx.commercialDocumentLine.findMany({ where: { document_id: order.id } })
   await tx.commercialDocument.update({ where: { id: order.id }, data: {
     status: isOrderFullyFulfilled(updatedLines) ? 'FULFILLED' : 'PARTIALLY_FULFILLED',
@@ -95,7 +97,11 @@ async function invoice(tx, req, requireCashSession) {
   const method = await tx.paymentMethod.findUnique({ where: { id: Number(req.body.payment_method_id) || 0 } })
   if (!method) fail('Método de pago inválido')
   const round = value => Math.round(value * 100) / 100
-  const total = round(lines.reduce((sum, { line, qty }) => sum + Number(line.unit_price) * qty, 0))
+  const originalLines = new Map(order.lines.map(line => [line.id, line]))
+  const netLineTotals = lines.map(({line_id,qty}) => { const original=originalLines.get(line_id); return partialLineTotal(original,qty,original.qty_invoiced).toNumber() })
+  const totalDecimal=netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0))
+  if (totalDecimal.gte('10000000000')) fail('Total de factura fuera de rango')
+  const total=totalDecimal.toNumber()
   const initialAmount = initialPaymentAmount(req.body, total, method.is_credit)
   const now = new Date()
   let dueDate = null
@@ -129,20 +135,21 @@ async function invoice(tx, req, requireCashSession) {
   const allocations = []
   const costs = new Map()
   for (const { line_id, qty } of lines) {
-    let remaining = qty
-    let cost = 0
+    let remaining = new Prisma.Decimal(qty)
+    let cost = new Prisma.Decimal(0)
     let hasCost = false
     for (const item of deliveredLines.filter(item => item.document_line_id === line_id)) {
-      const take = Math.min(remaining, item.qty - item.qty_invoiced)
-      if (take <= 0) continue
+      const take = Prisma.Decimal.min(remaining,new Prisma.Decimal(String(item.qty)).sub(String(item.qty_invoiced || 0)))
+      if (take.lte(0)) continue
       allocations.push({ id: item.id, qty: take })
-      if (item.unit_cost != null) { cost += Number(item.unit_cost) * take; hasCost = true }
-      remaining -= take
+      if (item.unit_cost != null) { cost=cost.add(take.mul(String(item.unit_cost))); hasCost = true }
+      remaining=remaining.sub(take)
     }
-    if (remaining) fail('Las entregas no cubren las cantidades solicitadas', 409)
-    costs.set(line_id, hasCost ? round(cost / qty) : null)
+    if (!remaining.eq(0)) fail('Las entregas no cubren las cantidades solicitadas', 409)
+    costs.set(line_id, hasCost ? cost.div(qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber() : null)
   }
-  const netLineTotals = allocateNetLineTotals(lines.map(({ line, qty }) => ({ price: line.unit_price, qty })), total)
+  const physicalUnits=lines.filter(({line})=>line.item_kind!=='SERVICE').reduce((sum,{qty})=>sum+qty.toNumber(),0)
+  if (physicalUnits>2147483647) fail('Cantidad física total fuera de rango')
   const sale = await tx.sale.create({ data: {
     branch_id: order.branch_id, reference: await nextDocumentReference(tx, 'V', branch),
     customer: order.customer, customer_nit: order.customer_nit, is_final_consumer: order.is_final_consumer,
@@ -151,9 +158,9 @@ async function invoice(tx, req, requireCashSession) {
     payment_method_id: method.id, payment_status: method.is_credit ? 'PENDING' : 'PAID', due_date: dueDate,
     amount_received: received, change: received == null ? null : round(received - total),
     cash_register_session_id: sessionId, idempotency_key: key,
-    items: lines.reduce((sum, line) => sum + line.qty, 0), subtotal: total, discount_total: 0,
+    items: physicalUnits, subtotal: total, discount_total: 0,
     total, adjusted_total: total, total_returned: 0,
-    sale_items: { create: lines.map(({ line, line_id, qty }, index) => ({ product_id: line.product_id, qty, price: line.unit_price, unit_cost: costs.get(line_id) ?? null, net_total: netLineTotals[index] })) },
+    sale_items: { create: lines.map(({ line, line_id, qty }, index) => ({ product_id: line.product_id, qty, price: line.unit_price, unit_cost:line.item_kind==='SERVICE' ? 0 : costs.get(line_id) ?? null, net_total: netLineTotals[index],...lineSnapshot(line) })) },
     orderLink: { create: { document_id: order.id } },
   } })
   for (const { line_id, qty } of lines) {
@@ -174,9 +181,10 @@ async function reverseDelivery(tx, req) {
   if (delivery.reversed_at) return { orderId: order.id, delivery }
   if (delivery.lines.some(line => line.qty_invoiced > 0)) fail('La entrega tiene ventas emitidas. Corrige los productos mediante Devoluciones.', 409)
   const lines = delivery.lines.map(item => ({ ...order.lines.find(line => line.id === item.document_line_id), qty: item.qty }))
-  const dispatched = await dispatchedByRef(tx, { refType: 'order_delivery', refId: delivery.id, reason: 'ORDER_FULFILL' })
+  const allServices=lines.every(line=>line.item_kind==='SERVICE')
+  const dispatched = allServices ? new Map() : await dispatchedByRef(tx, { refType: 'order_delivery', refId: delivery.id, reason: 'ORDER_FULFILL' })
   const stockMap = new Map([...dispatched].map(([productId, locations]) => [productId, locations.reduce((sum, location) => sum + location.qty, 0)]))
-  if (!stockMap.size) fail('No se encontraron los movimientos originales de esta entrega', 409)
+  if (!stockMap.size && !allServices) fail('No se encontraron los movimientos originales de esta entrega', 409)
   const products = await restoreStockMap(tx, stockMap, order.branch_id, { reason: 'SALE_RETURN', refType: 'order_delivery', refId: delivery.id, userId: req.user.sub })
   await restoreLotsFEFO(tx, stockMap, order.branch_id)
   await ensureStockAlertsBatch(tx, products, order.branch_id)
@@ -187,8 +195,8 @@ async function reverseDelivery(tx, req) {
   await releaseByDocument(tx, order.id)
   const expired = order.valid_until && new Date(order.valid_until) < new Date()
   if (!expired) {
-    await reserveForDocument(tx, { documentId: order.id, branchId: order.branch_id, expiresAt: order.valid_until, createdBy: req.user.sub,
-      documentLines: current.map(line => ({ ...line, qty: line.qty - line.qty_fulfilled })).filter(line => line.qty > 0) })
+    await reserveForDocument(tx, { documentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true, expiresAt: order.valid_until, createdBy: req.user.sub,
+      documentLines: current.map(line => ({ ...line, qty: new Prisma.Decimal(String(line.qty)).sub(String(line.qty_fulfilled || 0)) })).filter(line => line.qty.gt(0)) })
   }
   await tx.commercialDocument.update({ where: { id: order.id }, data: { status: expired ? 'EXPIRED' : current.some(line => line.qty_fulfilled > 0) ? 'PARTIALLY_FULFILLED' : 'CONFIRMED' } })
   await tx.orderDelivery.update({ where: { id: delivery.id }, data: { reversed_at: new Date() } })

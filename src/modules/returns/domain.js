@@ -1,4 +1,6 @@
 const ACTIVE_RETURN_STATUSES = Object.freeze(['Pendiente', 'Aprobada', 'Completada'])
+const {Prisma}=require('@prisma/client')
+const {commercialQuantity}=require('../../services/catalogItemRules')
 
 const RETURN_RESOLUTIONS = Object.freeze([
   'REFUND_ORIGINAL',
@@ -32,11 +34,11 @@ function statusName(value) {
 
 function availableReturnQty(originalQty, returned = []) {
   const reserved = returned.reduce((total, item) => (
-    ACTIVE_RETURN_STATUSES.includes(statusName(item.status))
-      ? total + Number(item.qty_returned || 0)
+    !item.status || ACTIVE_RETURN_STATUSES.includes(statusName(item.status))
+      ? total.add(String(item.qty_returned || 0))
       : total
-  ), 0)
-  return Math.max(0, Number(originalQty || 0) - reserved)
+  ), new Prisma.Decimal(0))
+  return Prisma.Decimal.max(0,new Prisma.Decimal(String(originalQty || 0)).sub(reserved))
 }
 
 function assertReturnTransition(from, to) {
@@ -48,23 +50,25 @@ function assertReturnTransition(from, to) {
   return { terminal: to === 'Completada' || to === 'Rechazada', processes: to === 'Completada' }
 }
 
-function normalizeReturnLines(items) {
+function normalizeReturnLines(items,originalItems) {
   if (!Array.isArray(items) || items.length === 0) throw invalid('Debe incluir al menos una línea')
   const seen = new Set()
   return items.map((item) => {
     const saleItemId = Number(item?.sale_item_id)
-    const qty = Number(item?.qty_returned)
     const productId = String(item?.product_id || '').trim()
     if (!Number.isInteger(saleItemId) || saleItemId <= 0 || !productId) {
       throw invalid('Cada línea requiere sale_item_id y product_id válidos')
     }
-    if (!Number.isInteger(qty) || qty <= 0) throw invalid('La cantidad devuelta debe ser entera y mayor a cero')
+    const original=originalItems?.find(line=>Number(line.id)===saleItemId && line.product_id===productId)
+    if (originalItems && !original) throw invalid('Partida no encontrada en la venta')
+    const qty=commercialQuantity(item?.qty_returned,original || {kind:'STANDARD'})
+    if (original?.item_kind==='SERVICE') for(const field of ['received_qty','restock_qty','disposition','stock_location_id']) if(item[field]!=null) throw invalid('El servicio no admite recepción ni reposición física')
     if (seen.has(saleItemId)) throw invalid(`Línea repetida: ${saleItemId}`)
     seen.add(saleItemId)
     return {
       sale_item_id: saleItemId,
       product_id: productId,
-      qty_returned: qty,
+      qty_returned: qty.toString(),
       reason: String(item.reason || '').trim() || null,
     }
   })
@@ -100,9 +104,18 @@ function buildReturnWhere(scope, filters = {}) {
 }
 
 function estimateRefundAmount({ saleTotal, grossTotal, unitPrice, qty }) {
-  const gross = Number(grossTotal)
-  if (!(gross > 0)) return 0
-  return Math.round(Number(unitPrice) * Number(qty) * (Number(saleTotal) / gross) * 100) / 100
+  const gross = new Prisma.Decimal(String(grossTotal))
+  if (gross.lte(0)) return 0
+  return new Prisma.Decimal(String(unitPrice)).mul(String(qty)).mul(String(saleTotal)).div(gross).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
+}
+
+function refundFromLine({originalQty,lineNet,qty,returnedQty=0,returnedAmount=0}) {
+  const original=new Prisma.Decimal(String(originalQty))
+  const requested=new Prisma.Decimal(String(qty))
+  const available=original.sub(String(returnedQty))
+  if (requested.lte(0) || requested.gt(available)) throw invalid('Cantidad supera el saldo disponible para devolver')
+  const moneyLeft=Prisma.Decimal.max(0,new Prisma.Decimal(String(lineNet)).sub(String(returnedAmount)))
+  return (requested.eq(available) ? moneyLeft : Prisma.Decimal.min(moneyLeft,new Prisma.Decimal(String(lineNet)).mul(requested).div(original).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP))).toNumber()
 }
 
 function normalizeReturnPolicy(raw) {
@@ -161,6 +174,7 @@ module.exports = {
   buildReturnWhere,
   evaluateReturnEligibility,
   estimateRefundAmount,
+  refundFromLine,
   normalizeReturnPolicy,
   normalizeReturnLines,
   returnFiscalStatus,

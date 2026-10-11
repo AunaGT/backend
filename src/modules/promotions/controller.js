@@ -18,7 +18,7 @@ const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
 const { applyPromotion, applyMultiplePromotions, PROMOTION_TYPES } = require('../../services/promotionCalculator')
 const { buildPromotionListWhere, attachPromotionUsage } = require('./listFilters')
-const { validatePromotionDates, parsePromotionDate } = require('./validation')
+const { validatePromotionDates, parsePromotionDate,validatePromotionCatalog,loadPromotionCart } = require('./validation')
 
 /**
  * Una promo se ve donde aplica: en toda la empresa o solo en sus sucursales.
@@ -107,9 +107,18 @@ exports.list = async (req, res, next) => {
     try {
         const page = Math.max(1, Number(req.query.page ?? 1))
         const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 20)))
-        const where = buildPromotionListWhere(req.query, req.companyId, branchScope(req))
+        const now = new Date()
+        const where = buildPromotionListWhere(req.query, req.companyId, branchScope(req), now)
 
         const totalItems = await prisma.promotion.count({ where })
+        let summary
+        if (req.query.includeSummary === 'true') {
+            const states = ['active', 'scheduled', 'ended', 'inactive']
+            const counts = await Promise.all(states.map(status => prisma.promotion.count({
+                where: { AND: [where, buildPromotionListWhere({ status }, req.companyId, {}, now)] },
+            })))
+            summary = { total: totalItems, ...Object.fromEntries(states.map((status, index) => [status, counts[index]])) }
+        }
         const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
         const safePage = Math.min(page, totalPages)
 
@@ -147,7 +156,8 @@ exports.list = async (req, res, next) => {
             page: safePage,
             pageSize,
             totalPages,
-            totalItems
+            totalItems,
+            ...(summary ? { summary } : {}),
         })
     } catch (e) { next(e) }
 }
@@ -271,6 +281,7 @@ exports.create = async (req, res, next) => {
             return res.status(400).json({ message: 'Tipo de promoción no válido' })
         }
         const typeName = promotionType.name
+        await validatePromotionCatalog(prisma,req.body,typeName,req.companyId)
         if (typeName === 'PERCENTAGE' || typeName === 'MIN_QTY_DISCOUNT') {
             if (discount_percentage == null || discount_percentage === '' || isNaN(Number(discount_percentage))) {
                 return res.status(400).json({ message: 'Porcentaje de descuento es requerido para este tipo' })
@@ -566,7 +577,7 @@ exports.update = async (req, res, next) => {
 
         const existing = await prisma.promotion.findFirst({
             where: { id, company_id: req.companyId, ...branchScope(req) },
-            include: { type: true },
+            include: { type: true,applicable_products:true,applicable_categories:true },
         })
         if (!existing || existing.deleted) {
             return res.status(404).json({ message: 'Promoción no encontrada' })
@@ -578,7 +589,10 @@ exports.update = async (req, res, next) => {
         )
         if (dateError) return res.status(400).json({ message: dateError })
 
-        const typeName = existing.type.name
+        const nextType=raw.type_id !== undefined ? await prisma.promotionType.findUnique({where:{id:Number(raw.type_id)}}) : existing.type
+        if (!nextType) return res.status(400).json({message:'Tipo de promoción no válido'})
+        const typeName = nextType.name
+        await validatePromotionCatalog(prisma,{...existing,...raw,product_ids:raw.product_ids ?? existing.applicable_products?.map(row=>row.product_id),category_ids:raw.category_ids ?? existing.applicable_categories?.map(row=>row.category_id)},typeName,req.companyId)
         const supportsRestrictedScope = ['PERCENTAGE', 'BUY_X_GET_Y', 'MIN_QTY_DISCOUNT'].includes(typeName)
 
         const data = {}
@@ -801,7 +815,7 @@ exports.validateCode = async (req, res, next) => {
         }
 
         // Calculate discount
-        const result = applyPromotion(promotion, items)
+        const result = applyPromotion(promotion, await loadPromotionCart(prisma,items,req.companyId))
 
         if (!result || !result.details) {
             return res.json({ valid: false, message: 'No se pudo calcular la promoción' })
@@ -875,7 +889,7 @@ exports.calculateDiscount = async (req, res, next) => {
             return res.status(404).json({ message: 'Promoción no encontrada' })
         }
 
-        const result = applyPromotion(promotion, items)
+        const result = applyPromotion(promotion, await loadPromotionCart(prisma,items,req.companyId))
 
         res.json({
             promotion_id,

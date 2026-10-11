@@ -15,7 +15,6 @@ const { consumeLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
 const { resolvePriceTierForContext, resolveUnitPriceFromProduct, VALID_CHANNELS } = require('../../services/priceResolution')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
-const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
 const { buildOrderDateFilter, normalizeOrderAdminDetails, resolveOrderOrderBy, resolveOrderStatuses } = require('./domain')
 const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
@@ -27,6 +26,8 @@ const {
   appendCommercialDocSearchFilter,
 } = require('../../services/commercialDocumentSearch')
 const { defaultOrderValidUntil } = require('../../services/commercialDocumentSettings')
+const {commercialQuantity,lineSnapshot,assertServicesEnabled}=require('../../services/catalogItemRules')
+const {validMoney}=require('../../utils/importValidation')
 const {
   assertLinesAvailable,
   reserveForDocument,
@@ -36,6 +37,7 @@ const {
 const {
   isOrderFullyFulfilled,
   resolveFulfillmentLines,
+  partialLineTotal,
 } = require('../../services/commercialDocumentFulfillment')
 
 const ORDER_DOC_TYPE = 'ORDER'
@@ -169,10 +171,11 @@ async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) 
 
   const uniqueIds = [...new Set(productIds)]
   const products = await tx.product.findMany({
-    where: { id: { in: uniqueIds }, deleted: false },
+    where: { id: { in: uniqueIds }, deleted: false,company_id:ctx.companyId },
     select: {
       id: true,
       name: true,
+      kind:true,service_unit_label:true,quantity_decimals:true,
       price: true,
       price_wholesale: true,
       price_promotion: true,
@@ -181,6 +184,7 @@ async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) 
     },
   })
   const prodMap = new Map(products.map((p) => [String(p.id), p]))
+  if (products.some(product=>product.kind==='SERVICE')) await assertServicesEnabled(tx,ctx.companyId)
 
   for (const pid of uniqueIds) {
     const p = prodMap.get(pid)
@@ -201,24 +205,27 @@ async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) 
   let sortOrder = 0
   const lines = items.map((it) => {
     const p = prodMap.get(String(it.product_id))
-    const qty = Number(it.qty || 0)
+    const qty = commercialQuantity(it.qty,p)
     const unitPrice =
       freezePrices && it.unit_price != null
         ? Number(it.unit_price)
         : it.unit_price != null && Number(it.unit_price) >= 0
           ? Number(it.unit_price)
           : resolveUnitPriceFromProduct(p, priceTier, priceNow)
-    const lineTotal = Math.round(unitPrice * qty * 100) / 100
+    if (!validMoney(unitPrice)) throw Object.assign(new Error('Precio fuera de rango'),{status:400})
+    const lineTotal = qty.mul(String(unitPrice)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)
     return {
       product_id: p.id,
       qty,
       unit_price: new Prisma.Decimal(unitPrice),
       line_total: new Prisma.Decimal(lineTotal),
       sort_order: sortOrder++,
+      ...lineSnapshot(p),
     }
   })
 
-  const subtotal = lines.reduce((acc, l) => acc + Number(l.line_total), 0)
+  const subtotal = lines.reduce((acc,l)=>acc.add(l.line_total),new Prisma.Decimal(0)).toNumber()
+  if (!validMoney(subtotal)) throw Object.assign(new Error('Total de pedido fuera de rango'),{status:400})
   return {
     lines,
     subtotal: Math.round(subtotal * 100) / 100,
@@ -328,7 +335,6 @@ exports.list = async (req, res, next) => {
     const createdAt = buildOrderDateFilter(dateFrom, dateTo)
     if (createdAt) where.created_at = createdAt
 
-    const summaryWhere = { ...where }
     const statuses = resolveOrderStatuses({
       status,
       preparation: preparationStatus,
@@ -338,7 +344,7 @@ exports.list = async (req, res, next) => {
 
     const [totalItems, statusCounts] = await Promise.all([
       prisma.commercialDocument.count({ where }),
-      prisma.commercialDocument.groupBy({ by: ['status'], where: summaryWhere, _count: { _all: true } }),
+      prisma.commercialDocument.groupBy({ by: ['status'], where, _count: { _all: true } }),
     ])
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
@@ -463,6 +469,7 @@ exports.getPublicByToken = async (req, res, next) => {
           select: {
             qty: true,
             qty_fulfilled: true,
+            item_name: true, item_kind: true, unit_label: true, quantity_decimals: true,
             unit_price: true,
             line_total: true,
             product: { select: { name: true, barcode: true } },
@@ -518,7 +525,8 @@ exports.getPublicByToken = async (req, res, next) => {
       company_name: company.company_name || 'Auna',
       company_logo_url: String(company.company_logo_url || '').trim(),
       lines: order.lines.map((line) => ({
-        product_name: line.product?.name || null,
+        product_name: line.item_name ?? line.product?.name ?? null,
+        item_kind: line.item_kind, unit_label: line.unit_label, quantity_decimals: line.quantity_decimals,
         barcode: line.product?.barcode || null,
         qty: line.qty,
         qty_fulfilled: line.qty_fulfilled || 0,
@@ -566,6 +574,7 @@ exports.create = async (req, res, next) => {
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
         customerContactId,
+        companyId:req.companyId,
         salesChannel,
       })
 
@@ -647,6 +656,7 @@ exports.update = async (req, res, next) => {
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
         customerContactId,
+        companyId:req.companyId,
         salesChannel,
       })
 
@@ -747,12 +757,13 @@ exports.confirm = async (req, res, next) => {
     }
 
     const lineRows = order.lines
+    if (lineRows.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(prisma,req.companyId)
 
     await prismaTransaction.$transaction(async (tx) => {
       await assertLinesAvailable(
         tx,
-        lineRows.map((l) => ({ product_id: l.product_id, qty: l.qty })),
-        { branchId: order.branch_id }
+        lineRows.map((l) => ({ ...l,product_id: l.product_id, qty: l.qty })),
+        { branchId: order.branch_id, companyId:req.companyId }
       )
 
       const now = new Date()
@@ -770,6 +781,7 @@ exports.confirm = async (req, res, next) => {
         expiresAt: order.valid_until,
         createdBy: user.sub,
         branchId: order.branch_id,
+        companyId:req.companyId,
       })
     }, ORDER_TX_OPTIONS)
 
@@ -876,8 +888,8 @@ exports.convertToSale = async (req, res, next) => {
 
       await assertLinesAvailable(
         tx,
-        fulfillments.map(({ line, qty }) => ({ product_id: line.product_id, qty })),
-        { excludeDocumentId: order.id, branchId: order.branch_id }
+        fulfillments.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty })),
+        { excludeDocumentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true }
       )
 
       const completadaStatus = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
@@ -887,10 +899,10 @@ exports.convertToSale = async (req, res, next) => {
       // sales.controller.js (antes reetiquetaba la hora de Guatemala como UTC).
       const saleDate = new Date()
 
-      const totalItems = fulfillments.reduce((acc, f) => acc + f.qty, 0)
-      const subtotal = Math.round(
-        fulfillments.reduce((acc, f) => acc + Number(f.line.unit_price) * f.qty, 0) * 100
-      ) / 100
+      const totalItems = fulfillments.filter(f=>f.line.item_kind!=='SERVICE').reduce((acc, f) => acc + f.qty.toNumber(), 0)
+      const netLineTotals = fulfillments.map(({line,qty}) => partialLineTotal(line,qty,line.qty_fulfilled).toNumber())
+      const subtotal = netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0)).toNumber()
+      if (totalItems>2147483647 || !validMoney(subtotal)) throw Object.assign(new Error('Factura fuera de rango'),{status:400})
       const total = subtotal
       const initialAmount = initialPaymentAmount(req.body, total, paymentMethod.is_credit)
       let dueDate = null
@@ -947,21 +959,22 @@ exports.convertToSale = async (req, res, next) => {
           select: { id: true, cost: true },
         })).map((p) => [String(p.id), p.cost])
       )
-      const netLineTotals = allocateNetLineTotals(fulfillments.map(({ line, qty }) => ({ price: line.unit_price, qty })), total)
       await tx.saleItem.createMany({
         data: fulfillments.map(({ line, qty }, index) => ({
           sale_id: sale.id,
           product_id: line.product_id,
           price: line.unit_price,
-          unit_cost: costos.get(String(line.product_id)) ?? null,
+          unit_cost: line.item_kind==='SERVICE' ? 0 : costos.get(String(line.product_id)) ?? null,
           net_total: netLineTotals[index],
           qty,
+          ...lineSnapshot(line),
         })),
       })
 
       const stockMap = await expandLinesToStockMap(
         tx,
-        fulfillments.map(({ line, qty }) => ({ product_id: line.product_id, qty }))
+        fulfillments.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty })),
+        {companyId:req.companyId,allowArchivedServices:true}
       )
       const orderStockCtx = {
         reason: 'ORDER_FULFILL', refType: 'commercial_document', refId: String(order.id), userId: user.sub,
@@ -969,13 +982,14 @@ exports.convertToSale = async (req, res, next) => {
       }
       const updatedProducts = await deductStockMap(tx, stockMap, order.branch_id, orderStockCtx)
       // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
-      await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId: orderStockCtx.groupId }))
+      if (stockMap.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId: orderStockCtx.groupId }))
       await ensureStockAlertsBatch(tx, updatedProducts, order.branch_id)
 
       await consumePartialByDocument(
         tx,
         order.id,
-        fulfillments.map((f) => ({ line_id: f.line_id, qty: f.qty }))
+        fulfillments.map((f) => ({ line_id: f.line_id, qty: f.qty })),
+        {companyId:req.companyId}
       )
 
       await tx.commercialDocumentSale.create({

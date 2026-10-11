@@ -32,6 +32,8 @@ const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { requireBranch, branchWhere, hasPerm } = require('../../middlewares/tenant')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const { createSaleRecordAndStock } = require('./application')
+const { contactImageDtos } = require('../contacts/imageStorage')
+const { commercialQuantity,lineSnapshot,assertServicesEnabled } = require('../../services/catalogItemRules')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -54,6 +56,7 @@ async function resolveSaleRegister (client, explicitId, userId, branchId) {
 
 /** Include ligero para listados (tabla / búsqueda). Detalle completo en GET /sales/:id */
 const SALE_LIST_INCLUDE = {
+  _count:{select:{sale_items:true}},
   payment_method: { select: { id: true, name: true, is_credit: true } },
   status: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true, email: true } },
@@ -61,6 +64,8 @@ const SALE_LIST_INCLUDE = {
 
 /** Misma forma que GET /sales/:id — reutilizado al responder POST /sales (evita un GET extra en el cliente). */
 const SALE_DETAIL_INCLUDE = {
+  customerContact: { select: { id: true, company_id: true, party_type: true, deleted: true, name: true, phone: true, email: true, address: true, tax_id: true, image_storage_path: true } },
+  branch: { select: { name: true } },
   paymentEntries: { select: { amount: true } },
   payment_method: true,
   status: true,
@@ -70,12 +75,14 @@ const SALE_DETAIL_INCLUDE = {
         select: {
           id: true,
           name: true,
-          barcode: true
+          barcode: true,
+          image_url: true
         }
       }
     }
   },
   sale_dtes: true,
+  sale_promotions: { include: { promotion: { select: { id: true, name: true, type: { select: { name: true } } } } } },
   returns: {
     include: {
       status: true,
@@ -102,6 +109,18 @@ const SALE_DETAIL_INCLUDE = {
       email: true
     }
   }
+}
+
+async function saleDetailDto(sale, companyId, user) {
+  if (!sale) return sale
+  const { customerContact, ...rest } = sale
+  let contact = null
+  if (customerContact && customerContact.company_id === companyId && customerContact.party_type === PARTY.CUSTOMER && !customerContact.deleted && userHasPerm(user, 'contacts.clients.view')) {
+    const [imageContact] = await contactImageDtos([customerContact], companyId)
+    const { company_id, party_type, deleted, ...safe } = imageContact
+    contact = safe
+  }
+  return { ...rest, line_count:sale.sale_items?.length ?? sale._count?.sale_items ?? 0, customerContact: contact }
 }
 
 exports.list = async (req, res, next) => {
@@ -318,7 +337,7 @@ exports.list = async (req, res, next) => {
     const prevPage = safePage > 1 ? safePage - 1 : null
 
     res.json({
-      items,
+      items:items.map(item=>({...item,line_count:item._count?.sale_items ?? 0})),
       page: safePage,
       pageSize,
       totalPages,
@@ -361,7 +380,7 @@ exports.getById = async (req, res, next) => {
       return res.status(404).json({ message: 'Venta no encontrada' })
     }
 
-    res.json(sale)
+    res.json(await saleDetailDto(sale, req.companyId, req.user))
   } catch (e) {
     next(e)
   }
@@ -391,7 +410,7 @@ exports.create = async (req, res, next) => {
     const idempotencyKey = String(req.get?.('Idempotency-Key') || idempotencyKeyRaw || '')
       .trim().slice(0, 64) || null
 
-    const totalItems = items.reduce((acc, it) => acc + Number(it.qty || 0), 0)
+    let totalItems = 0
 
     const schRaw = salesChannelRaw != null ? String(salesChannelRaw).toUpperCase() : 'POS'
     const salesChannel = VALID_CHANNELS.has(schRaw) ? schRaw : 'POS'
@@ -413,7 +432,7 @@ exports.create = async (req, res, next) => {
         where: { branch_id: branchId, idempotency_key: idempotencyKey },
         include: SALE_DETAIL_INCLUDE,
       })
-      if (yaExiste) return res.status(200).json(yaExiste)
+      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user))
     }
 
     const created = await prismaTransaction.$transaction(async (tx) => {
@@ -468,10 +487,11 @@ exports.create = async (req, res, next) => {
       }
       const productIds = Array.from(qtyByProduct.keys())
       const products = await tx.product.findMany({
-        where: { id: { in: productIds }, deleted: false },
+        where: { id: { in: productIds }, deleted: false,company_id:req.companyId },
         select: {
           id: true,
           name: true,
+          kind:true,service_unit_label:true,quantity_decimals:true,
           stock: true,
           category_id: true,
           price: true,
@@ -484,7 +504,21 @@ exports.create = async (req, res, next) => {
         },
       })
       const prodMap = new Map(products.map(p => [String(p.id), p]))
-      const availabilityMap = await getAvailabilityBatchWithKits(productIds, tx, branchId)
+      qtyByProduct.clear()
+      for (const item of items) {
+        const pid=String(item.product_id)
+        const product=prodMap.get(pid)
+        if (!product) throw Object.assign(new Error(`Producto no encontrado: ${pid}`),{status:400})
+        const qty=commercialQuantity(item.qty,product)
+        const aggregate=(qtyByProduct.get(pid) || new Prisma.Decimal(0)).add(qty)
+        commercialQuantity(aggregate,product)
+        qtyByProduct.set(pid,aggregate)
+        if (product.kind!=='SERVICE') totalItems+=qty.toNumber()
+      }
+      if (totalItems>2147483647) throw Object.assign(new Error('Cantidad física total fuera de rango'),{status:400})
+      if (products.some(p=>p.kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
+      const physicalIds=productIds.filter(id=>prodMap.get(id).kind!=='SERVICE')
+      const availabilityMap = physicalIds.length ? await getAvailabilityBatchWithKits(physicalIds, tx, branchId, {companyId:req.companyId}) : {}
       // Verifica existencia y stock suficiente por producto (considera cantidades sumadas si hay repetidos)
       for (const pid of productIds) {
         const p = prodMap.get(pid)
@@ -499,6 +533,7 @@ exports.create = async (req, res, next) => {
           err.status = 400
           throw err
         }
+        if (p.kind==='SERVICE') continue
 
         // Omitir validación de stock si fue autorizado por administrador
         if (adminAuthorizedSet.has(pid)) {
@@ -522,7 +557,7 @@ exports.create = async (req, res, next) => {
 
       if (customerContactId) {
         const cust = await tx.supplier.findFirst({
-          where: { id: customerContactId, deleted: false, party_type: 'CUSTOMER' },
+          where: { id: customerContactId, deleted: false, party_type: 'CUSTOMER',company_id:req.companyId },
           select: { id: true },
         })
         if (!cust) {
@@ -535,17 +570,15 @@ exports.create = async (req, res, next) => {
       const priceTier = await resolvePriceTierForContext(tx, {
         customerContactId,
         salesChannel,
+        companyId:req.companyId,
       })
       const priceNow = new Date()
       const resolvedItems = items.map((it) => {
         const p = prodMap.get(String(it.product_id))
         const unit = resolveUnitPriceFromProduct(p, priceTier, priceNow)
-        return { ...it, price: unit }
+        return { ...it, qty:commercialQuantity(it.qty,p).toString(),price: unit,...lineSnapshot(p) }
       })
-      const subtotal = resolvedItems.reduce(
-        (acc, it) => acc + Number(it.price || 0) * Number(it.qty || 0),
-        0
-      )
+      const subtotal = resolvedItems.reduce((acc,it)=>acc.add(new Prisma.Decimal(String(it.price)).mul(it.qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)),new Prisma.Decimal(0)).toNumber()
 
       // 2) Procesar códigos de promoción
       let discountTotal = 0
@@ -712,7 +745,7 @@ exports.create = async (req, res, next) => {
       }
 
       // Calcular total final
-      const total = Math.max(0, subtotal - discountTotal)
+      const total = Prisma.Decimal.max(0,new Prisma.Decimal(String(subtotal)).sub(String(discountTotal))).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
 
       // Nueva venta se registra directamente como Completada (sin estados Pagado/Pendiente)
       const completadaStatus = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
@@ -799,11 +832,13 @@ exports.create = async (req, res, next) => {
 
       const sale = await createSaleRecordAndStock(tx, {
         userId: user.sub,
+        companyId:req.companyId,
         items: resolvedItems.map((item) => ({
           product_id: item.product_id,
-          qty: Number(item.qty),
+          qty: item.qty,
           unit_price: Number(item.price),
-          unit_cost: prodMap.get(String(item.product_id))?.cost ?? null,
+          unit_cost: item.item_kind==='SERVICE' ? 0 : prodMap.get(String(item.product_id))?.cost ?? null,
+          item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals,
         })),
         saleData: {
           branch_id: branchId,
@@ -878,7 +913,7 @@ exports.create = async (req, res, next) => {
       include: SALE_DETAIL_INCLUDE
     })
 
-    res.status(201).json(fullSale || created)
+    res.status(201).json(await saleDetailDto(fullSale || created, req.companyId, req.user))
   } catch (e) {
     // Dos envíos a la vez con la misma clave: uno gana el índice único y el
     // otro devuelve la venta que quedó, no un error al cajero.
@@ -891,7 +926,7 @@ exports.create = async (req, res, next) => {
             include: SALE_DETAIL_INCLUDE,
           })
         : null
-      if (yaExiste) return res.status(200).json(yaExiste)
+      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user))
     }
     if (e && e.message === 'CASH_SESSION_REQUIRED') {
       return res.status(403).json({
@@ -1001,11 +1036,13 @@ exports.updateStatus = async (req, res, next) => {
 
         // Transición: otro -> Completada => descontar stock
         if (!wasCompleted && willBeCompleted) {
+          if (current.sale_items.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
           console.log(`[STOCK ADJUSTMENT] Venta ${id}: ${prevStatusName} -> Completada. Descontando stock...`)
 
           const stockMap = await expandLinesToStockMap(
             tx,
-            current.sale_items.map((si) => ({ product_id: si.product_id, qty: si.qty }))
+            current.sale_items,
+            {companyId:req.companyId}
           )
           const stockCtx = {
             // `id` es lo que mandó el cliente: puede ser la referencia legible
@@ -1035,11 +1072,11 @@ exports.updateStatus = async (req, res, next) => {
           // volvió al inventario cuando se aprobó la devolución.
           const porDevolver = current.sale_items
             .map((si) => {
-              const devuelto = (si.return_items || []).reduce((n, r) => n + Number(r.qty_returned || 0), 0)
-              return { product_id: si.product_id, qty: Math.max(0, Number(si.qty) - devuelto) }
+              const devuelto = (si.return_items || []).reduce((n,r)=>n.add(String(r.qty_returned || 0)),new Prisma.Decimal(0))
+              return { ...si,qty:Prisma.Decimal.max(0,new Prisma.Decimal(String(si.qty)).sub(devuelto)) }
             })
-            .filter((l) => l.qty > 0)
-          const stockMap = await expandLinesToStockMap(tx, porDevolver)
+            .filter((l) => l.qty.gt(0))
+          const stockMap = await expandLinesToStockMap(tx, porDevolver, {companyId:req.companyId,allowArchivedServices:true})
           const updatedProducts = await restoreStockMap(tx, stockMap, saleBranchId, {
             reason: 'SALE_RETURN', refType: 'sale', refId: String(current.id), userId: req.user?.sub || null,
           })

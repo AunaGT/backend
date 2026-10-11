@@ -28,6 +28,8 @@ const {
   appendCommercialDocSearchFilter,
 } = require('../../services/commercialDocumentSearch')
 const { defaultQuoteValidUntil, defaultQuoteSoftHoldExpiresAt } = require('../../services/commercialDocumentSettings')
+const {commercialQuantity,lineSnapshot,assertServicesEnabled}=require('../../services/catalogItemRules')
+const {validMoney}=require('../../utils/importValidation')
 const {
   assertLinesAvailable,
   reserveForDocument,
@@ -139,8 +141,8 @@ async function applyQuoteSoftHold(tx, quote, userId, companyId) {
 
   await assertLinesAvailable(
     tx,
-    lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
-    { branchId: quote.branch_id }
+    lines.map((l) => ({ ...l,product_id: l.product_id, qty: l.qty })),
+    { branchId: quote.branch_id, companyId }
   )
   await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
   const expiresAt = await defaultQuoteSoftHoldExpiresAt(tx, companyId)
@@ -151,6 +153,7 @@ async function applyQuoteSoftHold(tx, quote, userId, companyId) {
     createdBy: userId,
     reservationKind: 'QUOTE_SOFT',
     branchId: quote.branch_id,
+    companyId,
   })
 }
 
@@ -201,7 +204,8 @@ exports.getPublicByToken = async (req, res, next) => {
       company_name: companyMap.company_name || 'Depósito',
       company_logo_url: (companyMap.company_logo_url && String(companyMap.company_logo_url).trim()) || '',
       lines: quote.lines.map((l) => ({
-        product_name: l.product?.name,
+        product_name: l.item_name ?? l.product?.name,
+        item_kind: l.item_kind, unit_label: l.unit_label, quantity_decimals: l.quantity_decimals,
         barcode: l.product?.barcode,
         image_url: l.product?.image_url,
         qty: l.qty,
@@ -290,10 +294,11 @@ async function resolveQuoteLines(tx, items, ctx) {
 
   const productIds = Array.from(qtyByProduct.keys())
   const products = await tx.product.findMany({
-    where: { id: { in: productIds }, deleted: false },
+    where: { id: { in: productIds }, deleted: false,company_id:ctx.companyId },
     select: {
       id: true,
       name: true,
+      kind:true,service_unit_label:true,quantity_decimals:true,
       price: true,
       price_wholesale: true,
       price_promotion: true,
@@ -302,6 +307,7 @@ async function resolveQuoteLines(tx, items, ctx) {
     },
   })
   const prodMap = new Map(products.map((p) => [String(p.id), p]))
+  if (products.some(product=>product.kind==='SERVICE')) await assertServicesEnabled(tx,ctx.companyId)
 
   for (const pid of productIds) {
     const p = prodMap.get(pid)
@@ -340,22 +346,25 @@ async function resolveQuoteLines(tx, items, ctx) {
   let sortOrder = 0
   for (const it of items) {
     const p = prodMap.get(String(it.product_id))
-    const qty = Number(it.qty || 0)
+    const qty = commercialQuantity(it.qty,p)
     const unitPrice =
       it.unit_price != null && Number(it.unit_price) >= 0
         ? Number(it.unit_price)
         : resolveUnitPriceFromProduct(p, priceTier, priceNow)
-    const lineTotal = Math.round(unitPrice * qty * 100) / 100
+    if (!validMoney(unitPrice)) throw Object.assign(new Error('Precio fuera de rango'),{status:400})
+    const lineTotal = qty.mul(String(unitPrice)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)
     normalized.push({
       product_id: p.id,
       qty,
       unit_price: new Prisma.Decimal(unitPrice),
       line_total: new Prisma.Decimal(lineTotal),
       sort_order: sortOrder++,
+      ...lineSnapshot(p),
     })
   }
 
-  const subtotal = normalized.reduce((acc, l) => acc + Number(l.line_total), 0)
+  const subtotal = normalized.reduce((acc,l)=>acc.add(l.line_total),new Prisma.Decimal(0)).toNumber()
+  if (!validMoney(subtotal)) throw Object.assign(new Error('Total de cotización fuera de rango'),{status:400})
   return {
     lines: normalized,
     subtotal: Math.round(subtotal * 100) / 100,
@@ -407,11 +416,18 @@ exports.list = async (req, res, next) => {
           nextPage: null,
           prevPage: null,
           searchMeta: meta,
+          ...(req.query.includeSummary === 'true' ? { summary: { total: 0, draft: 0, sent: 0, accepted: 0 } } : {}),
         })
       }
     }
 
     const totalItems = await prisma.commercialDocument.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.commercialDocument.groupBy({ by: ['status'], where, _count: { _all: true } })
+      const counts = Object.fromEntries(groups.map(group => [group.status, group._count._all]))
+      summary = { total: totalItems, draft: counts.DRAFT ?? 0, sent: counts.SENT ?? 0, accepted: counts.ACCEPTED ?? 0 }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -432,6 +448,7 @@ exports.list = async (req, res, next) => {
       nextPage: safePage < totalPages ? safePage + 1 : null,
       prevPage: safePage > 1 ? safePage - 1 : null,
       ...(searchMeta ? { searchMeta } : {}),
+      ...(summary ? { summary } : {}),
     })
   } catch (e) {
     next(e)
@@ -483,6 +500,7 @@ exports.create = async (req, res, next) => {
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
         customerContactId,
+        companyId:req.companyId,
         salesChannel,
         explicitPriceTier,
       })
@@ -490,7 +508,7 @@ exports.create = async (req, res, next) => {
       await assertLinesAvailable(
         tx,
         lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
-        { branchId }
+        { branchId, companyId:req.companyId }
       )
 
       let validUntil = null
@@ -582,6 +600,7 @@ exports.update = async (req, res, next) => {
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
         customerContactId,
+        companyId:req.companyId,
         salesChannel,
         explicitPriceTier,
       })
@@ -589,7 +608,7 @@ exports.update = async (req, res, next) => {
       await assertLinesAvailable(
         tx,
         lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
-        { branchId: existing.branch_id }
+        { branchId: existing.branch_id, companyId:req.companyId }
       )
 
       let validUntil = existing.valid_until
@@ -720,6 +739,7 @@ exports.convertToOrder = async (req, res, next) => {
     }
 
     const order = await prismaTransaction.$transaction(async (tx) => {
+      if (quote.lines.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
       await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
       // El pedido hereda la sucursal de la cotización
       const branch = await loadBranch(tx, quote.branch_id)
@@ -730,6 +750,7 @@ exports.convertToOrder = async (req, res, next) => {
         unit_price: l.unit_price,
         line_total: l.line_total,
         sort_order: idx,
+        ...lineSnapshot(l),
       }))
 
       return tx.commercialDocument.create({

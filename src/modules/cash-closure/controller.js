@@ -743,14 +743,19 @@ exports.list = async (req, res, next) => {
       where.status = status
     }
 
-    if (startDate && endDate) {
+    if (startDate || endDate) {
       where.date = {
-        gte: new Date(startDate),
-        lte: new Date(endDate)
+        ...(startDate ? { gte: new Date(startDate) } : {}),
+        ...(endDate ? { lte: new Date(endDate) } : {})
       }
     }
 
     const totalItems = await prisma.cashClosure.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.cashClosure.groupBy({ by: ['status'], where, _count: { _all: true } })
+      summary = { total: totalItems, Pendiente: 0, Aprobado: 0, Rechazado: 0, Validado: 0, Cerrado: 0, ...Object.fromEntries(groups.map(row => [row.status, row._count._all])) }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / Number(pageSize)))
     const safePage = Math.min(Number(page), totalPages)
 
@@ -783,6 +788,7 @@ exports.list = async (req, res, next) => {
 
     res.json({
       items: closures,
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize: Number(pageSize),
       totalPages,

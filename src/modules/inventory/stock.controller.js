@@ -86,6 +86,11 @@ exports.list = async (req, res, next) => {
     }
 
     const totalItems = paginated ? await prisma.stockMovement.count({ where }) : 0
+    let summary
+    if (paginated && req.query.includeSummary === 'true') {
+      const counts = await Promise.all([{ qty: { gt: 0 } }, { qty: { lt: 0 } }].map(filter => prisma.stockMovement.count({ where: { AND: [where, filter] } })))
+      summary = { total: totalItems, incoming: counts[0], outgoing: counts[1] }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const page = Math.min(requestedPage, totalPages)
     const rows = await prisma.stockMovement.findMany({
@@ -97,6 +102,7 @@ exports.list = async (req, res, next) => {
     })
     res.json(paginated ? {
       items: rows, totalItems, totalPages, page, pageSize,
+      ...(summary ? { summary } : {}),
       nextPage: page < totalPages ? page + 1 : null,
       prevPage: page > 1 ? page - 1 : null,
     } : rows)
@@ -226,6 +232,7 @@ exports.setLocationMin = async (req, res, next) => {
     })
     if (!owned) return res.status(403).json({ message: 'La ubicación no pertenece a esta sucursal' })
 
+    await require('../../services/catalogItemRules').assertPhysicalProducts(prisma,[String(product_id)],branchId)
     const row = await prisma.productStockLocation.upsert({
       where: { product_id_location_id: { product_id: String(product_id), location_id: owned.id } },
       update: { min_stock: min },

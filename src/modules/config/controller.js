@@ -53,7 +53,7 @@ exports.getAll = async (req, res, next) => {
  */
 exports.getPublic = async (req, res, next) => {
   try {
-    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate', 'default_experience_profile', 'sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels']
+    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate', 'default_experience_profile', 'sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled']
     const rows = await prisma.systemSetting.findMany({
       where: { key: { in: keys }, company_id: req.companyId }
     })
@@ -71,7 +71,8 @@ exports.getPublic = async (req, res, next) => {
       default_experience_profile: 'CASHIER',
       sales_allow_credit: 'true',
       sales_show_fiscal_fields: 'true',
-      sales_show_channels: 'true'
+      sales_show_channels: 'true',
+      inventory_services_enabled: 'false'
     }
     for (const row of rows) {
       if (out.hasOwnProperty(row.key)) out[row.key] = (row.value != null && String(row.value).trim() !== '') ? String(row.value).trim() : out[row.key]
@@ -315,7 +316,7 @@ exports.update = async (req, res, next) => {
     ) {
       return res.status(400).json({ message: 'default_experience_profile no es válido' })
     }
-    for (const boolKey of ['sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels']) {
+    for (const boolKey of ['sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled']) {
       if (payload[boolKey] !== undefined && !['true', 'false'].includes(String(payload[boolKey]).toLowerCase())) {
         return res.status(400).json({ message: `${boolKey} debe ser true o false` })
       }
@@ -361,6 +362,7 @@ exports.update = async (req, res, next) => {
       'sales_allow_credit',
       'sales_show_fiscal_fields',
       'sales_show_channels',
+      'inventory_services_enabled',
       'returns.policy',
     ])
 

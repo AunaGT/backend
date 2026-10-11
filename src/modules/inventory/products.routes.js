@@ -65,7 +65,10 @@ const router = Router()
  *         min_stock: { type: integer }
  *         price: { type: number, format: float }
  *         cost: { type: number, format: float }
- *         supplier_id: { type: string, format: uuid }
+ *         supplier_id: { type: string, format: uuid, nullable: true }
+ *         kind: { type: string, enum: [STANDARD, KIT, SERVICE] }
+ *         service_unit_label: { type: string, maxLength: 50, nullable: true }
+ *         quantity_decimals: { type: integer, minimum: 0, maximum: 4 }
  *         barcode: { type: string }
  *         description: { type: string }
  *         status_id: { type: integer }
@@ -337,6 +340,7 @@ router.get('/:id', Auth, Products.getOne)
  *     responses:
  *       200: { description: OK }
  */
+router.get('/:id/commercial-history', Auth, hasPermission('products.view'), hasPermission('sales.view'), Products.commercialHistory)
 router.put('/:id', Auth, hasPermission('products.edit'), Products.update)
 
 /**

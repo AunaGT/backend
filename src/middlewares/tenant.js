@@ -78,7 +78,8 @@ async function resolveTenant(req, res, next) {
       sessionUser = await loadSessionUser(user)
     } catch (err) {
       if (soft) return next()
-      return res.status(err.status || 401).json({ message: err.message })
+      if (err.status) return res.status(err.status).json({ message: err.message })
+      return next(err)
     }
     req.sessionUser = sessionUser
     const activeCompanies = sessionUser.user_companies.filter(m => m.status === 'ACTIVE').map(m => m.company_id)

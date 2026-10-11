@@ -9,8 +9,19 @@
  */
 
 const { Router } = require('express')
+const multer = require('multer')
 const { Auth, hasAnyRole, hasPermission } = require('../../middlewares/autenticacion')
 const Suppliers = require('./controller')
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 + 1, files: 1, fields: 0, parts: 2 } })
+
+function checkedImageUpload(req, res, next) {
+  imageUpload.single('file')(req, res, error => {
+    if (!error) return next()
+    error.status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400
+    error.message = error.code === 'LIMIT_FILE_SIZE' ? 'La imagen no debe superar 5 MB' : 'Selecciona una sola imagen para el contacto'
+    next(error)
+  })
+}
 
 const router = Router()
 
@@ -167,6 +178,8 @@ router.get('/', Auth, hasPermission('contacts.suppliers.view', 'contacts.clients
  *       201: { description: Creado }
  */
 router.post('/', Auth, hasPermission('contacts.suppliers.create', 'contacts.clients.create'), Suppliers.create)
+
+router.post('/:id/image', Auth, hasPermission('contacts.suppliers.edit', 'contacts.clients.edit'), checkedImageUpload, Suppliers.uploadImage)
 
 router.get(
   '/:id/price-rules',

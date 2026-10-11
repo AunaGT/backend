@@ -189,7 +189,7 @@ async function resolveProductsForCountStart(session, companyId) {
 
 function buildProductWhereFromScope(scope) {
   const s = scope && typeof scope === 'object' ? scope : {}
-  const where = { deleted: false }
+  const where = { deleted: false,kind:{not:'SERVICE'} }
   const and = []
   if (Array.isArray(s.categoryIds) && s.categoryIds.length) {
     and.push({ category_id: { in: s.categoryIds.map((id) => Number(id)) } })
@@ -385,7 +385,12 @@ exports.list = async (req, res, next) => {
       })
     )
 
-    res.json({ data: withProgress, total, take, skip })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.inventoryCountSession.groupBy({ by: ['status'], where, _count: { _all: true } })
+      summary = { total, DRAFT: 0, IN_PROGRESS: 0, IN_REVIEW: 0, PENDING_SECOND_APPROVAL: 0, APPROVED: 0, CANCELLED: 0, ...Object.fromEntries(groups.map(row => [row.status, row._count._all])) }
+    }
+    res.json({ data: withProgress, total, take, skip, ...(summary ? { summary } : {}) })
   } catch (e) {
     next(e)
   }

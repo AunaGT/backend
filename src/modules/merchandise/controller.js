@@ -338,6 +338,12 @@ exports.list = async (req, res, next) => {
     }
 
     const totalItems = await prisma.incomingMerchandise.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.incomingMerchandise.groupBy({ by: ['payment_status'], where, _count: { _all: true } })
+      const counts = Object.fromEntries(groups.map(group => [group.payment_status, group._count._all]))
+      summary = { total: totalItems, paid: counts.PAID ?? 0, partial: counts.PARTIAL ?? 0, pending: counts.PENDING ?? 0 }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -433,6 +439,7 @@ exports.list = async (req, res, next) => {
 
     res.json({
       items: adapted,
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
       totalPages,

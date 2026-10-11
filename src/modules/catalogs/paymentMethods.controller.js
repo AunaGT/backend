@@ -59,6 +59,12 @@ exports.list = async (req, res, next) => {
       : {}
 
     const totalItems = await prisma.paymentMethod.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.paymentMethod.groupBy({ by: ['is_credit'], where, _count: { _all: true } })
+      summary = { total: totalItems, immediate: 0, credit: 0 }
+      for (const group of groups) summary[group.is_credit ? 'credit' : 'immediate'] += group._count._all
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -78,6 +84,7 @@ exports.list = async (req, res, next) => {
       totalItems,
       nextPage: safePage < totalPages ? safePage + 1 : null,
       prevPage: safePage > 1 ? safePage - 1 : null,
+      ...(summary ? { summary } : {}),
     })
   } catch (error) {
     next(error)

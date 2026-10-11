@@ -165,7 +165,7 @@ test('el branding público se consulta para la empresa resuelta por el token', a
         total: 0,
         notes: null,
         branch: { company_id: 'company-a' },
-        lines: [],
+        lines: [{item_name:'Servicio original',item_kind:'SERVICE',unit_label:'Hora',quantity_decimals:3,qty:'0.125',unit_price:'100',line_total:'12.50',product:{name:'Nombre editado'}}],
       }),
     },
     systemSetting: {
@@ -195,6 +195,9 @@ test('el branding público se consulta para la empresa resuelta por el token', a
     company_id: 'company-a',
   })
   assert.equal(res.payload.currency_code, 'GTQ')
+  assert.equal(res.payload.lines[0].product_name, 'Servicio original')
+  assert.equal(res.payload.lines[0].unit_label, 'Hora')
+  assert.equal(res.payload.lines[0].qty, '0.125')
 })
 
 test('el cliente solo responde una cotización enviada, vigente y sin cambios concurrentes', async (t) => {

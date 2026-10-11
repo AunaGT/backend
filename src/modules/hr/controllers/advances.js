@@ -53,7 +53,12 @@ exports.list = async (req, res, next) => {
       take: paginated ? pageSize : 1000,
       ...(paginated ? { skip: (page - 1) * pageSize } : {}),
     })
-    res.json({ items, ...(paginated ? { page, pageSize, totalItems, totalPages } : {}) })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.employeeAdvance.groupBy({ by: ['status'], where, _count: { _all: true } })
+      summary = { total: groups.reduce((sum, row) => sum + row._count._all, 0), PENDIENTE: 0, PAGADO: 0, CANCELADO: 0, ...Object.fromEntries(groups.map(row => [row.status, row._count._all])) }
+    }
+    res.json({ items, ...(paginated ? { page, pageSize, totalItems, totalPages } : {}), ...(summary ? { summary } : {}) })
   } catch (e) { next(e) }
 }
 

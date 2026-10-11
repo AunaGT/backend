@@ -68,13 +68,18 @@ exports.list = async (req, res, next) => {
       where.employee_id = { in: ids }
     }
 
-    const items = await prisma.attendance.findMany({
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.attendance.groupBy({ by: ['status'], where, _count: { _all: true } })
+      summary = { total: groups.reduce((sum, row) => sum + row._count._all, 0), PRESENTE: 0, TARDE: 0, AUSENTE: 0, ...Object.fromEntries(groups.map(row => [row.status, row._count._all])) }
+    }
+    const items = summary && req.query.summaryOnly === 'true' ? [] : await prisma.attendance.findMany({
       where,
       include: { employee: { select: { id: true, code: true, first_name: true, last_name: true } } },
       orderBy: [{ work_date: 'asc' }, { employee_id: 'asc' }],
       take: 5000, // ponytail: un mes de ~150 empleados cabe de sobra; paginar si algún día no
     })
-    res.json({ items })
+    res.json({ items, ...(summary ? { summary } : {}) })
   } catch (e) { next(e) }
 }
 

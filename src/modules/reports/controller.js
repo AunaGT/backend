@@ -12,6 +12,19 @@ const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
 const PDFDocument = require('pdfkit')
 const { getBrandingForPdf } = require('../../utils/pdfBranding')
+const { authorizedReportWhere, reportDateWhere, resolveReportPeriod, validateReportScope } = require('./reportFilters')
+const { createReportMeta, assertReportSize } = require('./reportModel')
+const { buildSalesReport, buildFinancialReport } = require('./models/commercial')
+const { buildInventoryReport, buildSuppliersReport, buildProductsReport } = require('./models/catalog')
+const { buildAlertsReport, buildMerchandiseReport, buildInventoryCountsReport } = require('./models/operations')
+
+async function prepareReportMeta(req, branding, current = false) {
+  if (String(req.query.format).toLowerCase() !== 'json') return null
+  req.reportPeriod = resolveReportPeriod(current ? { period: 'current' } : req.query, branding.timezone || 'America/Guatemala')
+  req.reportTimezone = branding.timezone || 'America/Guatemala'
+  const locations = req.reportLocations || await validateReportScope(prisma, req)
+  return createReportMeta(req, branding, await reportScope(req), req.reportPeriod, locations)
+}
 
 // Brand & styles inspired by Products PDF
 const BRAND = {
@@ -25,6 +38,7 @@ const BRAND = {
 // Utility: parse period range (supports: week, month, quarter, semester, year, all)
 const { branchWhere } = require('../../middlewares/tenant')
 const { inTransitTotals } = require('../../services/inTransit')
+const { Prisma } = require('@prisma/client')
 
 /** Sucursales que alcanza el reporte: la activa, o todas en vista consolidada. */
 function scopeBranchIds(req) {
@@ -74,28 +88,29 @@ async function stockByWarehouse(req) {
   const rows = await prisma.productStockLocation.findMany({
     where: {
       stock: { not: 0 },
-      product: { deleted: false, deleted_at: null },
+      product: { deleted: false, deleted_at: null,company_id:req.companyId,kind:{not:'SERVICE'} },
       location: {
         ...(lid ? { id: lid } : {}),
         warehouse: { branch_id: { in: ids }, active: true, ...(wid ? { id: wid } : {}) },
       },
     },
     select: {
-      stock: true,
+      stock: true, product_id: true,
       product: { select: { cost: true } },
-      location: { select: { warehouse: { select: { name: true }, }, }, },
+      location: { select: { warehouse: { select: { id: true, name: true, branch: { select: { name: true } } }, }, }, },
     },
   })
   const agg = new Map()
   for (const r of rows) {
-    const name = r.location.warehouse.name
-    const a = agg.get(name) || { warehouse: name, skus: 0, units: 0, value: 0 }
-    a.skus += 1
+    const warehouse = r.location.warehouse
+    const key = warehouse.id
+    const a = agg.get(key) || { warehouse: `${warehouse.name} · ${warehouse.branch?.name || 'Sucursal'}`, products: new Set(), units: 0, value: 0 }
+    a.products.add(r.product_id)
     a.units += number(r.stock)
     a.value += number(r.stock) * number(r.product?.cost)
-    agg.set(name, a)
+    agg.set(key, a)
   }
-  const out = [...agg.values()].map((a) => ({ ...a, value: Number(a.value.toFixed(2)) }))
+  const out = [...agg.values()].map(({ products, ...a }) => ({ ...a, skus: products.size, value: Number(a.value.toFixed(2)) }))
   // Con un solo almacén el desglose no dice nada que no diga el total.
   return out.length > 1 ? out.sort((a, b) => b.value - a.value) : []
 }
@@ -153,11 +168,18 @@ async function overlayReportBranchStock(products, req) {
   }
   const rows = await prisma.productStock.findMany({
     where: { branch_id: { in: ids }, product_id: { in: products.map((p) => p.id) } },
-    select: { product_id: true, stock: true },
+    select: { product_id: true, stock: true, min_stock: true },
   })
   const byId = new Map()
-  for (const r of rows) byId.set(r.product_id, (byId.get(r.product_id) || 0) + r.stock)
-  for (const p of products) p.stock = byId.get(p.id) ?? 0
+  const minima = new Map()
+  for (const r of rows) {
+    byId.set(r.product_id, (byId.get(r.product_id) || 0) + r.stock)
+    if (r.min_stock != null) minima.set(r.product_id, (minima.get(r.product_id) || 0) + r.min_stock)
+  }
+  for (const p of products) {
+    p.stock = byId.get(p.id) ?? 0
+    if (minima.has(p.id)) p.min_stock = minima.get(p.id)
+  }
 }
 
 /**
@@ -169,7 +191,7 @@ async function stockByBranch(req, scope) {
   const rows = await prisma.productStock.findMany({
     where: {
       branch_id: { in: scope.branches.map((b) => b.id) },
-      product: { deleted: false, deleted_at: null },
+      product: { deleted: false, deleted_at: null,company_id:req.companyId,kind:{not:'SERVICE'} },
     },
     select: { branch_id: true, stock: true, min_stock: true, product: { select: { cost: true } } },
   })
@@ -583,9 +605,10 @@ async function getSalesData(startUtc, endUtc, req) {
 
   // Obtener sale_items (productos / categorías / costos)
   const items = await prisma.saleItem.findMany({
-    where: { sale: { ...tenantSales, date: { gte: startUtc, lte: endUtc }, ...(status ? { status_id: status.id } : {}) } },
+    where: { sale: { ...tenantSales, branch: { company_id: req.companyId }, date: reportDateWhere(req, startUtc, endUtc), ...(status ? { status_id: status.id } : {}) } },
     include: {
       product: { include: { category: true } },
+      return_items:{where:{return:{status:{name:'Completada'}}},select:{refund_amount:true,qty_returned:true,restock_qty:true}},
       sale: {
         select: {
           id: true,
@@ -603,7 +626,8 @@ async function getSalesData(startUtc, endUtc, req) {
   const sales = await prisma.sale.findMany({
     where: {
       ...tenantSales,
-      date: { gte: startUtc, lte: endUtc },
+      branch: { company_id: req.companyId },
+      date: reportDateWhere(req, startUtc, endUtc),
       ...(status ? { status_id: status.id } : {})
     },
     select: {
@@ -621,6 +645,8 @@ async function getSalesData(startUtc, endUtc, req) {
   let totalRevenueGross = 0
   let totalReturned = 0
   let totalCost = 0
+  let totalGoodsRevenue=new Prisma.Decimal(0),totalServiceRevenue=new Prisma.Decimal(0),serviceLines=0
+  const quantitiesByUnit=new Map()
 
   // Agregados
   const catAgg = {}
@@ -633,11 +659,11 @@ async function getSalesData(startUtc, endUtc, req) {
   const unitsBySaleId = new Map()
 
   // Helper: clave temporal (día o mes) según rango
-  const rangeDays = (endUtc.getTime() - startUtc.getTime()) / (1000 * 60 * 60 * 24)
+  const rangeDays = req.reportPeriod && !req.reportPeriod.start ? Infinity : (endUtc.getTime() - startUtc.getTime()) / (1000 * 60 * 60 * 24)
   const useDaily = rangeDays <= 62 // ~2 meses → por día, si no por mes
 
   const makeTimeKey = (d) => {
-    const dt = DateTime.fromJSDate(d).setZone('America/Guatemala')
+    const dt = DateTime.fromJSDate(d).setZone(req.reportTimezone || 'America/Guatemala')
     if (useDaily) {
       return dt.toFormat('yyyy-LL-dd')
     }
@@ -651,19 +677,29 @@ async function getSalesData(startUtc, endUtc, req) {
   // Para método/tiempo/cajero solo acumulamos UNIDADES por venta (no el ingreso).
   items.forEach(i => {
     const qty = number(i.qty)
-    const revenue = number(i.price) * qty
-    const cost = number(i.product?.cost) * qty
+    const service=(i.item_kind ?? i.product?.kind)==='SERVICE'
+    const unit=i.unit_label || 'unidad'
+    const exactQty=new Prisma.Decimal(String(i.qty)),gross=new Prisma.Decimal(String(i.price)).mul(exactQty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)
+    const revenue = gross.toNumber()
+    const returns=(i.return_items || []).reduce((sum,row)=>sum.add(String(row.refund_amount || 0)),new Prisma.Decimal(0))
+    const net=new Prisma.Decimal(String(i.net_total ?? gross)).sub(returns)
+    if(service){totalServiceRevenue=totalServiceRevenue.add(net);serviceLines++}else totalGoodsRevenue=totalGoodsRevenue.add(net)
+    const restocked=(i.return_items || []).reduce((sum,row)=>sum.add(String(row.restock_qty || 0)),new Prisma.Decimal(0))
+    const cost = service ? 0 : Prisma.Decimal.max(0,exactQty.sub(restocked)).mul(String(i.unit_cost ?? i.product?.cost ?? 0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
     totalCost += cost
+    const unitKey=JSON.stringify([service?'Servicio':'Bien',unit]),previous=quantitiesByUnit.get(unitKey)
+    quantitiesByUnit.set(unitKey,{type:service?'Servicio':'Bien',unit,quantity:(previous?.quantity || new Prisma.Decimal(0)).add(exactQty)})
 
     const cat = i.product?.category?.name || 'Sin categoría'
     catAgg[cat] = (catAgg[cat] || 0) + revenue
 
-    const pname = i.product?.name || 'Producto'
-    topAgg[pname] = (topAgg[pname] || { name: pname, ventas: 0, revenue: 0 })
-    topAgg[pname].ventas += qty
-    topAgg[pname].revenue += revenue
+    const pname = i.item_name || i.product?.name || 'Producto'
+    const topKey=JSON.stringify([i.product_id || pname,unit])
+    topAgg[topKey] = (topAgg[topKey] || { name: pname,unit, ventas: new Prisma.Decimal(0), revenue: 0 })
+    topAgg[topKey].ventas=topAgg[topKey].ventas.add(exactQty)
+    topAgg[topKey].revenue += revenue
     const sale = i.sale
-    if (sale?.id) {
+    if (sale?.id && !service) {
       unitsBySaleId.set(String(sale.id), (unitsBySaleId.get(String(sale.id)) || 0) + qty)
     }
   })
@@ -714,7 +750,8 @@ async function getSalesData(startUtc, endUtc, req) {
     .slice(0, 10)
     .map(p => ({
       name: p.name,
-      ventas: p.ventas,
+      unit:p.unit,
+      ventas: p.ventas.toString(),
       revenue: Number(p.revenue.toFixed(2))
     }))
 
@@ -742,7 +779,7 @@ async function getSalesData(startUtc, endUtc, req) {
   }))
 
   const tickets = sales.length
-  const unidadesTotales = items.reduce((acc, i) => acc + number(i.qty), 0)
+  const unidadesTotales = items.filter(i=>(i.item_kind ?? i.product?.kind)!=='SERVICE').reduce((acc, i) => acc + number(i.qty), 0)
   const ticketPromedio = tickets > 0 ? totalRevenue / tickets : 0
 
   // En consolidado los totales suman varias sucursales: hay que poder ver cuál es cuál.
@@ -757,6 +794,8 @@ async function getSalesData(startUtc, endUtc, req) {
 
   return {
     salesByBranch,
+    totalGoodsRevenue:totalGoodsRevenue.toDecimalPlaces(2).toNumber(),totalServiceRevenue:totalServiceRevenue.toDecimalPlaces(2).toNumber(),serviceLines,
+    quantitiesByUnit:[...quantitiesByUnit.values()].map(row=>({...row,quantity:row.quantity.toString()})),
     totalRevenue: Number(totalRevenue.toFixed(2)),              // Neto (con devoluciones)
     totalRevenueGross: Number(totalRevenueGross.toFixed(2)),    // Bruto (sin devoluciones)
     totalReturned: Number(totalReturned.toFixed(2)),            // Total devuelto
@@ -782,7 +821,7 @@ async function getFinancialData(startUtc, endUtc, req) {
   const sales = await getSalesData(startUtc, endUtc, req)
 
   const products = await prisma.product.findMany({
-    where: { deleted: false, deleted_at: null, company_id: req.companyId },
+    where: { deleted: false, deleted_at: null, company_id: req.companyId,kind:{not:'SERVICE'} },
     select: { id: true, stock: true, cost: true }
   })
   await overlayReportBranchStock(products, req)
@@ -803,15 +842,17 @@ async function getFinancialData(startUtc, endUtc, req) {
     ? { units: 0, value: 0 }
     : await inTransitTotals(req.companyId, products, { branchIds: scopeBranchIds(req) })
 
-  const purchaseLogs = await prisma.purchaseLog.findMany({
-    where: { date: { gte: startUtc, lte: endUtc }, product: { company_id: req.companyId } },
+  // PurchaseLog has no branch: do not expose company totals as a branch's purchases.
+  const purchasesAttributable = !req.branchId
+  const purchaseLogs = purchasesAttributable ? await prisma.purchaseLog.findMany({
+    where: { date: reportDateWhere(req, startUtc, endUtc), product: { company_id: req.companyId,kind:{not:'SERVICE'} } },
     select: {
       qty: true,
       cost: true,
       source: true,
       supplier: { select: { name: true } }
     }
-  })
+  }) : []
   let purchasesTotal = 0
   let initialInventoryTotal = 0
   let initialInventoryUnits = 0
@@ -849,7 +890,8 @@ async function getFinancialData(startUtc, endUtc, req) {
     where: {
       sale: {
         ...branchWhere(req),
-        date: { gte: startUtc, lte: endUtc },
+        branch: { company_id: req.companyId },
+        date: reportDateWhere(req, startUtc, endUtc),
         ...(status ? { status_id: status.id } : {})
       }
     },
@@ -857,9 +899,10 @@ async function getFinancialData(startUtc, endUtc, req) {
   })
   const byCat = {}
   for (const i of saleItems) {
-    const cat = i.product?.category?.name || 'Sin categoría'
+    const service=(i.item_kind ?? i.product?.kind)==='SERVICE'
+    const cat = `${i.product?.category?.name || 'Sin categoría'}${service ? ' · Servicios (sin costeo)' : ''}`
     const rev = number(i.price) * number(i.qty)
-    const c = number(i.product?.cost) * number(i.qty)
+    const c = service ? 0 : number(i.unit_cost ?? i.product?.cost) * number(i.qty)
     if (!byCat[cat]) byCat[cat] = { revenue: 0, cost: 0 }
     byCat[cat].revenue += rev
     byCat[cat].cost += c
@@ -869,7 +912,7 @@ async function getFinancialData(startUtc, endUtc, req) {
       const revenue = Number(v.revenue.toFixed(2))
       const cost = Number(v.cost.toFixed(2))
       const profit = Number((v.revenue - v.cost).toFixed(2))
-      const marginPct = v.revenue > 0 ? Number((((v.revenue - v.cost) / v.revenue) * 100).toFixed(1)) : 0
+      const marginPct = category.endsWith(' · Servicios (sin costeo)') ? null : v.revenue > 0 ? Number((((v.revenue - v.cost) / v.revenue) * 100).toFixed(1)) : 0
       return { category, revenue, cost, profit, marginPct }
     })
     .sort((a, b) => b.profit - a.profit)
@@ -883,12 +926,12 @@ async function getFinancialData(startUtc, endUtc, req) {
   const inventoryTurnover =
     inventoryValue > 0 && cogs > 0 ? Number((cogs / inventoryValue).toFixed(2)) : null
 
-  const daysInPeriod = Math.max(
+  const daysInPeriod = req.reportPeriod && !req.reportPeriod.start ? null : Math.max(
     1,
     (endUtc.getTime() - startUtc.getTime()) / (1000 * 60 * 60 * 24)
   )
   const daysOfInventoryApprox =
-    cogs > 0 && inventoryValue > 0
+    daysInPeriod !== null && cogs > 0 && inventoryValue > 0
       ? Number(((inventoryValue / cogs) * daysInPeriod).toFixed(1))
       : null
 
@@ -902,12 +945,13 @@ async function getFinancialData(startUtc, endUtc, req) {
     // Lo que la empresa posee: anaqueles + camioneta. Es la cifra que se compara
     // contra la cuenta contable de Inventario.
     inventoryValueOwned: Number((inventoryValue + enTransito.value).toFixed(2)),
-    purchasesPeriod: Number(purchasesTotal.toFixed(2)),
-    purchaseLogLines: purchaseLogs.length - initialInventoryLines,
+    purchasesAttributable,
+    purchasesPeriod: purchasesAttributable ? Number(purchasesTotal.toFixed(2)) : null,
+    purchaseLogLines: purchasesAttributable ? purchaseLogs.length - initialInventoryLines : null,
     purchasesBySupplier: purchasesBySupplierList,
-    initialInventoryPeriod: Number(initialInventoryTotal.toFixed(2)),
-    initialInventoryUnitsPeriod: initialInventoryUnits,
-    initialInventoryLines,
+    initialInventoryPeriod: purchasesAttributable ? Number(initialInventoryTotal.toFixed(2)) : null,
+    initialInventoryUnitsPeriod: purchasesAttributable ? initialInventoryUnits : null,
+    initialInventoryLines: purchasesAttributable ? initialInventoryLines : null,
     categoryProfitability,
     grossMarginPct,
     inventoryTurnover,
@@ -918,6 +962,7 @@ async function getFinancialData(startUtc, endUtc, req) {
 /** Agrega por proveedor: conteo de SKUs activos, unidades en stock y valor de inventario (stock × costo). */
 async function getSuppliersReportData(req) {
   const suppliers = await prisma.supplier.findMany({
+    take: 10001,
     where: { deleted: false, party_type: 'SUPPLIER', company_id: req.companyId },
     include: {
       supplier_payment_terms: {
@@ -928,8 +973,9 @@ async function getSuppliersReportData(req) {
     orderBy: { name: 'asc' }
   })
 
+  assertReportSize(suppliers.length)
   const productRows = await prisma.product.findMany({
-    where: { deleted: false, deleted_at: null, company_id: req.companyId },
+    where: { deleted: false, deleted_at: null, company_id: req.companyId,kind:{not:'SERVICE'} },
     select: { id: true, supplier_id: true, stock: true, cost: true }
   })
   await overlayReportBranchStock(productRows, req)
@@ -1039,12 +1085,14 @@ function sendCsv(res, filename, headerLines = [], sections = []) {
 async function salesReport(req, res, next) {
   try {
   const branding = await getBrandingForPdf(prisma, req.companyId)
+  const meta = await prepareReportMeta(req, branding)
   const companyName = branding.company_name
   const logoBuffer = branding.logoBuffer
   const money = makeMoney(branding.currency_code)
   const { period='month', year, format='pdf', month, quarter, semester } = req.query
   const { startUtc, endUtc, label } = periodRange(period, year, { month, quarter, semester })
     const data = await getSalesData(startUtc, endUtc, req)
+    if (meta) return res.json(buildSalesReport(data, meta))
     const scope = await reportScope(req)
     if (String(format).toLowerCase() === 'csv' || String(format).toLowerCase() === 'excel') {
       const total = data.totalRevenueGross || 1
@@ -1166,6 +1214,7 @@ async function salesReport(req, res, next) {
 async function inventoryReport(req,res,next){
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
@@ -1173,17 +1222,22 @@ async function inventoryReport(req,res,next){
     // Solo lo que se maneja en el alcance: el catálogo es de la empresa, pero el
     // reporte de inventario es de sucursal(es) y no debe listar productos ajenos.
     const products = await prisma.product.findMany({
+      take: 10001,
       where: {
+        deleted: false,
         deleted_at: null,
         company_id: req.companyId,
+        kind:{not:'SERVICE'},
         branch_stocks: { some: { branch_id: { in: scopeBranchIds(req) } } },
       },
       include:{ category:true },
     })
+    assertReportSize(products.length)
     await overlayReportBranchStock(products, req)
     const scope = await reportScope(req)
     const byBranch = await stockByBranch(req, scope)
     const byWarehouse = await stockByWarehouse(req)
+    if (meta) return res.json(buildInventoryReport({ products, byBranch, byWarehouse }, meta))
     if (String(format).toLowerCase() === 'csv' || String(format).toLowerCase() === 'excel') {
       const totalValue = products.reduce((acc,p)=>acc+ number(p.stock)* number(p.cost),0)
       sendCsv(res, 'reporte-inventario', [
@@ -1243,7 +1297,7 @@ async function inventoryReport(req,res,next){
     )
   }
   sectionTitle(doc,'Detalle de Inventario')
-  drawTable(doc, ['Producto','Categoría','Stock','Costo','Valor'], products.slice(0,100).map(p=>[p.name, p.category?.name||'—', p.stock, money(number(p.cost)), money(number(p.stock)*number(p.cost))]), [170,110,50,70,80], { align: ['left','left','right','right','right'], headerAlign: ['left','left','right','right','right'] })
+  drawTable(doc, ['Producto','Categoría','Stock','Costo','Valor'], products.map(p=>[p.name, p.category?.name||'—', p.stock, money(number(p.cost)), money(number(p.stock)*number(p.cost))]), [170,110,50,70,80], { align: ['left','left','right','right','right'], headerAlign: ['left','left','right','right','right'] })
     footer(doc, companyName)
     doc.end()
   } catch(e){ next(e) }
@@ -1252,12 +1306,15 @@ async function inventoryReport(req,res,next){
 async function suppliersReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
     const { format = 'pdf' } = req.query
     const data = await getSuppliersReportData(req)
     const { suppliers, summary } = data
+    assertReportSize(suppliers.length)
+    if (meta) return res.json(buildSuppliersReport(data, meta))
     const scope = await reportScope(req)
     const fmtLast = (d) =>
       d ? DateTime.fromJSDate(d).setZone('America/Guatemala').toFormat('yyyy-LL-dd') : '—'
@@ -1385,7 +1442,7 @@ async function suppliersReport(req, res, next) {
     }
 
     sectionTitle(doc, 'Listado visual por letra')
-    const forGrid = suppliers.slice(0, 300).map((s) => ({
+    const forGrid = suppliers.map((s) => ({
       name: s.name,
       contact: s.contact,
       phone: s.phone,
@@ -1404,6 +1461,7 @@ async function suppliersReport(req, res, next) {
 async function financialReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
@@ -1413,6 +1471,7 @@ async function financialReport(req, res, next) {
     const scope = await reportScope(req)
     const byBranch = await stockByBranch(req, scope)
     const byWarehouse = await stockByWarehouse(req)
+    if (meta) return res.json(buildFinancialReport({ ...data, byBranch, byWarehouse }, meta))
 
     const rotTxt = data.inventoryTurnover != null ? String(data.inventoryTurnover) : '—'
     const dInvTxt = data.daysOfInventoryApprox != null ? String(data.daysOfInventoryApprox) : '—'
@@ -1432,8 +1491,10 @@ async function financialReport(req, res, next) {
           `Unidades en tránsito,${data.inTransitUnits}`,
           `Valor total propiedad de la empresa,${money(data.inventoryValueOwned)}`,
         ] : []),
-        `Compras registradas período,${money(data.purchasesPeriod)}`,
-        `Líneas de compra (movimientos),${data.purchaseLogLines}`,
+        ...(data.purchasesAttributable ? [
+          `Compras registradas período (empresa),${money(data.purchasesPeriod)}`,
+          `Líneas de compra (movimientos),${data.purchaseLogLines}`,
+        ] : ['Compras por sucursal,No disponibles: el registro histórico no identifica sucursal']),
         `Ingresos brutos ventas,${money(data.totalRevenueGross)}`,
         `Devoluciones,${money(data.totalReturned)}`,
         `Ingresos netos,${money(data.totalRevenue)}`,
@@ -1480,11 +1541,11 @@ async function financialReport(req, res, next) {
             `${c.marginPct}%`
           ])
         },
-        {
-          title: 'Compras por proveedor (período)',
+        ...(data.purchasesAttributable ? [{
+          title: 'Compras por proveedor (período · empresa)',
           columns: ['Proveedor', 'Líneas', 'Unidades', 'Monto'],
           rows: data.purchasesBySupplier.map((p) => [p.supplier, p.lines, p.units, money(p.amount)])
-        }
+        }] : [])
       ])
       return
     }
@@ -1495,7 +1556,7 @@ async function financialReport(req, res, next) {
     sectionTitle(doc, 'Resumen - inventario, compras y margen')
     drawSummaryCards(doc, [
       { label: 'Valor inventario (hoy)', value: money(data.inventoryValue) },
-      { label: 'Compras del período', value: money(data.purchasesPeriod) },
+      ...(data.purchasesAttributable ? [{ label: 'Compras del período · empresa', value: money(data.purchasesPeriod) }] : []),
       { label: 'Ventas netas', value: money(data.totalRevenue) },
       { label: 'CMV (vendido)', value: money(data.totalCost) },
       { label: 'Margen bruto', value: money(data.totalProfit) },
@@ -1512,7 +1573,7 @@ async function financialReport(req, res, next) {
             ? `En tránsito: ${data.inTransitUnits} u. (${money(data.inTransitValue)}) | ` +
               `Total propiedad de la empresa: ${money(data.inventoryValueOwned)} | `
             : '') +
-          `Movimientos de compra: ${data.purchaseLogLines} | ` +
+          (data.purchasesAttributable ? `Movimientos de compra: ${data.purchaseLogLines} | ` : 'Compras no disponibles por sucursal | ') +
           `Rotación (CMV / valor inv.): ${rotTxt} | Días aprox. de inventario: ${dInvTxt}`,
         doc.page.margins.left,
         doc.y,
@@ -1592,7 +1653,7 @@ async function financialReport(req, res, next) {
       doc.moveDown(0.5)
     }
 
-    sectionTitle(doc, 'Compras por proveedor (período)')
+    sectionTitle(doc, data.purchasesAttributable ? 'Compras por proveedor (período · empresa)' : 'Compras por sucursal no disponibles')
     if (data.purchasesBySupplier.length) {
       drawTable(
         doc,
@@ -1606,7 +1667,7 @@ async function financialReport(req, res, next) {
       )
     } else {
       ensureSpace(doc, 20)
-      doc.fontSize(9).fillColor(BRAND.muted).text('Sin movimientos de compra en el período.', doc.page.margins.left)
+      doc.fontSize(9).fillColor(BRAND.muted).text(data.purchasesAttributable ? 'Sin movimientos de compra en el período.' : 'El registro histórico de compras no identifica la sucursal. Consulta el consolidado autorizado de empresa.', doc.page.margins.left)
       doc.moveDown(0.5)
     }
 
@@ -1620,9 +1681,11 @@ async function financialReport(req, res, next) {
 /** Stock, categoría, proveedor, brechas de reposición y alertas del sistema abiertas. */
 async function getAlertsReportData(req) {
   const products = await prisma.product.findMany({
-    where: { deleted: false, deleted_at: null, company_id: req.companyId },
+    take: 10001,
+    where: { deleted: false, deleted_at: null, company_id: req.companyId,kind:{not:'SERVICE'} },
     include: { category: true, supplier: true, status: true }
   })
+  assertReportSize(products.length)
   await overlayReportBranchStock(products, req)
 
   const gapUnits = (p) => Math.max(0, number(p.min_stock) - number(p.stock))
@@ -1660,10 +1723,11 @@ async function getAlertsReportData(req) {
     return number(a.stock) - number(b.stock)
   })
 
-  const openAlertCount = await prisma.alert.count({ where: { resolved: 0 } })
+  const alertWhere = { resolved: 0, ...authorizedReportWhere(req) }
+  const openAlertCount = await prisma.alert.count({ where: alertWhere })
 
   const systemAlerts = await prisma.alert.findMany({
-    where: { resolved: 0 },
+    where: alertWhere,
     include: {
       product: { select: { name: true } },
       type: true,
@@ -1672,8 +1736,10 @@ async function getAlertsReportData(req) {
       assignedTo: { select: { name: true } }
     },
     orderBy: { timestamp: 'desc' },
-    take: 250
+    take: 10001
   })
+  assertReportSize(openAlertCount)
+  assertReportSize(systemAlerts.length)
 
   return {
     summary: {
@@ -1696,6 +1762,7 @@ async function getAlertsReportData(req) {
 async function alertsReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
@@ -1711,6 +1778,7 @@ async function alertsReport(req, res, next) {
       d ? DateTime.fromJSDate(d).setZone(zone).toFormat('yyyy-LL-dd HH:mm') : '—'
 
     const whereIs = await topLocationByProduct(req, actionList.map((p) => p.id))
+    if (meta) return res.json(buildAlertsReport({ ...data, whereIs }, meta))
     const rowPrioridad = (p) => [
       p.name,
       p.category?.name || '—',
@@ -1858,7 +1926,7 @@ async function alertsReport(req, res, next) {
       drawTable(
         doc,
         ['Producto', 'Categoría', 'Stock', 'Dónde está', 'Mín.', 'Faltante', 'Valor falt.', 'Proveedor'],
-        actionList.slice(0, 120).map(rowPrioridad),
+        actionList.map(rowPrioridad),
         [104, 50, 32, 84, 32, 40, 62, 70],
         {
           align: ['left', 'left', 'right', 'left', 'right', 'right', 'right', 'left'],
@@ -1888,7 +1956,7 @@ async function alertsReport(req, res, next) {
       drawTable(
         doc,
         ['Producto', 'Categoría', 'Mín.', 'Proveedor', 'Estado'],
-        critical.slice(0, 80).map((p) => [
+        critical.map((p) => [
           p.name,
           p.category?.name || '—',
           number(p.min_stock),
@@ -1908,7 +1976,7 @@ async function alertsReport(req, res, next) {
       drawTable(
         doc,
         ['Fecha', 'Tipo', 'Prioridad', 'Producto', 'Título', 'Estado', 'Asignado'],
-        systemAlerts.slice(0, 100).map((a) => [
+        systemAlerts.map((a) => [
           fmtTs(a.timestamp),
           a.type?.name || '—',
           a.priority?.name || '—',
@@ -1950,10 +2018,15 @@ async function alertsReport(req, res, next) {
 
 /** Catálogo: márgenes, valor a costo vs precio público, mix por categoría y proveedor. */
 async function getProductsAnalysisData(req) {
+  const catalogType=req.query.catalog_type || 'goods'
+  if(!['goods','services'].includes(catalogType)) throw reportError(400,'Tipo de catálogo inválido')
   const products = await prisma.product.findMany({
-    where: { deleted: false, deleted_at: null, company_id: req.companyId },
+    take: 10001,
+    where: { deleted: false, deleted_at: null, company_id: req.companyId,kind:catalogType==='services' ? 'SERVICE' : {not:'SERVICE'} },
     include: { category: true, supplier: true, status: true }
   })
+  assertReportSize(products.length)
+  if(catalogType==='services')return{catalogType,products,summary:{totalSkus:products.length}}
   await overlayReportBranchStock(products, req)
 
   let inventoryValue = 0
@@ -2068,16 +2141,27 @@ async function getProductsAnalysisData(req) {
 async function productsReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
     const zone = 'America/Guatemala'
     const { format = 'pdf' } = req.query
     const data = await getProductsAnalysisData(req)
+    if(data.catalogType==='services') {
+      const prepared=buildProductsReport(data,meta || {})
+      if(meta)return res.json(prepared)
+      const section=prepared.sections[0],rows=section.rows.map(row=>section.columns.map(c=>c.type==='money' ? money(row[c.id]) : c.type==='boolean' ? row[c.id] ? 'Sí' : 'No' : row[c.id]))
+      if(['csv','excel'].includes(format))return sendCsv(res,'servicios.csv',[prepared.title], [{title:section.title,columns:section.columns.map(c=>c.label),rows}])
+      const doc=newDoc(res,prepared.title)
+      header(doc,prepared.title,'Catálogo actual',companyName,logoBuffer,'Empresa')
+      drawTable(doc,section.columns.map(c=>c.label),rows,[150,100,70,55,65,60]);footer(doc,companyName);doc.end();return
+    }
     const { products, summary, categoryRows, supplierRows, topByInv, topByRetail, tightMargins } = data
     const scope = await reportScope(req)
     const byBranch = await stockByBranch(req, scope)
     const byWarehouse = await stockByWarehouse(req)
+    if (meta) return res.json(buildProductsReport({ ...data, byBranch, byWarehouse }, meta))
 
     const rowDetalle = (p) => [
       p.name,
@@ -2279,7 +2363,7 @@ async function productsReport(req, res, next) {
     drawTable(
       doc,
       ['Proveedor', 'SKUs', 'Unid.', 'Val. inv.', 'Val. público'],
-      supplierRows.slice(0, 25).map((s) => [
+      supplierRows.map((s) => [
         s.supplier,
         s.skus,
         s.units,
@@ -2292,11 +2376,6 @@ async function productsReport(req, res, next) {
         headerAlign: ['left', 'right', 'right', 'right', 'right']
       }
     )
-    if (supplierRows.length > 25) {
-      ensureSpace(doc, 16)
-      doc.fontSize(8).fillColor(BRAND.muted).text(`... ${supplierRows.length - 25} proveedores más en CSV.`, doc.page.margins.left)
-      doc.moveDown(0.45)
-    }
 
     sectionTitle(doc, 'Mayor valor a costo (existencias)')
     drawTable(
@@ -2358,21 +2437,13 @@ async function productsReport(req, res, next) {
     drawTable(
       doc,
       ['Producto', 'Cat.', 'Prov.', 'St.', 'Costo', 'PVP', 'Marg%', 'V.inv', 'V.pub'],
-      products.slice(0, 90).map(rowDetalle),
+      products.map(rowDetalle),
       [102, 46, 50, 24, 52, 52, 36, 52, 52],
       {
         align: ['left', 'left', 'left', 'right', 'right', 'right', 'right', 'right', 'right'],
         headerAlign: ['left', 'left', 'left', 'right', 'right', 'right', 'right', 'right', 'right']
       }
     )
-    if (products.length > 90) {
-      ensureSpace(doc, 18)
-      doc
-        .fontSize(8)
-        .fillColor(BRAND.muted)
-        .text(`... ${products.length - 90} productos más en CSV.`, doc.page.margins.left)
-      doc.moveDown(0.5)
-    }
 
     footer(doc, companyName)
     doc.end()
@@ -2391,7 +2462,7 @@ async function inventoryCountSessionReport(req, res, next) {
     const format = String(req.query.format || 'pdf').toLowerCase()
 
     const session = await prisma.inventoryCountSession.findFirst({
-      where: { id, branch: { company_id: req.companyId } },
+      where: { id, ...authorizedReportWhere(req) },
       include: {
         createdBy: { select: { name: true, email: true } },
         approvedBy: { select: { name: true, email: true } },
@@ -2403,7 +2474,7 @@ async function inventoryCountSessionReport(req, res, next) {
     }
 
     const lines = await prisma.inventoryCountLine.findMany({
-      where: { session_id: id },
+      where: { session_id: id,product:{kind:{not:'SERVICE'}} },
       orderBy: [{ location: { code: 'asc' } }, { product: { name: 'asc' } }],
       include: {
         product: {
@@ -2570,6 +2641,7 @@ function inventoryCountStatusLabel(status) {
 async function inventoryCountsHistoryReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
@@ -2578,8 +2650,10 @@ async function inventoryCountsHistoryReport(req, res, next) {
     const { startUtc, endUtc, label } = periodRange(period, year, { month, quarter, semester }, zone)
 
     const sessions = await prisma.inventoryCountSession.findMany({
+      take: 10001,
       where: {
-        created_at: { gte: startUtc, lte: endUtc },
+        ...authorizedReportWhere(req),
+        created_at: reportDateWhere(req, startUtc, endUtc),
       },
       include: {
         createdBy: { select: { name: true } },
@@ -2588,6 +2662,7 @@ async function inventoryCountsHistoryReport(req, res, next) {
       },
       orderBy: { created_at: 'desc' },
     })
+    assertReportSize(sessions.length)
 
     const sessionIds = sessions.map((s) => s.id)
     const countedBySession = new Map()
@@ -2596,13 +2671,13 @@ async function inventoryCountsHistoryReport(req, res, next) {
     if (sessionIds.length) {
       const countedAgg = await prisma.inventoryCountLine.groupBy({
         by: ['session_id'],
-        where: { session_id: { in: sessionIds }, qty_counted: { not: null } },
+        where: { session_id: { in: sessionIds }, qty_counted: { not: null }, product:{kind:{not:'SERVICE'}} },
         _count: { id: true },
       })
       for (const c of countedAgg) countedBySession.set(c.session_id, c._count.id)
 
       const allLines = await prisma.inventoryCountLine.findMany({
-        where: { session_id: { in: sessionIds }, qty_counted: { not: null } },
+        where: { session_id: { in: sessionIds }, qty_counted: { not: null }, product:{kind:{not:'SERVICE'}} },
         select: {
           session_id: true,
           stock_snapshot: true,
@@ -2644,6 +2719,7 @@ async function inventoryCountsHistoryReport(req, res, next) {
       acc[s.status] = (acc[s.status] || 0) + 1
       return acc
     }, {})
+    if (meta) return res.json(buildInventoryCountsReport({ sessions: tableData, byStatus, summary: { sumValueDiff, sumMerma } }, meta))
 
     if (String(format).toLowerCase() === 'csv' || String(format).toLowerCase() === 'excel') {
       const rows = tableData.map(({ s, counted, valueDiff, mermaValue }) => [
@@ -2720,17 +2796,13 @@ async function inventoryCountsHistoryReport(req, res, next) {
     drawTable(
       doc,
       ['Sesión', 'Estado', 'Creado', 'Lín.', 'Cont.', 'Val.diff', 'Merma'],
-      pdfRows.slice(0, 80),
+      pdfRows,
       [118, 52, 72, 28, 28, 58, 58],
       {
         align: ['left', 'left', 'left', 'right', 'right', 'right', 'right'],
         headerAlign: ['left', 'left', 'left', 'right', 'right', 'right', 'right'],
       }
     )
-    if (tableData.length > 80) {
-      ensureSpace(doc, 18)
-      doc.fontSize(8).fillColor(BRAND.muted).text(`… ${tableData.length - 80} sesiones más (ver CSV).`, doc.page.margins.left)
-    }
 
     footer(doc, companyName)
     doc.end()
@@ -2742,6 +2814,7 @@ async function inventoryCountsHistoryReport(req, res, next) {
 async function merchandiseReport(req, res, next) {
   try {
     const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding)
     const companyName = branding.company_name
     const logoBuffer = branding.logoBuffer
     const money = makeMoney(branding.currency_code)
@@ -2752,7 +2825,8 @@ async function merchandiseReport(req, res, next) {
     const records = await prisma.incomingMerchandise.findMany({
       // Sin este filtro el reporte mezclaba los ingresos de todas las sucursales
       // (y de todas las empresas).
-      where: { ...branchWhere(req), date: { gte: startUtc, lte: endUtc } },
+      where: { ...authorizedReportWhere(req), date: reportDateWhere(req, startUtc, endUtc) },
+      take: 10001,
       include: {
         branch: { select: { name: true } },
         supplier: { select: { name: true } },
@@ -2761,6 +2835,7 @@ async function merchandiseReport(req, res, next) {
       },
       orderBy: { date: 'desc' },
     })
+    assertReportSize(records.length)
 
     const statusLabel = (s) => (s === 'PAID' ? 'Pagado' : s === 'PARTIAL' ? 'Pago parcial' : 'Pendiente')
     const recordTotal = (r) => r.items.reduce((sum, it) => sum + number(it.quantity) * number(it.unit_cost), 0)
@@ -2779,7 +2854,7 @@ async function merchandiseReport(req, res, next) {
       agg.count += 1; agg.amount += total
       bySupplier.set(sName, agg)
       return {
-        date: DateTime.fromJSDate(r.date).setZone('America/Guatemala').toFormat('yyyy-LL-dd'),
+        date: DateTime.fromJSDate(r.date).setZone(branding.timezone || 'America/Guatemala').toFormat('yyyy-LL-dd'),
         branch: r.branch?.name || '—',
         supplier: sName,
         registeredBy: r.registeredBy?.name || '—',
@@ -2790,6 +2865,9 @@ async function merchandiseReport(req, res, next) {
     const supplierRows = [...bySupplier.entries()]
       .sort((a, b) => b[1].amount - a[1].amount)
       .map(([name, v]) => [name, String(v.count), money(v.amount)])
+    if (meta) return res.json(buildMerchandiseReport({ detail,
+      bySupplier: [...bySupplier.entries()].map(([supplier, values]) => ({ supplier, ...values })),
+      summary: { records: records.length, totalAmount, paidCount, partialCount, pendingCount } }, meta))
 
     // En consolidado cada ingreso lleva su sucursal; en una sola sobra la columna.
     const detailColumns = scope.consolidated
@@ -2856,6 +2934,7 @@ module.exports = {
   // Ladrillos compartidos con stockReports.controller.js: los reportes nuevos
   // usan el mismo papel y las mismas tablas, no una copia parecida.
   reportScope,
+  prepareReportMeta,
   scopeBranchIds,
   periodRange,
   number,

@@ -9,6 +9,8 @@
  */
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
+const {Prisma}=require('@prisma/client')
+const {lineSnapshot}=require('../../services/catalogItemRules')
 const { DateTime } = require('luxon')
 const {
   getAvailabilityBatchWithKits,
@@ -24,6 +26,7 @@ const {
   buildReturnWhere,
   evaluateReturnEligibility,
   estimateRefundAmount,
+  refundFromLine,
   normalizeReturnLines,
   returnFiscalStatus,
 } = require('./domain')
@@ -63,6 +66,12 @@ exports.list = async (req, res, next) => {
     }
 
     const totalItems = await prisma.return.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const states = [['pending', 'Pendiente'], ['approved', 'Aprobada'], ['completed', 'Completada'], ['rejected', 'Rechazada']]
+      const counts = await Promise.all(states.map(([, name]) => prisma.return.count({ where: { AND: [where, { status: { name } }] } })))
+      summary = { total: totalItems, ...Object.fromEntries(states.map(([key], index) => [key, counts[index]])) }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -112,6 +121,7 @@ exports.list = async (req, res, next) => {
 
     res.json({
       items,
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
       totalPages,
@@ -160,9 +170,10 @@ exports.eligibleSales = async (req, res, next) => {
             qty: true,
             price: true,
             product_id: true,
+            item_kind:true,item_name:true,unit_label:true,quantity_decimals:true,net_total:true,
             product: { select: { id: true, name: true, barcode: true, image_url: true } },
             return_items: {
-              select: { qty_returned: true, return: { select: { status: { select: { name: true } } } } },
+              select: { qty_returned: true,refund_amount:true, return: { select: { status: { select: { name: true } } } } },
             },
           },
         },
@@ -170,9 +181,10 @@ exports.eligibleSales = async (req, res, next) => {
       orderBy: { date: 'desc' },
     }), getReturnPolicy(prisma, req.companyId)])
     const eligible = sales.map((sale) => {
-      const grossTotal = sale.sale_items.reduce((sum, item) => sum + Number(item.price) * item.qty, 0)
+      const grossTotal = sale.sale_items.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
       const saleItems = sale.sale_items.map((item) => ({
         ...item,
+        refundable_amount:Prisma.Decimal.max(0,new Prisma.Decimal(String(item.net_total ?? estimateRefundAmount({saleTotal:sale.total,grossTotal,unitPrice:item.price,qty:item.qty}))).sub(item.return_items.filter(row=>ACTIVE_RETURN_STATUSES.includes(row.return.status.name)).reduce((sum,row)=>sum.add(String(row.refund_amount || 0)),new Prisma.Decimal(0)))).toNumber(),
         estimated_unit_refund: estimateRefundAmount({
           saleTotal: sale.total,
           grossTotal,
@@ -188,7 +200,7 @@ exports.eligibleSales = async (req, res, next) => {
       const eligibility = evaluateReturnEligibility({
         saleDate: sale.date,
         statusName: sale.status?.name,
-        availableUnits: saleItems.reduce((sum, item) => sum + item.available_to_return, 0),
+        availableUnits: saleItems.length,
         policy,
       })
       return {
@@ -334,7 +346,7 @@ exports.create = async (req, res, next) => {
               product: true,
               return_items: {
                 select: {
-                  qty_returned: true,
+                  qty_returned: true,refund_amount:true,
                   return: { select: { status: { select: { name: true } } } },
                 },
               },
@@ -364,7 +376,7 @@ exports.create = async (req, res, next) => {
       const policyResult = evaluateReturnEligibility({
         saleDate: sale.date,
         statusName: sale.status.name,
-        availableUnits: sale.sale_items.reduce((sum, item) => sum + availableReturnQty(item.qty, item.return_items.map((row) => ({ qty_returned: row.qty_returned, status: row.return.status }))), 0),
+        availableUnits: sale.sale_items.filter(item=>availableReturnQty(item.qty,item.return_items.map(row=>({qty_returned:row.qty_returned,status:row.return.status}))).gt(0)).length,
         policy,
         override: { authorized: canOverridePolicy, reason: policy_override_reason },
       })
@@ -388,15 +400,15 @@ exports.create = async (req, res, next) => {
       }
 
       // 2. Validar items y calcular totales
-      const normalizedItems = normalizeReturnLines(items)
+      const normalizedItems = normalizeReturnLines(items,sale.sale_items)
       const saleItemsMap = new Map(
         sale.sale_items.map(si => [si.id, si])
       )
-      const grossTotal = sale.sale_items.reduce((sum, item) => sum + Number(item.price) * item.qty, 0)
-      const alreadyReservedAmount = sale.returns.reduce((sum, item) => sum + Number(item.total_refund), 0)
-      const availableNetAmount = Math.max(0, Number(sale.total) - alreadyReservedAmount)
+      const grossTotal = sale.sale_items.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
+      const alreadyReservedAmount = sale.returns.reduce((sum,item)=>sum.add(String(item.total_refund)),new Prisma.Decimal(0))
+      const availableNetAmount = Prisma.Decimal.max(0,new Prisma.Decimal(String(sale.total)).sub(alreadyReservedAmount))
 
-      let totalRefund = 0
+      let totalRefund = new Prisma.Decimal(0)
       const validatedItems = []
 
       for (const item of normalizedItems) {
@@ -426,9 +438,9 @@ exports.create = async (req, res, next) => {
           status: row.return.status,
         }))
         const availableToReturn = availableReturnQty(saleItem.qty, activeReturns)
-        const previouslyReturned = saleItem.qty - availableToReturn
+        const previouslyReturned = new Prisma.Decimal(String(saleItem.qty)).sub(availableToReturn)
 
-        if (qty_returned > availableToReturn) {
+        if (new Prisma.Decimal(qty_returned).gt(availableToReturn)) {
           const err = new Error(
             `${saleItem.product.name}: solo se pueden devolver ${availableToReturn} unidades ` +
             `(vendidas: ${saleItem.qty}, ya devueltas: ${previouslyReturned})`
@@ -437,24 +449,21 @@ exports.create = async (req, res, next) => {
           throw err
         }
 
-        const refundAmount = estimateRefundAmount({
-          saleTotal: sale.total,
-          grossTotal,
-          unitPrice: saleItem.price,
-          qty: qty_returned,
-        })
-        totalRefund += refundAmount
+        const previousAmount=saleItem.return_items.filter(row=>ACTIVE_RETURN_STATUSES.includes(row.return.status.name)).reduce((sum,row)=>sum.add(String(row.refund_amount || 0)),new Prisma.Decimal(0))
+        const lineNet=saleItem.net_total ?? estimateRefundAmount({saleTotal:sale.total,grossTotal,unitPrice:saleItem.price,qty:saleItem.qty})
+        const refundAmount = refundFromLine({originalQty:saleItem.qty,lineNet,qty:qty_returned,returnedQty:previouslyReturned,returnedAmount:previousAmount})
+        totalRefund=totalRefund.add(String(refundAmount))
 
         validatedItems.push({
           sale_item_id: Number(sale_item_id),
           product_id,
-          qty_returned: Number(qty_returned),
+          qty_returned,
           refund_amount: refundAmount,
           reason: item.reason || null
         })
       }
 
-      if (totalRefund > availableNetAmount + 0.001) {
+      if (totalRefund.gt(availableNetAmount)) {
         const err = new Error(`El reembolso excede el neto disponible de la venta (${availableNetAmount.toFixed(2)})`)
         err.status = 409
         throw err
@@ -462,7 +471,7 @@ exports.create = async (req, res, next) => {
 
       // 2b. Validar productos de reemplazo (solo cambios) y calcular la diferencia
       const validatedReplacements = []
-      let replacementTotal = 0
+      let replacementTotal = new Prisma.Decimal(0)
       if (returnType === 'EXCHANGE') {
         const resolved = await resolvePricedSaleItems(tx, {
           items: replacements,
@@ -475,17 +484,18 @@ exports.create = async (req, res, next) => {
           availability: getAvailabilityBatchWithKits,
         })
         for (const rep of resolved) {
-          replacementTotal += rep.line_total
+          replacementTotal=replacementTotal.add(String(rep.line_total))
           validatedReplacements.push({
             product_id: rep.product_id,
             qty: rep.qty,
             unit_price: rep.unit_price,
             line_total: rep.line_total,
+            ...lineSnapshot(rep),
           })
         }
       }
       // + = el cliente paga la diferencia; − = el depósito se la devuelve.
-      const priceDifference = returnType === 'EXCHANGE' ? replacementTotal - totalRefund : 0
+      const priceDifference = returnType === 'EXCHANGE' ? replacementTotal.sub(totalRefund).toNumber() : 0
 
       // 3. Obtener estado "Pendiente" para devoluciones
       const pendingStatus = await tx.returnStatus.findFirst({

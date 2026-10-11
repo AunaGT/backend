@@ -20,8 +20,11 @@ const { DateTime } = require('luxon')
 const { prisma } = require('../../models/prisma')
 const { getBrandingForPdf } = require('../../utils/pdfBranding')
 const { replenishmentSuggestions } = require('../../services/stockLocations')
+const { reportDateWhere, reportError } = require('./reportFilters')
+const { assertReportSize } = require('./reportModel')
+const { buildStockByLocationReport, buildKardexReport, buildInternalMovesReport, buildReplenishmentReport, buildOccupancyReport } = require('./models/stock')
 const {
-  reportScope, scopeBranchIds, periodRange, number, makeMoney,
+  reportScope, scopeBranchIds, periodRange, number, makeMoney, prepareReportMeta,
   newDoc, header, footer, sectionTitle, drawTable, drawSummaryCards, sendCsv,
 } = require('./controller')
 
@@ -53,6 +56,7 @@ function locationFilter(req) {
  *   sections: [{ title, columns, rows, widths, align }]
  */
 async function emit(req, res, report, branding) {
+  if (report.prepared) return res.json(report.prepared)
   branding = branding || await getBrandingForPdf(prisma, req.companyId)
   const scope = await reportScope(req)
   const wantsCsv = ['csv', 'excel'].includes(String(req.query.format || 'pdf').toLowerCase())
@@ -87,22 +91,26 @@ async function emit(req, res, report, branding) {
 /** GET /api/reports/stock-by-location — cuánto hay y cuánto vale, por almacén y por anaquel. */
 async function stockByLocationReport(req, res, next) {
   try {
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const branches = branchIdsSql(req)
     const rows = branches ? await prisma.$queryRaw`
-      SELECT w.name AS warehouse, l.code AS location, l.name AS location_name,
+      SELECT w.id AS warehouse_id, w.name || ' · ' || b.name AS warehouse, l.code AS location, l.name AS location_name,
              COUNT(*) FILTER (WHERE psl.stock <> 0)::int AS skus,
              COALESCE(SUM(psl.stock), 0)::int AS units,
              COALESCE(SUM(psl.stock * p.cost), 0)::numeric AS value
       FROM product_stock_locations psl
-      JOIN products p ON p.id = psl.product_id AND NOT p.deleted
+      JOIN products p ON p.id = psl.product_id AND p.kind <> 'SERVICE' AND NOT p.deleted AND p.deleted_at IS NULL AND p.company_id = ${req.companyId}::uuid
       JOIN stock_locations l ON l.id = psl.location_id
       JOIN warehouses w ON w.id = l.warehouse_id
-      WHERE w.branch_id IN (${branches}) ${locationFilter(req)}
-      GROUP BY w.name, l.code, l.name, w.dispatch_priority, l.dispatch_priority
+      JOIN branches b ON b.id = w.branch_id AND b.company_id = ${req.companyId}::uuid
+      WHERE w.branch_id IN (${branches}) AND w.active AND l.active ${locationFilter(req)}
+      GROUP BY w.id, w.name, b.name, l.id, l.code, l.name, w.dispatch_priority, l.dispatch_priority
       ORDER BY w.dispatch_priority, w.name, l.dispatch_priority, l.code
+      LIMIT 10001
     ` : []
-
-    const branding = await getBrandingForPdf(prisma, req.companyId)
+    assertReportSize(rows.length)
+    if (meta) return emit(req, res, { prepared: buildStockByLocationReport({ rows }, meta) }, branding)
     const money = makeMoney(branding.currency_code)
     const byWarehouse = new Map()
     let skus = 0, units = 0, value = 0
@@ -161,33 +169,47 @@ async function movementsInPeriod(req, { startUtc, endUtc, reason }) {
   const ids = scopeBranchIds(req)
   if (!ids.length) return []
   const { product_id: pid, location_id: lid, warehouse_id: wid } = req.query || {}
-  return prisma.stockMovement.findMany({
+  const internal = reason === 'INTERNAL_MOVE'
+  const select = {
+    id: true, product_id: true, qty: true, balance: true, reason: true, ref_type: true, notes: true, created_at: true, group_id: true,
+    product: { select: { id: true, name: true } },
+    location: { select: { id: true, code: true, warehouse: { select: { id: true, name: true } } } },
+    createdBy: { select: { name: true } },
+  }
+  const scope = { branch_id: { in: ids }, branch: { company_id: req.companyId } }
+  const rows = await prisma.stockMovement.findMany({
     where: {
-      branch_id: { in: ids },
-      created_at: { gte: startUtc, lte: endUtc },
+      ...scope,
+      product:{company_id:req.companyId,kind:{not:'SERVICE'}},
+      created_at: reportDateWhere(req, startUtc, endUtc),
       ...(reason ? { reason } : {}),
       ...(pid ? { product_id: String(pid) } : {}),
       ...(lid ? { location_id: String(lid) } : {}),
       ...(wid ? { location: { warehouse_id: String(wid) } } : {}),
     },
-    select: {
-      qty: true, balance: true, reason: true, ref_type: true, notes: true,
-      created_at: true, group_id: true,
-      product: { select: { name: true } },
-      location: { select: { code: true, warehouse: { select: { name: true } } } },
-      createdBy: { select: { name: true } },
-    },
+    select,
     orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
-    take: 5000, // ponytail: tope duro; el kardex se consulta por producto o por ubicación
+    take: internal ? 20001 : 10001,
   })
+  if (!internal) { assertReportSize(rows.length); return rows }
+  if (rows.length > 20000) throw reportError(422, 'Reduce el período o alcance para preparar movimientos completos.', 'REPORT_TOO_LARGE')
+  const groups = [...new Map(rows.filter(r => r.group_id).map(r => [`${r.group_id}|${r.product_id}`, { group_id: r.group_id, product_id: r.product_id }])).values()]
+  if (!groups.length) return rows
+  const paired = await prisma.stockMovement.findMany({ where: { ...scope, reason, OR: groups }, select,
+    orderBy: [{ created_at: 'asc' }, { id: 'asc' }], take: 20001 })
+  if (paired.length > 20000) throw reportError(422, 'Reduce el período o alcance para preparar movimientos completos.', 'REPORT_TOO_LARGE')
+  return [...paired, ...rows.filter(r => !r.group_id)]
 }
 
 /** GET /api/reports/kardex — entradas, salidas y saldo, ubicación por ubicación. */
 async function kardexReport(req, res, next) {
   try {
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding)
     const { period = 'month', year, month, quarter, semester } = req.query
     const { startUtc, endUtc, label } = periodRange(period, year, { month, quarter, semester })
     const rows = await movementsInPeriod(req, { startUtc, endUtc })
+    if (meta) return emit(req, res, { prepared: buildKardexReport({ movements: rows }, meta) }, branding)
 
     let entradas = 0, salidas = 0
     for (const r of rows) (r.qty > 0 ? (entradas += r.qty) : (salidas -= r.qty))
@@ -223,15 +245,19 @@ async function kardexReport(req, res, next) {
 /** GET /api/reports/internal-moves — qué se movió de anaquel a anaquel y quién lo movió. */
 async function internalMovesReport(req, res, next) {
   try {
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding)
     const { period = 'month', year, month, quarter, semester } = req.query
     const { startUtc, endUtc, label } = periodRange(period, year, { month, quarter, semester })
     const rows = await movementsInPeriod(req, { startUtc, endUtc, reason: 'INTERNAL_MOVE' })
+    const prepared = buildInternalMovesReport({ movements: rows }, meta || {})
+    if (meta) return emit(req, res, { prepared }, branding)
 
     // Cada movimiento son dos filas del libro con el mismo grupo: la negativa
     // dice de dónde salió y la positiva a dónde entró.
     const byKey = new Map()
     for (const r of rows) {
-      const key = `${r.group_id || r.created_at.getTime()}|${r.product?.name || ''}`
+      const key = `${r.group_id || r.id}|${r.product?.id || r.product_id}`
       const item = byKey.get(key) || {
         date: r.created_at, product: r.product?.name || '—', from: '—', to: '—',
         qty: 0, user: r.createdBy?.name || '—', notes: r.notes || '',
@@ -265,10 +291,21 @@ async function internalMovesReport(req, res, next) {
 /** GET /api/reports/replenishment — la lista para el personal de bodega. */
 async function replenishmentReport(req, res, next) {
   try {
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const ids = scopeBranchIds(req)
     // Es una sugerencia de mover mercancía DENTRO de una sucursal: en
     // consolidado se recorren todas las del alcance.
-    const rows = (await Promise.all(ids.map((id) => replenishmentSuggestions(prisma, id)))).flat()
+    let rows = (await Promise.all(ids.map((id) => replenishmentSuggestions(prisma, id)))).flat()
+    const { warehouse_id: wid, location_id: lid } = req.query || {}
+    if (wid) {
+      const locations = await prisma.stockLocation.findMany({ where: { warehouse_id: wid, warehouse: { branch_id: { in: ids }, branch: { company_id: req.companyId } } }, select: { id: true } })
+      const allowed = new Set(locations.map(l => l.id))
+      rows = rows.filter(r => allowed.has(r.location_id))
+    }
+    if (lid) rows = rows.filter(r => r.location_id === lid)
+    assertReportSize(rows.length)
+    if (meta) return emit(req, res, { prepared: buildReplenishmentReport({ rows }, meta) }, branding)
     const conOrigen = rows.filter((r) => r.from_location_id)
 
     await emit(req, res, {
@@ -301,19 +338,25 @@ async function replenishmentReport(req, res, next) {
 /** GET /api/reports/occupancy — qué anaquel está vacío, cuál lleno y cuál con un solo SKU. */
 async function occupancyReport(req, res, next) {
   try {
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const meta = await prepareReportMeta(req, branding, true)
     const branches = branchIdsSql(req)
     const rows = branches ? await prisma.$queryRaw`
-      SELECT w.name AS warehouse, l.code AS location, l.name AS location_name, l.pickable,
-             COUNT(psl.product_id) FILTER (WHERE psl.stock > 0)::int AS skus,
-             COALESCE(SUM(GREATEST(psl.stock, 0)), 0)::int AS units
+      SELECT w.name || ' · ' || b.name AS warehouse, l.code AS location, l.name AS location_name, l.pickable,
+             COUNT(p.id) FILTER (WHERE psl.stock > 0)::int AS skus,
+             COALESCE(SUM(CASE WHEN p.id IS NOT NULL THEN GREATEST(psl.stock, 0) ELSE 0 END), 0)::int AS units
       FROM stock_locations l
       JOIN warehouses w ON w.id = l.warehouse_id
+      JOIN branches b ON b.id = w.branch_id AND b.company_id = ${req.companyId}::uuid
       LEFT JOIN product_stock_locations psl ON psl.location_id = l.id
-      LEFT JOIN products p ON p.id = psl.product_id AND NOT p.deleted
+      LEFT JOIN products p ON p.id = psl.product_id AND p.kind <> 'SERVICE' AND NOT p.deleted AND p.deleted_at IS NULL AND p.company_id = ${req.companyId}::uuid
       WHERE w.branch_id IN (${branches}) AND w.active AND l.active ${locationFilter(req)}
-      GROUP BY w.name, l.code, l.name, l.pickable, w.dispatch_priority, l.dispatch_priority
+      GROUP BY w.id, w.name, b.name, l.id, l.code, l.name, l.pickable, w.dispatch_priority, l.dispatch_priority
       ORDER BY units DESC, w.name, l.code
+      LIMIT 10001
     ` : []
+    assertReportSize(rows.length)
+    if (meta) return emit(req, res, { prepared: buildOccupancyReport({ rows }, meta) }, branding)
 
     const vacias = rows.filter((r) => r.skus === 0)
     const unSolo = rows.filter((r) => r.skus === 1)

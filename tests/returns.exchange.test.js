@@ -50,7 +50,8 @@ test('el servidor resuelve precios vigentes y rechaza precios enviados por el na
     branchId: 'branch-1', companyId: 'company-1', availability,
   })
   assert.deepEqual(resolved, [{
-    product_id: 'product-1', qty: 2, unit_price: 125, line_total: 250, unit_cost: 60,
+    product_id: 'product-1', qty: '2', unit_price: 125, line_total: 250, unit_cost: 60,
+    item_name:'Producto',item_kind:'STANDARD',unit_label:'unidad',quantity_decimals:0,
   }])
   await assert.rejects(() => resolvePricedSaleItems(tx, {
     items: [{ product_id: 'product-1', qty: 1, unit_price: 1 }],

@@ -183,3 +183,41 @@ test('short search returns an empty optional summary without querying sales', as
   assert.equal(response.searchMeta.tooShort, true)
   assert.equal(calls.length, 0)
 })
+
+test('sale detail selects product images while preserving reference lookup and company isolation', async () => {
+  const previousFind = prisma.sale.findFirst
+  const record = { id: 'sale-1', reference: 'V-001', total: '20.00', sale_items: [] }
+  let query, response
+  prisma.sale.findFirst = async args => { query = args; return record }
+  try {
+    await controller.getById({ params: { id: 'V-001' }, companyId: 'company-a' }, { json: data => { response = data } }, error => { throw error })
+    assert.deepEqual(query.where, { reference: 'V-001', branch: { company_id: 'company-a' } })
+    assert.equal(query.include.sale_items.include.product.select.image_url, true)
+    assert.equal(query.include.sale_items.include.product.select.barcode, true)
+    assert.equal(query.include.sale_dtes, true)
+    assert.deepEqual(response, { ...record,line_count:0, customerContact: null })
+  } finally {
+    prisma.sale.findFirst = previousFind
+  }
+})
+
+test('sale detail exposes current contact data only with matching company, customer type and view permission', async () => {
+  const previousFind = prisma.sale.findFirst
+  const customerContact = { id: 'contact-qa', company_id: 'company-a', party_type: 'CUSTOMER', deleted: false, name: 'Current name', phone: '5555', image_storage_path: null }
+  try {
+    for (const [linked, permissions, allowed] of [
+      [customerContact, ['contacts.clients.view'], true],
+      [customerContact, ['sales.view'], false],
+      [{ ...customerContact, company_id: 'company-b' }, ['contacts.clients.view'], false],
+      [{ ...customerContact, party_type: 'SUPPLIER' }, ['contacts.clients.view'], false],
+      [{ ...customerContact, deleted: true }, ['contacts.clients.view'], false],
+    ]) {
+      let response
+      prisma.sale.findFirst = async () => ({ id: 'sale-qa', customer: 'Historical name', customer_nit: '123', customerContact: linked })
+      await controller.getById({ params: { id: 'V-QA' }, companyId: 'company-a', user: { permissions } }, { json: data => { response = data } }, error => { throw error })
+      assert.equal(response.customer, 'Historical name')
+      assert.equal(response.customer_nit, '123')
+      assert.deepEqual(response.customerContact, allowed ? { id: 'contact-qa', name: 'Current name', phone: '5555', image_url: null } : null)
+    }
+  } finally { prisma.sale.findFirst = previousFind }
+})

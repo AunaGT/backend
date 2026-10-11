@@ -17,6 +17,8 @@ const { createClient } = require('@supabase/supabase-js')
 // Reuse shared stock alert service
 const { ensureStockAlert } = require('../../services/stockAlerts')
 const { requireBranch, branchWhere } = require('../../middlewares/tenant')
+const { parseCatalogKind, assertServiceFields, assertServicesEnabled, assertPhysicalItem } = require('../../services/catalogItemRules')
+const { validMoney, checkText } = require('../../utils/importValidation')
 const { ensureBranchStockRows } = require('../../services/stockAvailability')
 const {
   applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId, salesLocationId,
@@ -103,23 +105,32 @@ async function scopeLabel(req, scope) {
  * exportás lo que estás viendo, tiene que salir lo mismo que ves.
  */
 function buildProductListWhere(req, scope) {
-  const { includeDeleted, search, category, supplier, forSale } = req.query || {}
+  const { includeDeleted, deletedOnly, search, category, supplier, forSale } = req.query || {}
   const forSaleOnly =
     forSale === 'true' || forSale === '1' || String(forSale || '').toLowerCase() === 'yes'
 
-  const where = includeDeleted === 'true' ? {} : { deleted: false }
+  const where = deletedOnly === 'true' ? { deleted: true } : includeDeleted === 'true' ? {} : { deleted: false }
   where.company_id = req.companyId
+  const catalog = req.query.catalog_type || 'goods'
+  if (!['goods','services','all'].includes(catalog)) throw Object.assign(new Error('Tipo de catálogo inválido'), { status:400 })
+  if (catalog === 'services') where.kind = 'SERVICE'
+  else if (catalog === 'goods') where.kind = { not:'SERVICE' }
 
   // ?in_branch=1 → solo los productos que esa sucursal maneja (tienen fila de
   // stock propia), en vez de todo el catálogo de la empresa en cero.
   const inBranchOnly = req.query.in_branch === '1' || req.query.in_branch === 'true'
-  if (inBranchOnly && scope.branchId) {
+  if (inBranchOnly && scope.branchId && catalog !== 'services') {
     where.branch_stocks = { some: { branch_id: scope.branchId } }
+    if (catalog === 'all') { where.AND = [{ OR:[{kind:'SERVICE'},{branch_stocks:where.branch_stocks}] }]; delete where.branch_stocks }
   }
   // Acotado a un almacén o anaquel, lo que se lista es lo que está ahí: un
   // catálogo entero en cero no dice nada de una ubicación.
-  if (scope.warehouseId || scope.locationId) {
+  if ((scope.warehouseId || scope.locationId) && catalog !== 'services') {
     where.location_stocks = { some: { stock: { not: 0 }, ...scopeLocationWhere(scope) } }
+    if (catalog === 'all') {
+      where.AND = [...(where.AND || []), { OR: [{ kind:'SERVICE' }, { location_stocks:where.location_stocks }] }]
+      delete where.location_stocks
+    }
   }
   if (forSaleOnly) where.available_for_sale = true
   if (search) {
@@ -156,12 +167,14 @@ function scopeLocationWhere(scope) {
  */
 async function overlayBranchStock(items, branchId) {
   if (!branchId || !items?.length) return items
+  if (items.every(p => p.kind === 'SERVICE')) return items.map(p => ({...p,in_branch:true}))
   const rows = await prisma.productStock.findMany({
-    where: { branch_id: branchId, product_id: { in: items.map((p) => p.id) } },
+    where: { branch_id: branchId, product_id: { in: items.filter(p => p.kind !== 'SERVICE').map((p) => p.id) } },
     select: { product_id: true, stock: true, min_stock: true },
   })
   const byId = new Map(rows.map((r) => [r.product_id, r]))
   return items.map((p) => {
+    if (p.kind === 'SERVICE') return {...p,in_branch:true}
     const s = byId.get(p.id)
     // in_branch distingue "hay cero" de "esta sucursal no lo maneja": sin esto
     // la UI no puede ofrecer empezar a manejarlo.
@@ -175,10 +188,11 @@ async function overlayBranchStock(items, branchId) {
  */
 async function overlayScopedStock(items, scope) {
   if (!items?.length) return items
+  if (items.every(p => p.kind === 'SERVICE')) return items.map(p => ({...p,in_branch:true}))
   if (!scope.warehouseId && !scope.locationId) return overlayBranchStock(items, scope.branchId)
 
   const rows = await prisma.productStockLocation.findMany({
-    where: { product_id: { in: items.map((p) => p.id) }, ...scopeLocationWhere(scope) },
+    where: { product_id: { in: items.filter(p => p.kind !== 'SERVICE').map((p) => p.id) }, ...scopeLocationWhere(scope) },
     select: { product_id: true, stock: true, min_stock: true },
   })
   const agg = new Map()
@@ -189,6 +203,7 @@ async function overlayScopedStock(items, scope) {
     agg.set(r.product_id, a)
   }
   return items.map((p) => {
+    if (p.kind === 'SERVICE') return {...p,in_branch:true}
     const a = agg.get(p.id)
     return { ...p, stock: a ? a.stock : 0, min_stock: a ? a.min_stock : 0, in_branch: Boolean(a) }
   })
@@ -219,12 +234,19 @@ const supabase = supabaseUrl && supabaseServiceKey
 
 exports.list = async (req, res, next) => {
   try {
+    if (req.query.deletedOnly !== 'true' && (req.query.catalog_type === 'services' || req.query.catalog_type === 'all')) await assertServicesEnabled(prisma,req.companyId)
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 20)))
     const scope = listScope(req)
     const where = buildProductListWhere(req, scope)
     
     const totalItems = await prisma.product.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const service = req.query.catalog_type === 'services'
+      const counts = await Promise.all((service ? [{available_for_sale:true},{available_for_sale:false},{quantity_decimals:{gt:0}}] : [{ available_for_sale: true }, { kind: 'KIT' }, { tracks_expiry: true }]).map(filter => prisma.product.count({ where: { AND: [where, filter] } })))
+      summary = service ? {total:totalItems,forSale:counts[0],notForSale:counts[1],fractional:counts[2]} : { total: totalItems, forSale: counts[0], kits: counts[1], tracksExpiry: counts[2] }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
     
@@ -241,6 +263,7 @@ exports.list = async (req, res, next) => {
 
     res.json({
       items: await overlayScopedStock(products, scope),
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
       totalPages,
@@ -251,15 +274,48 @@ exports.list = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+function validateServiceCommercialFields(payload) {
+  const errors = []
+  checkText(payload, {name:150,barcode:50,description:4000,service_unit_label:50}, errors)
+  for (const key of ['price','price_wholesale','price_promotion']) {
+    if (payload[key] === undefined || (key !== 'price' && (payload[key] === null || payload[key] === ''))) continue
+    if (payload[key] === null || payload[key] === '' || !validMoney(Number(payload[key])) || (key === 'price' && Number(payload[key]) <= 0)) errors.push('Precio inválido o fuera de rango')
+  }
+  if (errors.length) throw Object.assign(new Error(errors.join('; ')), {status:400})
+}
+
 exports.create = async (req, res, next) => {
   try {
     const payload = req.body || {}
+    const kind = parseCatalogKind(payload.kind)
+    if (kind === 'SERVICE') {
+      await assertServicesEnabled(prisma,req.companyId)
+      assertServiceFields(payload)
+      validateServiceCommercialFields(payload)
+      const category = await prisma.productCategory.findFirst({where:{id:Number(payload.category_id),company_id:req.companyId}})
+      if (!category || !String(payload.name || '').trim() || !Number.isFinite(Number(payload.price)) || Number(payload.price) <= 0) throw Object.assign(new Error('Nombre, categoría y precio válidos son requeridos'),{status:400})
+      const status = await prisma.stockStatus.findFirst({where:{name:{in:['active','available','Disponible','Activo']}},orderBy:{id:'asc'}})
+      if (!status) throw Object.assign(new Error('Estado de catálogo no configurado'),{status:409})
+      const data = {company_id:req.companyId,name:String(payload.name).trim(),category_id:category.id,kind,
+        service_unit_label:payload.service_unit_label.trim(),quantity_decimals:payload.quantity_decimals,
+        price:payload.price,cost:0,stock:0,min_stock:0,supplier_id:null,status_id:status.id,
+        barcode:payload.barcode?.trim() || null,description:payload.description || null,image_url:payload.image_url || null,
+        available_for_sale:payload.available_for_sale !== false && payload.available_for_sale !== 'false'}
+      for (const key of ['price_wholesale','price_promotion']) if (payload[key] != null && payload[key] !== '') {
+        if (!Number.isFinite(Number(payload[key])) || Number(payload[key]) < 0) throw Object.assign(new Error('Precio inválido'),{status:400})
+        data[key] = payload[key]
+      }
+      if (payload.promotion_valid_until) {const date=new Date(payload.promotion_valid_until);if(Number.isNaN(date.getTime()))throw Object.assign(new Error('Fecha inválida'),{status:400});data.promotion_valid_until=date}
+      const product = await prismaTransaction.$transaction(tx => tx.product.create({data}))
+      return res.status(201).json({product,purchaseLog:null})
+    }
     const stock = Number(payload.stock || 0)
     const cost = payload.cost != null ? Number(payload.cost) : 0
     const branchId = requireBranch(req)
 
     // Preparar payload seguro: normalizar campos y validar
     const safePayload = { ...payload }
+    if (!safePayload.supplier_id) return res.status(400).json({ message:'El proveedor es obligatorio para bienes y kits' })
     
     // Remover image_url si está vacío
     if (safePayload.image_url === '' || safePayload.image_url === null) {
@@ -291,12 +347,14 @@ exports.create = async (req, res, next) => {
           return res.status(400).json({ message: `Proveedor no encontrado: ${supplierId}. Debe ser un UUID válido o el nombre de un proveedor existente.` })
         }
       } else {
+        const supplier = await prisma.supplier.findFirst({where:{id:supplierId,company_id:req.companyId,deleted:false}})
+        if (!supplier) return res.status(400).json({message:'Proveedor no encontrado en esta empresa'})
         safePayload.supplier_id = supplierId
       }
     }
 
+    if (!await prisma.productCategory.findFirst({where:{id:Number(safePayload.category_id),company_id:req.companyId}})) return res.status(400).json({message:'Categoría no encontrada en esta empresa'})
     safePayload.company_id = req.companyId
-    const kind = parseKind(payload.kind)
     const bomComponents = payload.bom_components
     delete safePayload.bom_components
     delete safePayload.kind
@@ -427,6 +485,7 @@ exports.getBom = async (req, res, next) => {
       select: { id: true, name: true, kind: true },
     })
     if (!product) return res.status(404).json({ message: 'Producto no encontrado' })
+    assertPhysicalItem(product)
     if (product.kind !== 'KIT') {
       return res.json({ kind: product.kind, components: [] })
     }
@@ -459,6 +518,7 @@ exports.updateBom = async (req, res, next) => {
         err.status = 404
         throw err
       }
+      assertPhysicalItem(product)
       if (product.kind !== 'KIT') {
         await tx.product.update({ where: { id }, data: { kind: 'KIT', stock: 0 } })
       }
@@ -516,7 +576,7 @@ exports.availability = async (req, res, next) => {
     const branchId = requireBranch(req)
     const posScope = String(req.query.scope || '') === 'pos'
     const locationId = posScope ? await salesLocationId(prisma, branchId) : null
-    const availability = await getAvailabilityBatchWithKits(ids, null, branchId, { locationId })
+    const availability = await getAvailabilityBatchWithKits(ids, null, branchId, { locationId, companyId:req.companyId })
     if (!posScope) return res.json({ availability })
     res.json({
       availability,
@@ -536,6 +596,24 @@ exports.update = async (req, res, next) => {
     const current = await prisma.product.findFirst({ where: { id, company_id: req.companyId } })
     if (!current || current.deleted) {
       return res.status(404).json({ message: 'Producto no encontrado' })
+    }
+    if (payload.kind !== undefined && (parseCatalogKind(payload.kind) === 'SERVICE') !== (current.kind === 'SERVICE')) throw Object.assign(new Error('No se puede convertir el tipo físico a servicio ni viceversa'),{status:400})
+    if (current.kind === 'SERVICE') {
+      await assertServicesEnabled(prisma,req.companyId)
+      assertServiceFields({...payload,service_unit_label:payload.service_unit_label ?? current.service_unit_label,quantity_decimals:payload.quantity_decimals ?? current.quantity_decimals})
+      validateServiceCommercialFields(payload)
+      if (payload.category_id !== undefined && !await prisma.productCategory.findFirst({where:{id:Number(payload.category_id),company_id:req.companyId}})) throw Object.assign(new Error('Categoría inválida'),{status:400})
+      const data={}
+      for(const key of ['name','description','image_url','barcode','category_id','available_for_sale','price','price_wholesale','price_promotion','promotion_valid_until','service_unit_label','quantity_decimals'])if(payload[key]!==undefined)data[key]=payload[key]
+      for(const key of ['price','price_wholesale','price_promotion'])if(data[key]!=null&&data[key]!==''&&(!Number.isFinite(Number(data[key]))||Number(data[key])<0))throw Object.assign(new Error('Precio inválido'),{status:400})
+      if (data.name !== undefined && !String(data.name).trim()) throw Object.assign(new Error('Nombre requerido'),{status:400})
+      if (data.service_unit_label !== undefined) data.service_unit_label=data.service_unit_label.trim()
+      if (data.barcode !== undefined) data.barcode=data.barcode?.trim()||null
+      if (data.category_id !== undefined) data.category_id=Number(data.category_id)
+      if (data.available_for_sale !== undefined) data.available_for_sale=data.available_for_sale===true||data.available_for_sale==='true'
+      for (const key of ['price_wholesale','price_promotion']) if(data[key]==='')data[key]=null
+      if (data.promotion_valid_until !== undefined) {data.promotion_valid_until=data.promotion_valid_until?new Date(data.promotion_valid_until):null;if(data.promotion_valid_until&&Number.isNaN(data.promotion_valid_until.getTime()))throw Object.assign(new Error('Fecha inválida'),{status:400})}
+      return res.json(await prisma.product.update({where:{id},data}))
     }
     const branchId = requireBranch(req)
 
@@ -631,6 +709,7 @@ exports.update = async (req, res, next) => {
     }
 
     // Validar y normalizar status_id
+    if (safePayload.category_id !== undefined && !await prisma.productCategory.findFirst({where:{id:safePayload.category_id,company_id:req.companyId}})) return res.status(400).json({message:'Categoría no encontrada en esta empresa'})
     if (safePayload.status_id !== undefined) {
       safePayload.status_id = Number(safePayload.status_id)
       if (Number.isNaN(safePayload.status_id)) {
@@ -666,6 +745,7 @@ exports.update = async (req, res, next) => {
       }
     }
 
+    if (safePayload.supplier_id !== undefined && !await prisma.supplier.findFirst({where:{id:safePayload.supplier_id,company_id:req.companyId,deleted:false}})) return res.status(400).json({message:'Proveedor no encontrado en esta empresa'})
     // stock y min_stock del formulario aplican a LA SUCURSAL activa, no al espejo global
     const branchStockValue = safePayload.stock !== undefined ? Number(safePayload.stock) : undefined
     const branchMinValue = safePayload.min_stock !== undefined ? Number(safePayload.min_stock) : undefined
@@ -777,9 +857,10 @@ exports.addToBranch = async (req, res, next) => {
     const branchId = requireBranch(req)
     const owned = await prisma.product.findFirst({
       where: { id: req.params.id, company_id: req.companyId, deleted: false },
-      select: { id: true, name: true },
+      select: { id: true, name: true, kind:true },
     })
     if (!owned) return res.status(404).json({ message: 'Producto no encontrado' })
+    assertPhysicalItem(owned)
 
     const key = { product_id_branch_id: { product_id: owned.id, branch_id: branchId } }
     const existing = await prisma.productStock.findUnique({ where: key })
@@ -803,9 +884,10 @@ exports.removeFromBranch = async (req, res, next) => {
     const branchId = requireBranch(req)
     const owned = await prisma.product.findFirst({
       where: { id: req.params.id, company_id: req.companyId },
-      select: { id: true },
+      select: { id: true, kind:true },
     })
     if (!owned) return res.status(404).json({ message: 'Producto no encontrado' })
+    assertPhysicalItem(owned)
 
     const key = { product_id_branch_id: { product_id: owned.id, branch_id: branchId } }
     const row = await prisma.productStock.findUnique({ where: key })
@@ -823,8 +905,24 @@ exports.removeFromBranch = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+exports.commercialHistory = async (req,res,next) => {
+  try {
+    const product = await prisma.product.findFirst({where:{id:req.params.id,company_id:req.companyId},select:{id:true}})
+    if (!product) return res.status(404).json({message:'Artículo no encontrado'})
+    const where = {product_id:product.id,sale:{branch:{company_id:req.companyId},...branchWhere(req)}}
+    const pageSize = 10
+    const totalItems = await prisma.saleItem.count({where})
+    const totalPages = Math.max(1,Math.ceil(totalItems/pageSize))
+    const page = Math.min(totalPages,Math.max(1,Number.parseInt(req.query.page,10)||1))
+    const items = await prisma.saleItem.findMany({where,take:pageSize,skip:(page-1)*pageSize,orderBy:{sale:{date:'desc'}},select:{id:true,item_name:true,item_kind:true,unit_label:true,quantity_decimals:true,qty:true,price:true,net_total:true,sale:{select:{id:true,reference:true,date:true,customer:true,status:{select:{name:true}}}}}})
+    res.json({items,page,pageSize,totalItems,totalPages,nextPage:page<totalPages?page+1:null,prevPage:page>1?page-1:null})
+  } catch (error) {next(error)}
+}
+
 exports.reportPdf = async (req, res, next) => {
   try {
+    const serviceCatalog = req.query.catalog_type === 'services'
+    if (serviceCatalog || req.query.catalog_type === 'all') await assertServicesEnabled(prisma,req.companyId)
     const branding = await getBrandingForPdf(prisma, req.companyId)
     const companyName = branding.company_name
     const currencyCode = (branding.currency_code && branding.currency_code.trim()) || 'GTQ'
@@ -849,10 +947,10 @@ exports.reportPdf = async (req, res, next) => {
 
     // Optional columns from query (e.g. ?fields=name,category,price,stock for cotización)
     const fieldsParam = req.query.fields
-    const allowedFields = ['name', 'category', 'brand', 'size', 'barcode', 'price', 'price_wholesale', 'price_promotion', 'cost', 'stock', 'min_stock', 'supplier', 'status', 'description']
+    const allowedFields = ['name', 'category', 'brand', 'size', 'barcode', 'price', 'price_wholesale', 'price_promotion', 'cost', 'stock', 'min_stock', 'supplier', 'status', 'description', 'kind', 'service_unit_label', 'quantity_decimals']
     const fields = fieldsParam
       ? String(fieldsParam).split(',').map((f) => f.trim().toLowerCase()).filter((f) => allowedFields.includes(f))
-      : null
+      : serviceCatalog ? ['name','category','kind','service_unit_label','quantity_decimals','price','status'] : null
 
     // Optional: include summary block (productos registrados, unidades, valor inventario). Default true.
     const includeSummaryParam = req.query.includeSummary
@@ -860,8 +958,12 @@ exports.reportPdf = async (req, res, next) => {
       (String(includeSummaryParam).toLowerCase() === 'true') || (String(includeSummaryParam) === '1')
 
     const getCellValue = (p, key) => {
+      if (p.kind === 'SERVICE' && ['brand','size','cost','stock','min_stock','supplier'].includes(key)) return ''
       const now = new Date()
       switch (key) {
+        case 'kind': return p.kind === 'SERVICE' ? 'Servicio' : p.kind === 'KIT' ? 'Kit' : 'Bien'
+        case 'service_unit_label': return p.kind === 'SERVICE' ? p.service_unit_label : 'unidad'
+        case 'quantity_decimals': return String(p.quantity_decimals ?? 0)
         case 'name': return p.name || '-'
         case 'category': return p.category?.name || 'Sin categoría'
         case 'brand': return p.brand || '-'
@@ -887,12 +989,13 @@ exports.reportPdf = async (req, res, next) => {
         case 'stock': return String(Number(p.stock || 0))
         case 'min_stock': return String(Number(p.min_stock || 0))
         case 'supplier': return p.supplier?.name || '-'
-        case 'status': return p.status?.name || '-'
+        case 'status': return p.kind === 'SERVICE' ? (p.available_for_sale ? 'Disponible para venta' : 'No disponible') : p.status?.name || '-'
         case 'description': return (p.description || '').toString().slice(0, 80) + ((p.description || '').length > 80 ? '...' : '')
         default: return '-'
       }
     }
     const headers = {
+      kind: 'Tipo', service_unit_label: 'Unidad', quantity_decimals: 'Decimales',
       name: 'Nombre',
       category: 'Categoría',
       brand: 'Marca',
@@ -919,7 +1022,7 @@ exports.reportPdf = async (req, res, next) => {
         `Alcance,${alcance}`,
         `Generado,${new Date().toLocaleString('es-GT')}`,
         `Productos,${products.length}`,
-        `Unidades,${products.reduce((sum, p) => sum + Number(p.stock || 0), 0)}`,
+        ...(serviceCatalog ? [] : [`Unidades,${products.filter(p => p.kind !== 'SERVICE').reduce((sum, p) => sum + Number(p.stock || 0), 0)}`]),
       ], [{
         title: 'Productos',
         columns: cols.map((c) => headers[c] || c),
@@ -975,9 +1078,9 @@ exports.reportPdf = async (req, res, next) => {
         doc.fillColor(color).font('Helvetica-Bold').fontSize(14).text(value, x + 10, y + 26, { width: cardW - 20 })
       }
 
-      drawSummary(startX, startY, 'Productos registrados', String(totalProductos), '#0b1220')
-      drawSummary(startX + cardW + 12, startY, 'Unidades en inventario', String(totalUnidades), '#0b1220')
-      drawSummary(startX + (cardW + 12) * 2, startY, `Valor del inventario (${currencyCode})`, money(valorInventario), '#0b1220')
+      drawSummary(startX, startY, serviceCatalog ? 'Servicios registrados' : 'Productos registrados', String(totalProductos), '#0b1220')
+      drawSummary(startX + cardW + 12, startY, serviceCatalog ? 'Disponibles para venta' : 'Unidades en inventario', String(serviceCatalog ? products.filter(p=>p.available_for_sale).length : totalUnidades), '#0b1220')
+      drawSummary(startX + (cardW + 12) * 2, startY, serviceCatalog ? 'Con cantidades fraccionadas' : `Valor del inventario (${currencyCode})`, serviceCatalog ? String(products.filter(p=>p.quantity_decimals>0).length) : money(valorInventario), '#0b1220')
 
       gridTop = startY + cardH + 24
     } else {
@@ -1187,7 +1290,7 @@ exports.reportPdf = async (req, res, next) => {
 exports.critical = async (req, res, next) => {
   try {
     const rows = await prisma.product.findMany({
-      where: { deleted: false, company_id: req.companyId },
+      where: { deleted: false, company_id: req.companyId,kind:{not:'SERVICE'} },
       include: { category: true, supplier: true, status: true },
       orderBy: { name: 'asc' },
     })
@@ -1213,6 +1316,8 @@ exports.critical = async (req, res, next) => {
 exports.getLots = async (req, res, next) => {
   try {
     const { id } = req.params
+    const product = await prisma.product.findFirst({where:{id,company_id:req.companyId},select:{id:true,kind:true,tracks_expiry:true}})
+    assertPhysicalItem(product)
     const scope = req.branchId ? { branch_id: req.branchId } : { branch: { company_id: req.companyId } }
     const lots = await prisma.productLot.findMany({
       where: { product_id: id, qty_remaining: { gt: 0 }, ...scope },
@@ -1227,10 +1332,6 @@ exports.getLots = async (req, res, next) => {
 
     // Reconciliación: la ficha mostraba las dos sumas por separado y el usuario
     // tenía que restarlas de cabeza para descubrir que no cuadraban.
-    const product = await prisma.product.findFirst({
-      where: { id, company_id: req.companyId },
-      select: { tracks_expiry: true },
-    })
     const stocks = await prisma.productStockLocation.findMany({
       where: {
         product_id: id,
@@ -1654,7 +1755,8 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
       const products = await tx.product.findMany({
         where: {
           id: { in: productIds },
-          deleted: false
+          deleted: false,
+          company_id:req.companyId,
         }
       })
 
@@ -1664,6 +1766,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 
       // Verify all products belong to the supplier
       for (const product of products) {
+        assertPhysicalItem(product)
         if (product.supplier_id !== supplier_id) {
           const err = new Error(`El producto ${product.name} no pertenece al proveedor seleccionado`)
           err.status = 400
@@ -1868,8 +1971,9 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 exports.restore = async (req, res, next) => {
   try {
     const { id } = req.params
-    const owned = await prisma.product.findFirst({ where: { id, company_id: req.companyId }, select: { id: true } })
+    const owned = await prisma.product.findFirst({ where: { id, company_id: req.companyId }, select: { id: true, kind: true } })
     if (!owned) return res.status(404).json({ message: 'Producto no encontrado' })
+    if (owned.kind === 'SERVICE') await assertServicesEnabled(prisma, req.companyId)
     const restored = await prisma.product.update({
       where: { id },
       data: { deleted: false, deleted_at: null },
@@ -2178,6 +2282,7 @@ exports.pricingPreview = async (req, res, next) => {
       : await resolvePriceTierForContext(prisma, {
           customerContactId,
           salesChannel,
+          companyId:req.companyId,
         })
 
     if (ids.length === 0) {

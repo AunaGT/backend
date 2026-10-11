@@ -58,6 +58,12 @@ exports.list = async (req, res, next) => {
     if (search) where.name = { contains: search, mode: 'insensitive' }
     
     const totalItems = await prisma.productCategory.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.productCategory.groupBy({ by: ['deleted'], where, _count: { _all: true } })
+      summary = { total: totalItems, active: 0, deleted: 0 }
+      for (const group of groups) summary[group.deleted ? 'deleted' : 'active'] += group._count._all
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
     
@@ -92,7 +98,8 @@ exports.list = async (req, res, next) => {
       totalPages,
       totalItems,
       nextPage,
-      prevPage
+      prevPage,
+      ...(summary ? { summary } : {}),
     })
   } catch (e) { next(e) }
 }

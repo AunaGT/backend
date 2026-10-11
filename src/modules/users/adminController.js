@@ -84,8 +84,13 @@ exports.list = handle(async (req, res) => {
   }
   if (req.query.branch_id) where.AND.push({ user_branches: { some: { branch_id: String(req.query.branch_id), branch: { company_id: companyId } } } })
   const totalItems = await prisma.user.count({ where }), totalPages = Math.max(1, Math.ceil(totalItems / pageSize)), safePage = Math.min(page, totalPages)
+  let summary
+  if (req.query.includeSummary === 'true') {
+    const counts = await Promise.all(['ACTIVE', 'INACTIVE', 'BLOCKED'].map(status => prisma.user.count({ where: { AND: [where, { user_companies: { some: { company_id: companyId, status } } }] } })))
+    summary = { total: totalItems, ACTIVE: counts[0], INACTIVE: counts[1], BLOCKED: counts[2] }
+  }
   const items = await prisma.user.findMany({ where, orderBy, skip: (safePage - 1) * pageSize, take: pageSize, include: includes(companyId) })
-  res.json({ items: items.map(serialize), page: safePage, pageSize, totalItems, totalPages, nextPage: safePage < totalPages ? safePage + 1 : null, prevPage: safePage > 1 ? safePage - 1 : null })
+  res.json({ items: items.map(serialize), page: safePage, pageSize, totalItems, totalPages, nextPage: safePage < totalPages ? safePage + 1 : null, prevPage: safePage > 1 ? safePage - 1 : null, ...(summary ? { summary } : {}) })
 })
 exports.getById = handle(async (req, res) => res.json(serialize(await target(prisma, req))))
 exports.register = handle(async (req, res) => {

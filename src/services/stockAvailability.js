@@ -7,6 +7,7 @@
 
 const { prisma } = require('../models/prisma')
 const { Prisma } = require('@prisma/client')
+const { assertPhysicalProducts } = require('./catalogItemRules')
 
 const ACTIVE = 'ACTIVE'
 
@@ -28,6 +29,7 @@ async function ensureBranchStockRows(tx, productIds, branchId) {
   const b = requireBranchId(branchId)
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return
+  await assertPhysicalProducts(client, ids, b)
   await client.$executeRaw`
     INSERT INTO product_stocks (id, product_id, branch_id, stock, min_stock)
     SELECT gen_random_uuid(), p.id, ${b}::uuid, 0, 0
@@ -171,11 +173,10 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
  * Valida disponibilidad agregada por producto (líneas duplicadas).
  * @param {Array<{ product_id: string, qty: number }>} lines
  */
-async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDocumentId, branchId } = {}) {
-  const b = requireBranchId(branchId)
+async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDocumentId, branchId, companyId,allowArchivedServices=false } = {}) {
   const { expandLinesToStockMap, stockMapToLines } = require('./bomStock')
   const skip = new Set(skipProductIds.map(String))
-  const stockMap = await expandLinesToStockMap(tx, lines)
+  const stockMap = await expandLinesToStockMap(tx, lines, {companyId,allowArchivedServices})
   const flatLines = await stockMapToLines(stockMap)
 
   const byProduct = new Map()
@@ -187,6 +188,7 @@ async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDoc
 
   const productIds = [...byProduct.keys()]
   if (productIds.length === 0) return
+  const b = requireBranchId(branchId)
 
   const locked = await lockProductsForUpdate(tx, productIds, b)
   const availabilityMap = await getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchId: b })
@@ -223,18 +225,22 @@ async function reserveForDocument(tx, {
   createdBy,
   reservationKind = 'ORDER',
   branchId,
+  companyId,
+  allowArchivedServices=false,
 }) {
   const b = requireBranchId(branchId)
   const { loadProductsWithBom } = require('./bomStock')
   const prodMap = await loadProductsWithBom(
     tx,
-    documentLines.map((line) => line.product_id)
+    documentLines.map((line) => line.product_id),
+    {companyId,allowArchivedServices}
   )
   const now = new Date()
   const rows = []
 
   for (const line of documentLines) {
     const product = prodMap.get(String(line.product_id))
+    if (product.kind === 'SERVICE') continue
     if (product?.kind === 'KIT' && !product.stock_assembled) {
       if (!product.kit_components?.length) {
         const err = new Error(`El kit "${product.name}" no tiene componentes configurados`)
@@ -261,7 +267,7 @@ async function reserveForDocument(tx, {
         branch_id: b,
         document_id: documentId,
         document_line_id: line.id,
-        qty: line.qty,
+        qty: Number(line.qty),
         status: ACTIVE,
         reservation_kind: reservationKind,
         expires_at: expiresAt || null,
@@ -316,23 +322,29 @@ async function consumeReservationQty(tx, reservation, consumeQty, now) {
   }
 }
 
-async function consumePartialByDocument(tx, documentId, consumptions) {
+async function consumePartialByDocument(tx, documentId, consumptions, {companyId} = {}) {
   const { loadProductsWithBom } = require('./bomStock')
   const now = new Date()
 
   for (const { line_id: lineId, qty } of consumptions) {
-    const sellQty = Number(qty)
-    if (!lineId || !Number.isFinite(sellQty) || sellQty <= 0) continue
+    if (!lineId) throw Object.assign(new Error('Partida requerida'),{status:400})
 
     const line = await tx.commercialDocumentLine.findUnique({
-      where: { id: lineId },
-      select: { product_id: true },
+      where: { id: lineId,document_id:documentId,...(companyId ? {document:{branch:{company_id:companyId}}} : {}) },
+      select: { product_id: true,item_kind:true,quantity_decimals:true,qty:true,qty_fulfilled:true },
     })
     if (!line) {
       const err = new Error(`Línea de pedido no encontrada: ${lineId}`)
       err.status = 400
       throw err
     }
+    const exactQty = require('./catalogItemRules').commercialQuantity(qty,line)
+    if (line.item_kind==='SERVICE') {
+      if (exactQty.gt(new Prisma.Decimal(String(line.qty)).sub(String(line.qty_fulfilled || 0)))) throw Object.assign(new Error('Cantidad supera pendiente de prestación'),{status:409})
+      await tx.commercialDocumentLine.update({where:{id:lineId},data:{qty_fulfilled:{increment:exactQty}}})
+      continue
+    }
+    const sellQty=exactQty.toNumber()
 
     const reservations = await tx.stockReservation.findMany({
       where: { document_id: documentId, document_line_id: lineId, status: ACTIVE },
@@ -343,7 +355,7 @@ async function consumePartialByDocument(tx, documentId, consumptions) {
       throw err
     }
 
-    const prodMap = await loadProductsWithBom(tx, [line.product_id])
+    const prodMap = await loadProductsWithBom(tx, [line.product_id],{companyId})
     const product = prodMap.get(String(line.product_id))
 
     if (product?.kind === 'KIT' && !product.stock_assembled) {

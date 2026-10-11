@@ -95,10 +95,7 @@ function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequen
     lines.push({ account_id: defaults.pequenoTax.id, debit: tax, credit: 0 })
     lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: 0, credit: tax })
   }
-  const cost = costBase(round2((ret.return_items || []).reduce((sum, item) => {
-    const qty = Number(item.restock_qty ?? item.qty_returned ?? 0)
-    return sum + qty * Number(item.sale_item?.unit_cost ?? item.product?.cost ?? 0)
-  }, 0)))
+  const cost = costBase((ret.return_items || []).filter(item=>(item.sale_item?.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.restock_qty ?? item.qty_returned ?? 0)).mul(String(item.sale_item?.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
   if (cost > 0) {
     lines.push({ account_id: defaults.inventory.id, debit: cost, credit: 0 })
     lines.push({ account_id: defaults.cogs.id, debit: 0, credit: cost })
@@ -153,7 +150,7 @@ async function postPendingOperations(prisma, userId, companyId) {
       id: true, reference: true, date: true, total: true, customer: true, branch_id: true,
       customerContact: { select: { name: true } },
       payment_method: { select: { name: true, is_credit: true } },
-      sale_items: { select: { qty: true, unit_cost: true, product: { select: { cost: true } } } },
+      sale_items: { select: { qty: true,item_kind:true, unit_cost: true, product: { select: { cost: true,kind:true } } } },
     },
     orderBy: { date: 'asc' },
   })
@@ -164,9 +161,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     const { base, iva } = splitIva(total, ivaRate)
     // El costo congelado en la venta; las ventas viejas (sin él) caen al costo
     // del producto, que es lo que se usaba antes de guardarlo por línea.
-    const cost = costBase(round2(sale.sale_items.reduce(
-      (s, i) => s + i.qty * Number(i.unit_cost ?? i.product.cost ?? 0), 0
-    )))
+    const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
     const chargeAccount = cashOrBank(defaults, sale.payment_method)
     const lines = splitVat
       ? [
@@ -229,8 +224,8 @@ async function postPendingOperations(prisma, userId, companyId) {
         select: {
           qty_returned: true, restock_qty: true,
           // Lo devuelto vuelve al inventario al costo con el que salió.
-          sale_item: { select: { unit_cost: true } },
-          product: { select: { cost: true } },
+          sale_item: { select: { unit_cost: true,item_kind:true } },
+          product: { select: { cost: true,kind:true } },
         },
       },
       settlements: {

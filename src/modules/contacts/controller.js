@@ -17,6 +17,7 @@ const {
   normalizePartyType,
   PARTY,
 } = require('../../utils/contactsPermissions')
+const { uploadContactImage, contactImageDtos, removeContactImage } = require('./imageStorage')
 
 function normalizeTaxId(raw) {
   if (raw === undefined) return undefined
@@ -136,7 +137,7 @@ function shapeSupplierResponse(s) {
   const def = links.find((l) => l.is_default) || links[0]
   const payment_terms_id = def?.payment_term_id ?? null
   const payment_term = def?.payment_term ?? null
-  const { supplier_payment_terms: _omit, ...rest } = s
+  const { supplier_payment_terms: _omit, image_storage_path: _imagePath, ...rest } = s
   return {
     ...rest,
     credit_limit: rest.credit_limit == null ? null : Number(rest.credit_limit),
@@ -150,6 +151,10 @@ exports.list = async (req, res, next) => {
   try {
     const lt = listablePartyTypes(req.user, req.query.party_type)
     if (lt.error) return res.status(lt.error).json({ message: lt.message })
+    const estado = req.query.estado
+    if (estado !== undefined && estado !== '0' && estado !== '1') {
+      return res.status(400).json({ message: 'El estado debe ser 0 (inactivo) o 1 (activo)' })
+    }
 
     const page = Math.max(1, Number(req.query.page ?? 1))
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 20)))
@@ -164,10 +169,12 @@ exports.list = async (req, res, next) => {
         totalItems: 0,
         nextPage: null,
         prevPage: null,
+        ...(req.query.includeSummary === 'true' ? { summary: { total: 0, active: 0, inactive: 0 } } : {}),
       })
     }
 
     const where = { deleted: false, party_type: { in: lt.types }, company_id: req.companyId }
+    if (estado !== undefined) where.estado = Number(estado)
 
     if (search) {
       const q = String(search)
@@ -176,6 +183,7 @@ exports.list = async (req, res, next) => {
         { contact: { contains: q, mode: 'insensitive' } },
         { email: { contains: q, mode: 'insensitive' } },
         { tax_id: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q, mode: 'insensitive' } },
       ]
     }
 
@@ -189,11 +197,17 @@ exports.list = async (req, res, next) => {
     }
 
     const totalItems = await prisma.supplier.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.supplier.groupBy({ by: ['estado'], where, _count: { _all: true } })
+      summary = { total: totalItems, active: groups.find(row => row.estado === 1)?._count._all || 0, inactive: groups.find(row => row.estado === 0)?._count._all || 0 }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
     
     const items = await prisma.supplier.findMany({
       where,
+      omit: { image_storage_path: false },
       include: {
         categories: {
           include: {
@@ -212,7 +226,8 @@ exports.list = async (req, res, next) => {
     })
 
     const tz = await getTimezone(prisma, req.companyId)
-    const adapted = items.map(s => {
+    const imageItems = await contactImageDtos(items, req.companyId)
+    const adapted = imageItems.map(s => {
       const shaped = shapeSupplierResponse(s)
       let lastOrder = ''
       if (s.last_order) {
@@ -242,6 +257,7 @@ exports.list = async (req, res, next) => {
     
     res.json({
       items: adapted,
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
       totalPages,
@@ -342,6 +358,7 @@ exports.getOne = async (req, res, next) => {
   try {
     const item = await prisma.supplier.findFirst({
       where: { id: req.params.id, company_id: req.companyId },
+      omit: { image_storage_path: false },
       include: {
         categories: {
           include: {
@@ -373,7 +390,8 @@ exports.getOne = async (req, res, next) => {
     const categoryNames = categories.map(c => c.name)
 
     const tz = await getTimezone(prisma, req.companyId)
-    const shaped = shapeSupplierResponse(item)
+    const [imageItem] = await contactImageDtos([item], req.companyId)
+    const shaped = shapeSupplierResponse(imageItem)
     const adapted = {
       ...shaped,
       totalPurchases: Number(item.total_purchases || 0),
@@ -383,6 +401,35 @@ exports.getOne = async (req, res, next) => {
     }
     res.json(adapted)
   } catch (e) { next(e) }
+}
+
+exports.uploadImage = async (req, res, next) => {
+  let newPath
+  try {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(req.params.id)) return res.status(400).json({ message: 'El contacto de destino no es válido' })
+    const contact = await prisma.supplier.findFirst({
+      where: { id: req.params.id, company_id: req.companyId, deleted: false },
+      select: { id: true, party_type: true, image_storage_path: true },
+    })
+    if (!contact) return res.status(404).json({ message: 'Contacto no encontrado' })
+    assertPartyAction(req.user, contact.party_type, 'edit')
+    newPath = await uploadContactImage(req.companyId, contact.id, req.file)
+    const updated = await prisma.supplier.updateMany({
+      where: { id: contact.id, company_id: req.companyId, party_type: contact.party_type, deleted: false, image_storage_path: contact.image_storage_path },
+      data: { image_storage_path: newPath },
+    })
+    if (updated.count !== 1) throw Object.assign(new Error('El contacto cambió durante la carga. Actualiza su ficha e intenta nuevamente.'), { status: 409 })
+    const savedPath = newPath
+    newPath = null
+    if (contact.image_storage_path) removeContactImage(contact.image_storage_path, req.companyId, contact.id).catch(() => console.warn('[contact-images] No se pudo limpiar la foto anterior'))
+    const [result] = await contactImageDtos([{ id: contact.id, image_storage_path: savedPath }], req.companyId)
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(result)
+  } catch (error) {
+    if (newPath) { try { await removeContactImage(newPath, req.companyId, req.params.id) } catch { console.warn('[contact-images] No se pudo limpiar la carga incompleta') } }
+    if (error.statusCode) error.status = error.statusCode
+    next(error)
+  }
 }
 
 exports.update = async (req, res, next) => {
@@ -509,11 +556,13 @@ exports.update = async (req, res, next) => {
     const updated = await prisma.supplier.update({
       where: { id: req.params.id },
       data: updateData,
+      omit: { image_storage_path: false },
       include: {
         supplier_payment_terms: { include: { payment_term: true }, orderBy: { sort_order: 'asc' } },
       },
     })
-    res.json(shapeSupplierResponse(updated))
+    const [imageItem] = await contactImageDtos([updated], req.companyId)
+    res.json(shapeSupplierResponse(imageItem))
   } catch (e) { next(e) }
 }
 

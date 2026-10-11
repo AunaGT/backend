@@ -5,6 +5,7 @@ const { expandLinesToStockMap, restoreStockMap } = require('../../services/bomSt
 const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivables/domain/receivables')
 const { createReplacementSale, exchangeSettlement, resolvePricedSaleItems } = require('../sales/application')
 const { getReturnPolicy } = require('../../services/returnPolicy')
+const {lineSnapshot}=require('../../services/catalogItemRules')
 
 const STOCK_DISPOSITIONS = new Set(['SELLABLE', 'QUARANTINE'])
 const DISPOSITIONS = new Set([...STOCK_DISPOSITIONS, 'SCRAP'])
@@ -13,6 +14,14 @@ function invalid(message, status = 400) {
   const error = new Error(message)
   error.status = status
   return error
+}
+
+function isServiceLine(record,item) {
+  return (item.sale_item ?? record.sale?.sale_items?.find(line=>Number(line.id)===Number(item.sale_item_id)))?.item_kind==='SERVICE'
+}
+function serviceDisposition(raw) {
+  for(const field of ['received_qty','restock_qty','disposition','stock_location_id']) if(raw[field]!=null) throw invalid('El servicio no admite recepción ni reposición física')
+  return {received_qty:null,restock_qty:null,disposition:null,stock_location_id:null}
 }
 
 function planReceivableReturn({ adjustedTotal, paid, refundAmount }) {
@@ -46,6 +55,7 @@ function buildCompletionPlan(returnRecord, payload = {}) {
   const lines = returnRecord.return_items.map((item) => {
     const raw = byId.get(Number(item.id))
     if (!raw) throw invalid(`Falta clasificar la línea ${item.id}`)
+    if (isServiceLine(returnRecord,item)) return {return_item_id:Number(item.id),product_id:String(item.product_id),...serviceDisposition(raw)}
     const receivedQty = Number(raw.received_qty)
     if (!Number.isInteger(receivedQty) || receivedQty !== Number(item.qty_returned)) {
       throw invalid('Para completar, la cantidad recibida debe coincidir con la cantidad aprobada')
@@ -88,6 +98,7 @@ function normalizeApprovalLines(returnRecord, lines) {
   return returnRecord.return_items.map((item) => {
     const raw = byId.get(Number(item.id))
     if (!raw) throw invalid(`Falta clasificar la línea ${item.id}`)
+    if (isServiceLine(returnRecord,item)) return {return_item_id:Number(item.id),...serviceDisposition(raw)}
     const disposition = String(raw.disposition || '')
     if (!DISPOSITIONS.has(disposition)) throw invalid('El destino del producto devuelto no es válido')
     const stockLocationId = String(raw.stock_location_id || '').trim() || null
@@ -197,6 +208,7 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy,
         qty: item.qty,
         unit_price: item.unit_price,
         line_total: item.line_total,
+        ...lineSnapshot(item),
       })),
     })
   }
@@ -248,7 +260,7 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
 async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload }, deps = {}) {
   const key = String(payload?.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
-  await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
+  await tx.$queryRaw`SELECT r.id FROM sales s JOIN returns r ON r.sale_id = s.id WHERE r.id = ${id}::uuid FOR UPDATE OF s, r`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
     include: {

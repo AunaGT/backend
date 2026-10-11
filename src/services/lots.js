@@ -113,6 +113,7 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
       err.status = 400
       throw err
     }
+    await require('./catalogItemRules').assertPhysicalProducts(client,productIds,branchId)
     // Solo los productos con caducidad exigen cobertura total de lotes.
     const tracked = new Set(
       (await client.product.findMany({
@@ -189,8 +190,9 @@ async function ensureLotForIncrease(tx, { productId, branchId, locationId, qty }
   if (cantidad <= 0 || !branchId) return null
   const product = await client.product.findUnique({
     where: { id: String(productId) },
-    select: { tracks_expiry: true },
+    select: { tracks_expiry: true,kind:true },
   })
+  require('./catalogItemRules').assertPhysicalItem(product)
   if (!product?.tracks_expiry) return null
   return client.productLot.create({
     data: {
@@ -258,6 +260,7 @@ async function restoreLotsFEFO(tx, stockMap, branchId) {
       err.status = 400
       throw err
     }
+    await require('./catalogItemRules').assertPhysicalProducts(client,productIds,branchId)
     const tracked = new Set(
       (await client.product.findMany({
         where: { id: { in: productIds }, tracks_expiry: true },

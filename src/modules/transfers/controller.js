@@ -58,6 +58,12 @@ exports.list = async (req, res, next) => {
     })
 
     const totalItems = await prisma.stockTransfer.count({ where })
+    let summary
+    if (req.query.includeSummary === 'true') {
+      const groups = await prisma.stockTransfer.groupBy({ by: ['status'], where, _count: { _all: true } })
+      const counts = Object.fromEntries(groups.map(group => [group.status, group._count._all]))
+      summary = { total: totalItems, inTransit: counts.EN_TRANSITO ?? 0, received: counts.RECIBIDA ?? 0, cancelled: counts.CANCELADA ?? 0 }
+    }
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -71,6 +77,7 @@ exports.list = async (req, res, next) => {
 
     res.json({
       items,
+      ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
       totalPages,
@@ -143,6 +150,7 @@ exports.create = async (req, res, next) => {
         throw err
       }
       // Un kit virtual no tiene stock propio que trasladar: se trasladan sus componentes
+      products.forEach(require('../../services/catalogItemRules').assertPhysicalItem)
       const virtualKit = products.find((p) => p.kind === 'KIT' && !p.stock_assembled)
       if (virtualKit) {
         const err = new Error(
@@ -153,7 +161,7 @@ exports.create = async (req, res, next) => {
       }
 
       const lines = productIds.map((pid) => ({ product_id: pid, qty: qtyByProduct.get(pid) }))
-      await assertLinesAvailable(tx, lines, { branchId: fromBranchId })
+      await assertLinesAvailable(tx, lines, { branchId: fromBranchId, companyId:req.companyId })
 
       const branch = await tx.branch.findUnique({
         where: { id: fromBranchId },
@@ -176,7 +184,7 @@ exports.create = async (req, res, next) => {
       })
 
       // Sale del origen ahora; entra al destino al recibir
-      const stockMap = await expandLinesToStockMap(tx, lines)
+      const stockMap = await expandLinesToStockMap(tx, lines, {companyId:req.companyId})
       const updated = await deductStockMap(tx, stockMap, fromBranchId, {
         reason: 'TRANSFER_OUT', refType: 'transfer', refId: String(transfer.id), userId: req.user.sub,
       })

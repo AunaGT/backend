@@ -1,3 +1,4 @@
+
 # Despliegue y migraciones
 
 Este documento evita que el frontend, el backend y PostgreSQL queden en versiones distintas.
@@ -48,3 +49,36 @@ base que represente el esquema actual; validar tanto la base publicada como una
 instalación vacía; y promover esa línea de forma controlada. Hasta completar
 esa reconciliación, `migrate:status` seguirá marcando historia divergente y el
 despliegue de nuevas migraciones debe permanecer pausado.
+
+## Fotos de contactos (esquema aplicado en staging)
+
+La migración `20261008120000_contact_images` añade únicamente la columna nullable
+`suppliers.image_storage_path`. No borra ni transforma datos existentes. El 8 de
+octubre de 2026 se aplicó únicamente su SQL en staging con autorización explícita
+del usuario y se registró mediante `migrate resolve --applied
+20261008120000_contact_images`. Se comprobaron tipo VARCHAR(500), nulabilidad,
+checksum y registro finalizado. Los conteos permanecieron en 69 contactos y 76
+ventas; el controlador real de detalle de venta consultó una venta vinculada a
+un cliente sin el error P2022 ni exponer la ruta interna de la imagen. La primera
+comprobación encontró un fallo transitorio de conexión; el reintento completo
+aprobó. No se aplicaron otras migraciones ni se modificaron registros de negocio.
+No se ha aplicado esta migración a producción.
+
+Esta aplicación puntual no reconcilia la historia heredada descrita arriba ni
+habilita el despliegue general de migraciones. Antes de desplegar en producción,
+reconciliar esa historia y aplicar la migración de forma controlada antes de que
+el nuevo backend atienda consultas de contactos. No usar `db push`, no editar
+manualmente la historia ni ejecutar todas las migraciones pendientes sin
+resolver esa divergencia.
+
+El bucket configurado por el cliente se llama `contacts`. El backend usa las
+credenciales de servicio existentes y entrega URLs firmadas con vigencia de una
+hora, nunca rutas internas ni claves. Se recomienda mantener el bucket privado;
+no se comprobó ni cambió su política real. Los objetos se normalizan a WebP y se
+separan por empresa/contacto; los reemplazos solo limpian objetos de ese mismo
+contacto tras confirmar la referencia en la base.
+
+Verificación pendiente de integración: cargar una foto sintética, comprobarla en
+listado/ficha/venta, reemplazarla y confirmar aislamiento entre empresas y
+permisos. Las pruebas unitarias de multipart, validación, permisos, firma y
+reemplazo usan dobles de base/storage y no realizan cargas reales.

@@ -12,12 +12,12 @@ const {
 
 test('solo solicitudes activas reservan unidades de la venta original', () => {
   assert.deepEqual(ACTIVE_RETURN_STATUSES, ['Pendiente', 'Aprobada', 'Completada'])
-  assert.equal(availableReturnQty(10, [
+  assert.equal(String(availableReturnQty(10, [
     { qty_returned: 2, status: 'Pendiente' },
     { qty_returned: 3, status: 'Aprobada' },
     { qty_returned: 1, status: 'Completada' },
     { qty_returned: 4, status: 'Rechazada' },
-  ]), 4)
+  ])), '4')
 })
 
 test('la aprobación no procesa y solo Aprobada puede completarse', () => {
@@ -32,7 +32,7 @@ test('rechaza líneas repetidas o cantidades no enteras antes de reservar', () =
   assert.deepEqual(normalizeReturnLines([
     { sale_item_id: 1, product_id: 'product-1', qty_returned: '2' },
   ]), [
-    { sale_item_id: 1, product_id: 'product-1', qty_returned: 2, reason: null },
+    { sale_item_id: 1, product_id: 'product-1', qty_returned: '2', reason: null },
   ])
 
   assert.throws(() => normalizeReturnLines([
@@ -41,7 +41,7 @@ test('rechaza líneas repetidas o cantidades no enteras antes de reservar', () =
   ]), /repetida/i)
   assert.throws(() => normalizeReturnLines([
     { sale_item_id: 1, product_id: 'product-1', qty_returned: 1.5 },
-  ]), /entera/i)
+  ]), /cadena|decimal/i)
 })
 
 test('aplica filtros de devoluciones antes de paginar', () => {

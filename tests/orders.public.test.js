@@ -146,7 +146,8 @@ test('getPublicByToken devuelve un pedido cancelado sin datos administrativos', 
         },
         lines: [{
           id: 'internal-line-id',
-          qty: 2,
+          item_name: 'Servicio original', item_kind: 'SERVICE', unit_label: 'Hora', quantity_decimals: 3,
+          qty: '0.125',
           qty_fulfilled: 1,
           unit_price: 50,
           line_total: 100,
@@ -190,7 +191,10 @@ test('getPublicByToken devuelve un pedido cancelado sin datos administrativos', 
   })
   assert.equal(res.body.status, 'CANCELLED')
   assert.equal(res.body.company_name, 'Auna Demo')
-  assert.equal(res.body.lines[0].product_name, 'Producto')
+  assert.equal(res.body.lines[0].product_name, 'Servicio original')
+  assert.equal(res.body.lines[0].unit_label, 'Hora')
+  assert.equal(res.body.lines[0].quantity_decimals, 3)
+  assert.equal(res.body.lines[0].qty, '0.125')
   assert.equal(res.body.sales[0].reference, 'FAC-1')
   assert.equal('id' in res.body, false)
   assert.equal('branch_id' in res.body, false)

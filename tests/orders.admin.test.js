@@ -54,3 +54,17 @@ test('actualiza despacho y notas dentro de la empresa del administrador', async 
   assert.deepEqual(updateData, { delivery_carrier: 'Auna Logistics', notes: 'Llamar antes' })
   assert.equal(res.body, updated)
 })
+
+test('el resumen de pedidos conserva también los filtros de preparación y entrega', async t => {
+  let listWhere, summaryWhere
+  const controller = loadOrdersController(t, { commercialDocument: {
+    count: async ({ where }) => { listWhere = where; return 31 },
+    groupBy: async ({ where }) => { summaryWhere = where; return [{ status: 'FULFILLED', _count: { _all: 31 } }] },
+    findMany: async args => { assert.deepEqual(args.where, listWhere); assert.equal(args.take, 1); return [] },
+  } })
+  const res = responseStub()
+  await controller.list({ companyId: 'company-a', branchId: 'branch-a', query: { pageSize: '1', delivery_status: 'delivered' } }, res, error => { throw error })
+  assert.deepEqual(summaryWhere, listWhere)
+  assert.ok(summaryWhere.status.in.includes('FULFILLED'))
+  assert.deepEqual(res.body.summary, { FULFILLED: 31 })
+})

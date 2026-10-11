@@ -4,16 +4,16 @@ const { selectLines, requestKey, invoice } = require('../src/modules/orders/fulf
 
 const lines = [{ id: 'line-1', product_id: 'product-1', qty: 10, qty_fulfilled: 6, qty_invoiced: 2, unit_price: 12.5 }]
 test('entrega y factura tienen pendientes independientes', () => {
-  assert.equal(selectLines(lines, [{ line_id: 'line-1', qty: 4 }])[0].qty, 4)
-  assert.equal(selectLines(lines, [{ line_id: 'line-1', qty: 4 }], true)[0].qty, 4)
+  assert.equal(String(selectLines(lines, [{ line_id: 'line-1', qty: '4' }])[0].qty), '4')
+  assert.equal(String(selectLines(lines, [{ line_id: 'line-1', qty: 4 }], true)[0].qty), '4')
   assert.throws(() => selectLines(lines, [{ line_id: 'line-1', qty: 5 }]), /supera pendiente/)
   assert.throws(() => selectLines(lines, [{ line_id: 'line-1', qty: 5 }], true), /supera pendiente/)
   const delivered = [{ ...lines[0], qty_fulfilled: 10 }]
-  assert.equal(selectLines(delivered, [{ line_id: 'line-1', qty: 8 }], true)[0].qty, 8)
+  assert.equal(String(selectLines(delivered, [{ line_id: 'line-1', qty: 8 }], true)[0].qty), '8')
   assert.throws(() => selectLines(delivered, [{ line_id: 'line-1', qty: 1 }]), /supera pendiente/)
 })
 test('rechaza partidas vacías, duplicadas, ajenas y cantidades fraccionarias', () => {
-  for (const raw of [undefined, [], {}, [null], [{ line_id: 'line-1', qty: 0 }], [{ line_id: 'line-1', qty: 0.5 }], [{ line_id: 'line-1', qty: '1' }], [{ line_id: 'line-1', qty: 1 }, { line_id: 'line-1', qty: 1 }], [{ line_id: 'other', qty: 1 }]]) {
+  for (const raw of [undefined, [], {}, [null], [{ line_id: 'line-1', qty: 0 }], [{ line_id: 'line-1', qty: 0.5 }], [{ line_id: 'line-1', qty: '' }], [{ line_id: 'line-1', qty: 1 }, { line_id: 'line-1', qty: 1 }], [{ line_id: 'other', qty: 1 }]]) {
     assert.throws(() => selectLines(lines, raw))
   }
   assert.throws(() => requestKey('invalid'))
@@ -75,6 +75,6 @@ test('facturar 4 unidades entregadas crea una venta por 50 sin operaciones de st
   assert.equal(result.sale.cash_register_session_id, 'session-1')
   assert.equal(result.sale.sale_items.create[0].unit_cost, 2)
   assert.equal(result.sale.orderLink.document_id, 'order-1')
-  assert.deepEqual(events.find(event => event[0] === 'line')[1].data, { qty_invoiced: { increment: 4 } })
+  assert.equal(String(events.find(event => event[0] === 'line')[1].data.qty_invoiced.increment),'4')
   assert.deepEqual(events.map(event => event[0]), ['lock', 'load', 'sale', 'line'])
 })

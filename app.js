@@ -6,6 +6,7 @@ const path = require('path')
 const swaggerUi = require('swagger-ui-express')
 const swaggerJSDoc = require('swagger-jsdoc')
 const { getReleaseInfo } = require('./src/config/release')
+const { errorHandler } = require('./src/middlewares/errorHandler')
 
 // Routers (placeholders, keep existing index for now)
 const usuariosRoutes = require('./src/modules/users/routes')
@@ -98,9 +99,6 @@ app.get('/health', async (req, res) => {
 })
 
 // error handler
-app.use((err, req, res, next) => {
-  console.error(err)
-  res.status(err.status || 500).json({ message: err.message || 'Internal server error' })
-})
+app.use(errorHandler)
 
 module.exports = app

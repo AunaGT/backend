@@ -17,6 +17,7 @@ const { prisma } = require('../models/prisma')
 const { applyBranchDelta } = require('./stockLocations')
 const { ImportCancelledError } = require('../utils/importStream')
 const { nameMatcher, nameCandidates, checkSimilarity, checkText, validMoney } = require('../utils/importValidation')
+const { parseCatalogKind, assertServiceFields, assertServicesEnabled } = require('./catalogItemRules')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -125,6 +126,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
         'description': ['descripcion', 'description'],
         'available_for_sale': ['disponible_venta', 'disponible_para_venta', 'available_for_sale'],
         'tracks_expiry': ['controla_caducidad', 'controla_lotes', 'tracks_expiry'],
+        'kind': ['tipo', 'kind'],
+        'service_unit_label': ['unidad_cobro', 'service_unit_label'],
+        'quantity_decimals': ['decimales', 'quantity_decimals'],
     }
 
     // Normalize row keys (lowercase, trim) and resolve aliases
@@ -142,6 +146,23 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
                 break
             }
         }
+    }
+
+    try {
+        const aliases = { servicio: 'SERVICE', bien: 'STANDARD', producto: 'STANDARD' }
+        data.kind = parseCatalogKind(aliases[String(normalizedRow.kind).toLowerCase()] || normalizedRow.kind)
+        if (data.kind === 'KIT') errors.push('Los kits requieren configurar sus componentes desde la ficha, no desde esta plantilla')
+    } catch (error) { errors.push(error.message) }
+    const isService = data.kind === 'SERVICE'
+    if (isService) {
+        if (!importOptions.servicesEnabled) errors.push('Los servicios están desactivados para esta empresa')
+        const serviceFields = { service_unit_label: normalizedRow.service_unit_label, quantity_decimals: Number(normalizedRow.quantity_decimals ?? 0) }
+        for (const key of ['stock','min_stock','cost','tracks_expiry','brand','size']) if (normalizedRow[key] !== undefined) serviceFields[key] = normalizedRow[key]
+        if (normalizedRow.supplier !== undefined) serviceFields.supplier_id = normalizedRow.supplier
+        try { assertServiceFields(serviceFields) } catch (error) { errors.push(error.message) }
+        data.service_unit_label = String(normalizedRow.service_unit_label || '').trim()
+        data.quantity_decimals = serviceFields.quantity_decimals
+        data.supplier_id = null
     }
 
     // Required: name
@@ -173,7 +194,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Required: supplier (proveedor SUPPLIER en BD, o aprobado para crear)
     const proveedor = String(normalizedRow.supplier || '').trim()
-    if (!proveedor) {
+    if (isService) {
+        data.supplier_id = null
+    } else if (!proveedor) {
         errors.push('El campo "proveedor" es requerido')
     } else {
         const supplierId = suppliersMap.get(proveedor.toLowerCase())
@@ -283,6 +306,7 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Optional: controla_caducidad (default false; exige fecha de caducidad en ingresos futuros)
     data.tracks_expiry = parseBooleanCell(normalizedRow.tracks_expiry, false)
+    if (isService) data.tracks_expiry = false
     for (const field of ['available_for_sale', 'tracks_expiry']) {
         const value = normalizedRow[field]
         if (value != null && String(value).trim() && !TRUE_CELL_VALUES.has(String(value).trim().toLowerCase()) && !FALSE_CELL_VALUES.has(String(value).trim().toLowerCase())) errors.push(`${field}: usa sí/no, true/false o 1/0`)
@@ -309,6 +333,11 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
     const importOptions = normalizeImportOptions(importOptionsRaw)
     const { companyId } = ctx
+    const hasServices = rows.some(row => Object.entries(row).some(([key,value]) => ['tipo','kind'].includes(key.toLowerCase().trim()) && ['service','servicio'].includes(String(value).toLowerCase().trim())))
+    importOptions.servicesEnabled = false
+    if (hasServices) {
+        try { await assertServicesEnabled(prisma,companyId); importOptions.servicesEnabled = true } catch (error) { if(error.status !== 403)throw error }
+    }
     const barcodes = [...new Set(rows.flatMap(row => Object.entries(row)
         .filter(([key]) => ['codigo_barras', 'barcode', 'codigo'].includes(key.toLowerCase().trim()))
         .map(([, value]) => String(value ?? '').trim())).filter(Boolean))]
@@ -324,7 +353,7 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
         }),
         prisma.product.findMany({
             where: { company_id: companyId, deleted: false, barcode: { in: barcodes } },
-            select: { id: true, barcode: true },
+            select: { id: true, barcode: true, kind: true },
         }),
     ])
 
@@ -334,6 +363,7 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
         products.filter((p) => p.barcode).map((p) => [p.barcode, p.id])
     )
     const batchBarcodes = new Set()
+    const kindsById = new Map(products.map(p => [p.id,p.kind || 'STANDARD']))
     // ponytail: similarity candidates capped at 5000; use indexed search for very large catalogues.
     const candidates = nameCandidates(rows, ['nombre', 'name'])
     const similarProducts = candidates.length ? await prisma.product.findMany({ where: { company_id: companyId, deleted: false, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
@@ -359,6 +389,10 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
             importOptions,
         )
         checkSimilarity(result, result.data.name, matchName, importOptionsRaw)
+        if (result.existingProductId && (kindsById.get(result.existingProductId) === 'SERVICE' || result.data.kind === 'SERVICE')) {
+            result.errors.push('El código ya pertenece a un artículo del catálogo. Edita su ficha para actualizar el servicio; esta importación no cambia tipos ni existencias de servicios')
+            result.valid = false
+        }
         if (result.valid) {
             validRows.push(result)
         } else {
@@ -482,6 +516,12 @@ async function bulkCreateProducts(validRows, ctx = {}, onProgress = () => {}, is
         if (isCancelled()) throw new ImportCancelledError()
         try {
             const d = { ...row.data, company_id: companyId }
+            if (d.kind === 'SERVICE') {
+                await assertServicesEnabled(prisma,companyId)
+                assertServiceFields({service_unit_label:d.service_unit_label,quantity_decimals:d.quantity_decimals})
+                if (row.existingProductId || d.supplier_create_name || d.stock || d.min_stock || d.cost || d.tracks_expiry) throw new Error('El servicio no admite existencias, proveedor ni adopción a sucursal')
+                Object.assign(d,{supplier_id:null,stock:0,min_stock:0,cost:0,tracks_expiry:false,stock_assembled:false})
+            }
             // Ya está en el catálogo de la empresa: no se duplica el producto, se
             // le fija la existencia en ESTA sucursal (lo que trae el archivo).
             if (row.existingProductId) {
@@ -504,6 +544,7 @@ async function bulkCreateProducts(validRows, ctx = {}, onProgress = () => {}, is
             const initialMin = Number(d.min_stock || 0)
             d.stock = 0
             const prod = await prisma.product.create({ data: d })
+            if (d.kind === 'SERVICE') { created++; return }
             await prisma.productStock.create({
                 data: {
                     product_id: prod.id,
@@ -596,7 +637,10 @@ function generateTemplate() {
         'codigo_barras',
         'descripcion',
         'disponible_venta',
-        'controla_caducidad'
+        'controla_caducidad',
+        'tipo',
+        'unidad_cobro',
+        'decimales'
     ]
 
     const example = [
@@ -612,7 +656,10 @@ function generateTemplate() {
         '7891234567890',
         'Descripción del producto',
         'si',
-        'no'
+        'no',
+        'STANDARD',
+        '',
+        '0'
     ]
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example])
@@ -658,7 +705,10 @@ async function generateTemplateWithCatalogs(companyId) {
         'codigo_barras',
         'descripcion',
         'disponible_venta',
-        'controla_caducidad'
+        'controla_caducidad',
+        'tipo',
+        'unidad_cobro',
+        'decimales'
     ]
 
     const example = [
@@ -674,7 +724,10 @@ async function generateTemplateWithCatalogs(companyId) {
         '7891234567890',
         'Descripción del producto',
         'si',
-        'no'
+        'no',
+        'STANDARD',
+        '',
+        '0'
     ]
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example])
