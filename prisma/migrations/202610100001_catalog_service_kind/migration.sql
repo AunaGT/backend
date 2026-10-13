@@ -1,0 +1,1 @@
+ALTER TYPE "ProductKind" ADD VALUE 'SERVICE';

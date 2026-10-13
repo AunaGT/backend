@@ -20,7 +20,7 @@ DIRECT_URL="postgresql://postgres.oxsmvtnvnspguafrmdpy:[YOUR-PASSWORD]@aws-1-us-
 PORT=3000
 ```
 
-2. Genera el cliente y crea el esquema en tu DB:
+2. Genera el cliente y crea el esquema en tu DB de desarrollo:
 
    - `npm run prisma:generate`
    - `npm run migrate`
@@ -33,11 +33,15 @@ PORT=3000
 
 ## Scripts
 
-- dev: nodemon src/index.js
-- start: node src/index.js
+- dev: nodemon index.js
+- start: node index.js
 - seed: node prisma/seed.js
-- migrate: prisma migrate dev
+- migrate / migrate:dev: crea y aplica migraciones únicamente en desarrollo
+- migrate:status: compara las migraciones locales con la base sin modificarla
+- migrate:deploy: aplica migraciones pendientes en producción o staging
 - prisma:generate: prisma generate
+
+El cargador acepta `.env` o el archivo local heredado `env`; ambos están excluidos de Git. Para publicar sin desalinear código y base de datos, sigue [Despliegue y migraciones](./docs/DEPLOYMENT_AND_MIGRATIONS.md).
 
 ## Endpoints
 

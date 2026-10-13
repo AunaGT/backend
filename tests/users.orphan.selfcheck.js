@@ -5,7 +5,7 @@
  */
 const assert = require('assert')
 const { prisma } = require('../src/models/prisma')
-const usuarios = require('../src/controllers/usuarios.controller')
+const usuarios = require('../src/modules/users/controller')
 
 const call = (fn, req) => new Promise((resolve, reject) => {
   let status = 200

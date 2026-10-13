@@ -8,10 +8,11 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
-// El .env no se carga solo cuando esto corre con `node` (index.js sí lo hace).
-require('dotenv/config')
+// Acepta el `.env` estándar y el archivo local heredado llamado `env`.
+require('../src/config/loadEnv')
 const { PrismaClient } = require('@prisma/client')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
+const { seedCompanyModules } = require('../src/modules/platform/service')
 const prisma = new PrismaClient()
 
 // Mismos ids que la migración 20260811120000_multi_company_branches, para que
@@ -35,6 +36,7 @@ async function main() {
     update: {},
     create: { id: DEFAULT_BRANCH_ID, company_id: company.id, name: 'Principal', code: 'PRIN', is_default: true },
   })
+  await seedCompanyModules(prisma, company.id)
   console.log('  Empresa y sucursal principal listas')
 
   // ========================================
@@ -129,6 +131,9 @@ async function main() {
 
     // RRHH
     { code: 'hr.employees.view', name: 'Ver empleados', description: 'Puede ver el expediente de los empleados' },
+    { code: 'hr.documents.view', name: 'Ver documentos de empleados', description: 'Puede abrir y descargar documentos privados del expediente' },
+    { code: 'hr.documents.manage', name: 'Gestionar documentos de empleados', description: 'Puede cargar y reemplazar documentos del expediente' },
+    { code: 'hr.documents.archive', name: 'Archivar documentos de empleados', description: 'Puede archivar y restaurar versiones del expediente' },
     { code: 'hr.employees.create', name: 'Crear empleados', description: 'Puede dar de alta empleados' },
     { code: 'hr.employees.edit', name: 'Editar empleados', description: 'Puede editar el expediente de los empleados' },
     { code: 'hr.employees.delete', name: 'Dar de baja empleados', description: 'Puede dar de baja empleados' },

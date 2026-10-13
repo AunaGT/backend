@@ -4,6 +4,7 @@
 
 const { Prisma } = require('@prisma/client')
 const { prisma } = require('../models/prisma')
+const { parseCatalogKind, commercialQuantity, assertPhysicalItem, assertServicesEnabled } = require('./catalogItemRules')
 
 function dbClient(tx) {
   return tx || prisma
@@ -21,8 +22,7 @@ const BOM_INCLUDE = {
 }
 
 function parseKind(raw) {
-  const k = raw != null ? String(raw).toUpperCase() : 'STANDARD'
-  return k === 'KIT' ? 'KIT' : 'STANDARD'
+  return parseCatalogKind(raw)
 }
 
 function normalizeBomInput(raw) {
@@ -36,16 +36,20 @@ function normalizeBomInput(raw) {
     .filter((row) => row.component_product_id)
 }
 
-async function loadProductsWithBom(tx, productIds) {
+async function loadProductsWithBom(tx, productIds, { companyId,allowArchivedServices=false } = {}) {
   const client = dbClient(tx)
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return new Map()
   const rows = await client.product.findMany({
-    where: { id: { in: ids }, deleted: false },
+    where: { id: { in: ids }, ...(allowArchivedServices ? {OR:[{deleted:false},{kind:'SERVICE'}]} : {deleted:false}), ...(companyId ? {company_id:companyId} : {}) },
     select: {
       id: true,
       name: true,
       kind: true,
+      company_id: true,
+      service_unit_label: true,
+      quantity_decimals: true,
+      available_for_sale: true,
       stock: true,
       stock_assembled: true,
       kit_components: {
@@ -58,7 +62,10 @@ async function loadProductsWithBom(tx, productIds) {
       },
     },
   })
-  return new Map(rows.map((p) => [String(p.id), p]))
+  if (!companyId && rows.some(p=>p.kind==='SERVICE')) throw Object.assign(new Error('Empresa requerida para servicios'),{status:403})
+  const result = new Map(rows.map((p) => [String(p.id), p]))
+  for (const id of ids) if (!result.has(id)) throw Object.assign(new Error(`Producto no encontrado: ${id}`),{status:400})
+  return result
 }
 
 /**
@@ -76,23 +83,25 @@ function computeKitAvailableFromBom(bomLines, availabilityMap) {
   return Number.isFinite(min) ? Math.max(0, min) : 0
 }
 
-async function getAvailabilityBatchWithKits(productIds, tx, branchId, { locationId = null } = {}) {
+async function getAvailabilityBatchWithKits(productIds, tx, branchId, { locationId = null, companyId } = {}) {
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return {}
 
-  const prodMap = await loadProductsWithBom(tx, ids)
+  const prodMap = await loadProductsWithBom(tx, ids, {companyId})
+  if ([...prodMap.values()].some(p=>p.kind==='SERVICE')) await assertServicesEnabled(dbClient(tx),companyId)
   const componentIds = new Set()
   for (const p of prodMap.values()) {
     if (p.kind === 'KIT') {
       for (const line of p.kit_components) {
+        assertPhysicalItem(line.component_product)
         componentIds.add(String(line.component_product_id))
       }
     }
   }
 
-  const allIds = [...new Set([...ids, ...componentIds])]
+  const allIds = [...new Set([...ids.filter(id=>prodMap.get(id).kind!=='SERVICE'), ...componentIds])]
   const { getAvailabilityBatch } = require('./stockAvailability')
-  const base = await getAvailabilityBatch(allIds, tx, { branchId, locationId })
+  const base = allIds.length ? await getAvailabilityBatch(allIds, tx, { branchId, locationId }) : {}
   const out = { ...base }
 
   // Un kit sin armar vale lo que alcance su componente más escaso. Para la
@@ -105,6 +114,10 @@ async function getAvailabilityBatchWithKits(productIds, tx, branchId, { location
 
   for (const id of ids) {
     const p = prodMap.get(id)
+    if (p.kind === 'SERVICE') {
+      out[id] = {tracks_stock:false,available_for_sale:p.available_for_sale,unit_label:p.service_unit_label,quantity_decimals:p.quantity_decimals}
+      continue
+    }
     if (!p || p.kind !== 'KIT' || p.stock_assembled) continue
     const kitAvailable = computeKitAvailableFromBom(p.kit_components, base)
     out[id] = {
@@ -127,22 +140,22 @@ async function getAvailabilityBatchWithKits(productIds, tx, branchId, { location
  * @param {Array<{ product_id: string, qty: number }>} lines
  * @returns {Promise<Map<string, number>>}
  */
-async function expandLinesToStockMap(tx, lines) {
+async function expandLinesToStockMap(tx, lines, { companyId,allowArchivedServices=false } = {}) {
   const productIds = lines.map((l) => String(l.product_id))
-  const prodMap = await loadProductsWithBom(tx, productIds)
+  const prodMap = await loadProductsWithBom(tx, productIds, {companyId,allowArchivedServices})
   const out = new Map()
 
   for (const line of lines) {
     const pid = String(line.product_id)
-    const qty = Number(line.qty || 0)
-    if (!pid || qty <= 0) continue
-
     const product = prodMap.get(pid)
     if (!product) {
       const err = new Error(`Producto no encontrado: ${pid}`)
       err.status = 400
       throw err
     }
+    const exactQty = commercialQuantity(line.qty,product.kind==='SERVICE' && line.item_kind==='SERVICE' ? line : product)
+    if (product.kind === 'SERVICE') continue
+    const qty = exactQty.toNumber()
 
     if (product.kind === 'KIT' && !product.stock_assembled) {
       if (!product.kit_components.length) {
@@ -151,6 +164,7 @@ async function expandLinesToStockMap(tx, lines) {
         throw err
       }
       for (const comp of product.kit_components) {
+        assertPhysicalItem(comp.component_product)
         if (comp.component_product?.deleted) {
           const err = new Error(`Componente eliminado en kit "${product.name}"`)
           err.status = 400
@@ -189,9 +203,9 @@ async function applyStockDelta(tx, stockMap, branchId, sign, ctx = {}) {
   const client = dbClient(tx)
   const { requireBranchId, ensureBranchStockRows } = require('./stockAvailability')
   const { applyBranchDelta } = require('./stockLocations')
-  const b = requireBranchId(branchId)
   const entries = Array.from(stockMap.entries()).filter(([, qty]) => Number(qty) > 0)
   if (entries.length === 0) return []
+  const b = requireBranchId(branchId)
   await ensureBranchStockRows(client, entries.map(([id]) => id), b)
   // El mismo delta, repartido por ubicación (y anotado en el kardex).
   await applyBranchDelta(client, entries, b, sign, ctx)
@@ -350,13 +364,14 @@ async function validateBomComponents(tx, kitProductId, components) {
   // Los componentes deben ser de la MISMA empresa que el kit
   const kit = await dbClient(tx).product.findUnique({
     where: { id: kitProductId },
-    select: { company_id: true },
+    select: { company_id: true, kind:true },
   })
   if (!kit) {
     const err = new Error('Producto no encontrado')
     err.status = 404
     throw err
   }
+  assertPhysicalItem(kit)
   const componentIds = rows.map((r) => r.component_product_id)
   const products = await dbClient(tx).product.findMany({
     where: { id: { in: componentIds }, deleted: false, company_id: kit.company_id },
@@ -366,6 +381,7 @@ async function validateBomComponents(tx, kitProductId, components) {
 
   for (const row of rows) {
     const p = prodMap.get(row.component_product_id)
+    assertPhysicalItem(p)
     if (!p) {
       const err = new Error(`Componente no encontrado: ${row.component_product_id}`)
       err.status = 400

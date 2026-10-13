@@ -222,6 +222,7 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
   const rows = aggregate(deltas)
   if (rows.length === 0) return []
   const b = requireBranchId(ctx.branchId)
+  await require('./catalogItemRules').assertPhysicalProducts(tx, rows.map(row=>row.product_id), b)
 
   const pairs = Prisma.join(
     rows.map((d) => Prisma.sql`(${d.product_id}::uuid, ${d.location_id}::uuid)`)
@@ -287,7 +288,9 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
  * @param {Array<[string, number]>} entries [productId, cantidad positiva]
  */
 async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
+  if (!entries.length) return []
   const b = requireBranchId(branchId)
+  await require('./catalogItemRules').assertPhysicalProducts(tx, entries.map(([id])=>id), b)
   // Lo que se vende sale de la ubicación del punto de venta, y lo devuelto
   // vuelve ahí: el mostrador no despacha desde la bodega que más tenga.
   const pos = !ctx.locationId && SALES_REASONS.has(ctx.reason) ? await salesLocationId(tx, b) : null
@@ -383,6 +386,7 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
     const err = new Error('Indica al menos un producto con cantidad mayor a 0'); err.status = 400; throw err
   }
 
+  await require('./catalogItemRules').assertPhysicalProducts(tx,rows.map(row=>row.product_id),b)
   await assertBranchLocations(tx, b, [fromLocationId, toLocationId])
 
   // Se valida antes para poder decir qué falta y cuánto hay, no solo "negativo".
@@ -464,7 +468,7 @@ async function replenishmentSuggestions(tx, branchId) {
            g.from_stock::int,
            LEAST(f.missing, COALESCE(g.from_stock, 0))::int AS suggested_qty
     FROM faltantes f
-    JOIN products p ON p.id = f.product_id AND NOT p.deleted
+    JOIN products p ON p.id = f.product_id AND p.kind <> 'SERVICE' AND NOT p.deleted
     JOIN stock_locations l ON l.id = f.location_id
     JOIN warehouses w ON w.id = l.warehouse_id
     LEFT JOIN origen g ON g.product_id = f.product_id AND g.location_id = f.location_id

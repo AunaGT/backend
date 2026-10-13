@@ -12,11 +12,11 @@
  */
 
 const { prisma } = require('../src/models/prisma')
-const employeesCtrl = require('../src/controllers/hrEmployees.controller')
-const attendanceCtrl = require('../src/controllers/hrAttendance.controller')
-const advancesCtrl = require('../src/controllers/hrAdvances.controller')
-const payrollCtrl = require('../src/controllers/payroll.controller')
-const transitionsCtrl = require('../src/controllers/payrollTransitions.controller')
+const employeesCtrl = require('../src/modules/hr/controllers/employees')
+const attendanceCtrl = require('../src/modules/hr/controllers/attendance')
+const advancesCtrl = require('../src/modules/hr/controllers/advances')
+const payrollCtrl = require('../src/modules/payroll/controllers/payroll')
+const transitionsCtrl = require('../src/modules/payroll/controllers/transitions')
 
 let failures = 0
 function assert(cond, label) {

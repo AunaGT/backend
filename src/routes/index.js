@@ -11,72 +11,55 @@
 const { Router } = require('express')
 const router = Router()
 const { resolveTenant } = require('../middlewares/tenant')
+const { requireAnyModule, requireModule } = require('../modules/platform')
+const { getReleaseInfo } = require('../config/release')
+const {
+  MODULE_MANIFESTS,
+  MODULE_MANIFEST_BY_CODE,
+  getManifestRoutes,
+} = require('../modules/catalog')
+
+const quotesModule = MODULE_MANIFEST_BY_CODE.get('quotes')
+const ordersModule = MODULE_MANIFEST_BY_CODE.get('orders')
+
+function mountModule(appRouter, manifest) {
+  for (const moduleRoute of getManifestRoutes(manifest)) {
+    const handlers = manifest.guardAtMount === false
+      ? [moduleRoute.loadRouter()]
+      : [requireModule(manifest.code), moduleRoute.loadRouter()]
+    appRouter.use(moduleRoute.routePrefix, ...handlers)
+  }
+}
 
 // Basic ping
 router.get('/', (req, res) => {
-  res.json({ ok: true, message: 'API up' })
+  res.json({ ok: true, message: 'API up', release: getReleaseInfo() })
 })
+
+router.use(quotesModule.routePrefix, quotesModule.loadPublicRouter())
+router.use(ordersModule.routePrefix, ordersModule.loadPublicRouter())
 
 // Empresa + sucursal del request (req.companyId / req.branchId) para todas las rutas
 router.use(resolveTenant)
 
-// Empresas y sucursales
+// Empresa y contratación de módulos son capacidades de la plataforma.
 router.use('/companies', require('./companies.routes'))
-router.use('/branches', require('./branches.routes'))
-// Traslados de mercancía entre sucursales
-router.use('/transfers', require('./transfers.routes'))
-// Almacenes y ubicaciones dentro de la sucursal
-router.use('/warehouses', require('./warehouses.routes'))
-// Movimientos internos, ajustes y kardex por ubicación
-router.use('/stock', require('./stock.routes'))
+router.use('/modules', require('../modules/platform/routes'))
 
-// Mount products routes
-router.use('/products', require('./products.routes'))
-// Mount suppliers routes
-router.use('/suppliers', require('./suppliers.routes'))
-// Mount catalogs routes
-router.use('/catalogs', require('./catalogs.routes'))
-// Mount sales and alerts
-router.use('/sales', require('./sales.routes'))
-router.use('/alerts', require('./alerts.routes'))
-// Dashboard stats
-router.use('/dashboard', require('./dashboard.routes'))
-// Auth (users, login, etc.)
-router.use('/auth', require('./usuarios.routes'))
-// Users / auth routes
-router.use('/auth', require('./usuarios.routes'))
-// Analytics
-router.use('/analytics', require('./analytics.routes'))
-// Reports (PDF)
-router.use('/reports', require('./reports.routes'))
-// Returns (product returns/refunds)
-router.use('/returns', require('./returns.routes'))
-// Cash register sessions (apertura de caja)
-router.use('/cash-sessions', require('./cashSessions.routes'))
-// Cash closures (cierre de caja)
-router.use('/cash-closures', require('./cashClosures.routes'))
-// System settings (configuración)
-router.use('/settings', require('./settings.routes'))
-// Promotions (discount codes)
-router.use('/promotions', require('./promotions.routes'))
-// Incoming Merchandise (registro de mercancía)
-router.use('/incoming-merchandise', require('./incomingMerchandise.routes'))
-// Inventariado (conteo físico)
-router.use('/inventory-counts', require('./inventoryCounts.routes'))
-// Cotizaciones comerciales
-router.use('/quotes', require('./quotes.routes'))
-// Pedidos comerciales
-router.use('/orders', require('./orders.routes'))
+// Cada capacidad de negocio entra únicamente por su manifiesto. El router de
+// usuarios es la excepción deliberada: login/refresh son públicos y sus rutas
+// administrativas aplican requireModule dentro del propio router.
+for (const manifest of MODULE_MANIFESTS) mountModule(router, manifest)
+
 // Cotiz/pedidos: vencimientos y reportes operativos
-router.use('/commercial-documents', require('./commercialDocuments.routes'))
-// Contabilidad (partida doble)
-router.use('/accounting', require('./accounting.routes'))
-// RRHH (empleados, asistencia, anticipos)
-router.use('/hr', require('./hr.routes'))
-// Nómina (planillas y recibos)
-router.use('/payroll', require('./payroll.routes'))
-// Cartera (cuentas por cobrar de clientes)
-router.use('/receivables', require('./receivables.routes'))
+router.use(
+  '/commercial-documents',
+  requireAnyModule(
+    MODULE_MANIFEST_BY_CODE.get('quotes').code,
+    MODULE_MANIFEST_BY_CODE.get('orders').code
+  ),
+  require('./commercialDocuments.routes')
+)
 
 
 module.exports = router

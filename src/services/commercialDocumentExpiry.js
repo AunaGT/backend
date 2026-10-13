@@ -2,11 +2,44 @@
  * Vencimiento de cotizaciones/pedidos y reservas de stock.
  */
 
-const { prisma } = require('../models/prisma')
+const { prisma, prismaTransaction } = require('../models/prisma')
 const { releaseByDocument } = require('./stockAvailability')
+const { readCompanyModules } = require('../modules/platform/service')
 
 const QUOTE_EXPIRABLE = ['DRAFT', 'SENT', 'ACCEPTED']
 const ORDER_EXPIRABLE = ['DRAFT', 'CONFIRMED', 'PARTIALLY_FULFILLED']
+
+async function filterEnabledDocumentIds(
+  overdueDocuments,
+  moduleCode,
+  client,
+  loadModules = readCompanyModules
+) {
+  const enabledByCompany = new Map()
+  const ids = []
+
+  for (const document of overdueDocuments) {
+    const companyId = document.branch.company_id
+    if (!enabledByCompany.has(companyId)) {
+      const modules = await loadModules(companyId, client, { useCache: false })
+      enabledByCompany.set(
+        companyId,
+        Boolean(modules.find((module) => module.code === moduleCode)?.effectiveEnabled)
+      )
+    }
+    if (enabledByCompany.get(companyId)) ids.push(document.id)
+  }
+
+  return ids
+}
+
+function filterEnabledQuoteIds(overdueQuotes, client, loadModules = readCompanyModules) {
+  return filterEnabledDocumentIds(overdueQuotes, 'quotes', client, loadModules)
+}
+
+function filterEnabledOrderIds(overdueOrders, client, loadModules = readCompanyModules) {
+  return filterEnabledDocumentIds(overdueOrders, 'orders', client, loadModules)
+}
 
 async function expireCommercialDocuments(options = {}) {
   const now = options.now || new Date()
@@ -25,17 +58,21 @@ async function expireCommercialDocuments(options = {}) {
         status: { in: QUOTE_EXPIRABLE },
         valid_until: { lt: now },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        branch: { select: { company_id: true } },
+      },
     })
-    if (overdueQuotes.length) {
-      for (const q of overdueQuotes) {
-        await releaseByDocument(tx, q.id, { status: 'EXPIRED' })
+    const enabledQuoteIds = await filterEnabledQuoteIds(overdueQuotes, tx)
+    if (enabledQuoteIds.length) {
+      for (const quoteId of enabledQuoteIds) {
+        await releaseByDocument(tx, quoteId, { status: 'EXPIRED' })
       }
-      const r = await tx.commercialDocument.updateMany({
-        where: { id: { in: overdueQuotes.map((d) => d.id) } },
+      const result = await tx.commercialDocument.updateMany({
+        where: { id: { in: enabledQuoteIds } },
         data: { status: 'EXPIRED' },
       })
-      summary.quotesExpired = r.count
+      summary.quotesExpired = result.count
     }
 
     const overdueOrders = await tx.commercialDocument.findMany({
@@ -44,20 +81,26 @@ async function expireCommercialDocuments(options = {}) {
         status: { in: ORDER_EXPIRABLE },
         valid_until: { lt: now },
       },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        branch: { select: { company_id: true } },
+      },
     })
 
+    const enabledOrderIds = await filterEnabledOrderIds(overdueOrders, tx)
+    const enabledOrderIdSet = new Set(enabledOrderIds)
+
     for (const order of overdueOrders) {
-      if (order.status === 'CONFIRMED' || order.status === 'PARTIALLY_FULFILLED') {
+      if (!enabledOrderIdSet.has(order.id)) continue
+      await tx.$queryRaw`SELECT id FROM commercial_documents WHERE id = ${order.id}::uuid FOR UPDATE`
+      const current = await tx.commercialDocument.findUnique({ where: { id: order.id }, select: { status: true, valid_until: true } })
+      if (!current || !ORDER_EXPIRABLE.includes(current.status) || !current.valid_until || current.valid_until >= now) continue
+      if (current.status === 'CONFIRMED' || current.status === 'PARTIALLY_FULFILLED') {
         await releaseByDocument(tx, order.id, { status: 'EXPIRED' })
       }
-    }
-    if (overdueOrders.length) {
-      const r = await tx.commercialDocument.updateMany({
-        where: { id: { in: overdueOrders.map((d) => d.id) } },
-        data: { status: 'EXPIRED' },
-      })
-      summary.ordersExpired = r.count
+      await tx.commercialDocument.update({ where: { id: order.id }, data: { status: 'EXPIRED' } })
+      summary.ordersExpired += 1
     }
 
     const res = await tx.stockReservation.updateMany({
@@ -76,9 +119,13 @@ async function expireCommercialDocuments(options = {}) {
   }
 
   if (options.tx) return run(options.tx)
-  return prisma.$transaction(run, { maxWait: 15_000, timeout: 60_000 })
+  const txClient = prismaTransaction || prisma
+  return txClient.$transaction(run, { maxWait: 15_000, timeout: 60_000 })
 }
 
 module.exports = {
   expireCommercialDocuments,
+  filterEnabledDocumentIds,
+  filterEnabledOrderIds,
+  filterEnabledQuoteIds,
 }

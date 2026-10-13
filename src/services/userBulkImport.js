@@ -14,6 +14,9 @@
  */
 const bcrypt = require('bcryptjs')
 const { prisma } = require('../models/prisma')
+const { assertGrant, fail } = require('./userAccess')
+const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, checkSimilarity, checkText, cell, nameCandidates } = require('../utils/importValidation')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -122,8 +125,8 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
     const password = String(normalizedRow.password || '').trim()
     if (!password) {
         errors.push('El campo "password" es requerido')
-    } else if (password.length < 6) {
-        errors.push('La contraseña debe tener al menos 6 caracteres')
+    } else if (password.length < 10 || Buffer.byteLength(password) > 72) {
+        errors.push('La contraseña debe tener al menos 10 caracteres y máximo 72 bytes')
     } else {
         data.password = password // Will be hashed later
     }
@@ -174,7 +177,9 @@ function validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, i
  * @param {Array} rows - Filas ya mapeadas (sin encabezado Excel; fila índice 0 → Excel fila 2)
  * @param {object} [importOptionsRaw]
  */
-async function bulkValidateUsers(rows, importOptionsRaw) {
+async function bulkValidateUsers(rows, importOptionsRaw, context) {
+    if (!context?.companyId || !context?.user) fail(400, 'Empresa requerida')
+    if (!Array.isArray(rows) || rows.length > 1000) fail(400, 'Máximo 1000 filas por importación')
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return {
             validRows: [],
@@ -186,21 +191,30 @@ async function bulkValidateUsers(rows, importOptionsRaw) {
     }
 
     const importOptions = normalizeImportOptions(importOptionsRaw)
+    if (importOptions.createRoles.length) fail(400, 'Crea los roles desde Roles y permisos antes de importar')
 
     const roles = await prisma.role.findMany({
-        select: { id: true, name: true },
+        where: { OR: [{ company_id: context.companyId }, { company_id: null }] },
+        include: { permissions: { include: { permission: true } } },
     })
     const rolesMap = new Map()
     roles.forEach(role => {
-        rolesMap.set(role.name.toLowerCase(), role.id)
+        try { assertGrant(context.user, role); rolesMap.set(role.name.toLowerCase(), role.id) } catch (e) { if (e.status !== 403) throw e }
     })
 
+    const incomingEmails = [...new Set(rows.flatMap(row => Object.entries(row)
+        .filter(([key]) => ['email', 'correo', 'correo_electronico'].includes(key.toLowerCase().trim()))
+        .map(([, value]) => String(value ?? '').trim().toLowerCase())).filter(Boolean))]
     const existingUsers = await prisma.user.findMany({
+        where: { email: { in: incomingEmails, mode: 'insensitive' } },
         select: { email: true },
     })
     const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()))
 
     const batchEmails = new Set()
+    const candidates = nameCandidates(rows, ['name', 'nombre'])
+    const companyUsers = candidates.length ? await prisma.user.findMany({ where: { user_companies: { some: { company_id: context.companyId } }, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
+    const matchName = nameMatcher(companyUsers)
 
     const validRows = []
     const invalidRows = []
@@ -213,6 +227,9 @@ async function bulkValidateUsers(rows, importOptionsRaw) {
             return
         }
         const validation = validateUserRow(row, excelRow, rolesMap, existingEmails, batchEmails, importOptions)
+        checkText({ name: cell(row, ['name', 'nombre']), role: cell(row, ['role', 'rol']), email: cell(row, ['email', 'correo', 'correo_electronico']) }, { name: 150, role: 50, email: 150 }, validation.errors)
+        validation.valid = validation.errors.length === 0
+        checkSimilarity(validation, cell(row, ['name', 'nombre']), matchName, importOptionsRaw)
 
         if (validation.valid && validation.data) {
             validRows.push({
@@ -224,7 +241,8 @@ async function bulkValidateUsers(rows, importOptionsRaw) {
                 rowIndex: validation.rowIndex,
                 errors: validation.errors,
                 hints: validation.hints,
-                data: row,
+                canCreateAnyway: validation.canCreateAnyway,
+                similarMatches: validation.similarMatches,
             })
         }
     })
@@ -264,7 +282,8 @@ async function ensureRoleIdImport(name, cache) {
  * @param {Array} validRows - Array of validated user rows
  * @returns {Object} Result with created count and skipped count
  */
-async function bulkCreateUsers(validRows) {
+async function bulkCreateUsers(validRows, context, onProgress = () => {}, isCancelled = () => false) {
+    if (!context?.companyId || !context?.user) fail(400, 'Empresa requerida')
     if (!validRows || validRows.length === 0) {
         return { created: 0, skipped: 0, errors: [] }
     }
@@ -272,26 +291,31 @@ async function bulkCreateUsers(validRows) {
     let created = 0
     let skipped = 0
     const errors = []
-    const roleCache = new Map()
+    const roleIds = [...new Set(validRows.map(row => row.data.role_id).filter(Boolean))]
+    const roles = await prisma.role.findMany({
+        where: { id: { in: roleIds }, OR: [{ company_id: context.companyId }, { company_id: null }] },
+        include: { permissions: { include: { permission: true } } },
+    })
+    const rolesById = new Map(roles.map(role => [role.id, role]))
+    const emails = validRows.map(row => row.data.email)
+    const existing = await prisma.user.findMany({ where: { email: { in: emails, mode: 'insensitive' } }, select: { email: true } })
+    const existingEmails = new Set(existing.map(user => user.email.toLowerCase()))
+    let processed = 0
 
     for (const row of validRows) {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             const d = { ...row.data }
-            if (d.role_create_name) {
-                d.role_id = await ensureRoleIdImport(d.role_create_name, roleCache)
-                delete d.role_create_name
-            }
+            if (d.role_create_name) fail(400, 'Crea el rol antes de importar')
+            const role = rolesById.get(d.role_id)
+            if (!role) fail(400, 'Rol no disponible')
+            assertGrant(context.user, role)
 
-            const hashedPassword = await bcrypt.hash(d.password, 10)
-
-            const existing = await prisma.user.findUnique({
-                where: { email: d.email },
-            })
-
-            if (existing) {
+            if (existingEmails.has(d.email.toLowerCase())) {
                 skipped++
                 continue
             }
+            const hashedPassword = await bcrypt.hash(d.password, 10)
 
             await prisma.user.create({
                 data: {
@@ -299,12 +323,15 @@ async function bulkCreateUsers(validRows) {
                     email: d.email,
                     password: hashedPassword,
                     role_id: d.role_id,
+                    user_companies: { create: { company_id: context.companyId, role_id: d.role_id } },
+                    ...(context.branchId ? { default_branch_id: context.branchId, user_branches: { create: { branch_id: context.branchId } } } : {}),
                     // Sin datos de RRHH: la importación crea CUENTAS. La ficha de
                     // empleado (teléfono, dirección, ingreso) se carga en RRHH, que es
                     // donde la planilla la lee.
                 },
             })
             created++
+            existingEmails.add(d.email.toLowerCase())
         } catch (e) {
             if (e.code === 'P2002') {
                 // Unique constraint violation - duplicate email
@@ -315,6 +342,9 @@ async function bulkCreateUsers(validRows) {
                     error: e.message || 'Error desconocido'
                 })
             }
+        } finally {
+            processed++
+            onProgress({ processed, total: validRows.length, created, skipped })
         }
     }
 

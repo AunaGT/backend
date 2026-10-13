@@ -29,6 +29,8 @@ if (process.env.DATABASE_URL) {
 }
 
 const prisma = new PrismaClient({
+  // Las fotos solo salen como URL firmada desde los DTO autorizados de contactos.
+  omit: { supplier: { image_storage_path: true } },
   log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query', 'error', 'warn'] : ['error', 'warn']
 })
 
@@ -37,6 +39,7 @@ const prisma = new PrismaClient({
 let prismaTransaction = null
 if (process.env.DIRECT_URL) {
   prismaTransaction = new PrismaClient({
+    omit: { supplier: { image_storage_path: true } },
     datasources: {
       db: {
         url: process.env.DIRECT_URL

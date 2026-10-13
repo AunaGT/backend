@@ -14,6 +14,8 @@
  */
 const XLSX = require('xlsx')
 const { prisma } = require('../models/prisma')
+const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, nameCandidates, cell, checkSimilarity, checkText } = require('../utils/importValidation')
 
 function stripDiacritics(s) {
     return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -193,6 +195,7 @@ function validateSupplierRow(
     }
 
     let partyType = 'SUPPLIER'
+    checkText(normalizedRow, { name: 150, contact: 100, phone: 50, email: 150, address: 10000, tax_id: 100 }, errors)
     const rawParty = normalizedRow.party_type
     if (rawParty !== undefined && rawParty !== null && String(rawParty).trim() !== '') {
         const parsed = parsePartyTypeFromExcel(rawParty)
@@ -239,6 +242,7 @@ function validateSupplierRow(
         errors.push('El campo "telefono" es requerido')
     } else {
         data.phone = telefono
+        if (!/^[+\d\s().-]{5,50}$/.test(telefono) || telefono.replace(/\D/g, '').length < 5) errors.push('telefono: formato inválido; usa números y un prefijo internacional opcional')
     }
 
     const email = String(normalizedRow.email || '').trim().toLowerCase()
@@ -358,6 +362,8 @@ function validateSupplierRow(
 async function bulkValidateSuppliers(rows, importOptionsRaw, ctx = {}) {
     const importOptions = normalizeImportOptions(importOptionsRaw)
     const { companyId } = ctx
+    const emails = rows.map(row => String(cell(row, ['email', 'correo', 'correo_electronico'])).trim().toLowerCase()).filter(Boolean)
+    const taxIds = rows.map(row => String(cell(row, ['id_fiscal', 'nit', 'tax_id', 'rfc'])).trim()).filter(Boolean)
 
     const [categoriesRaw, paymentTermsRaw, existingSuppliersRaw] = await Promise.all([
         prisma.productCategory.findMany({
@@ -369,8 +375,8 @@ async function bulkValidateSuppliers(rows, importOptionsRaw, ctx = {}) {
             select: { id: true, name: true },
         }),
         prisma.supplier.findMany({
-            where: { deleted: false, company_id: companyId },
-            select: { email: true },
+            where: { deleted: false, company_id: companyId, OR: [{ email: { in: emails, mode: 'insensitive' } }, { tax_id: { in: taxIds, mode: 'insensitive' } }] },
+            select: { id: true, name: true, email: true, tax_id: true },
         }),
     ])
     const categoriesMap = new Map(categoriesRaw.map(c => [c.name.toLowerCase(), c.id]))
@@ -381,6 +387,10 @@ async function bulkValidateSuppliers(rows, importOptionsRaw, ctx = {}) {
     )
 
     const batchEmails = new Set()
+    const candidates = nameCandidates(rows, ['nombre', 'name', 'empresa', 'razon_social'])
+    const similarSuppliers = candidates.length ? await prisma.supplier.findMany({ where: { company_id: companyId, deleted: false, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
+    const matchName = nameMatcher(similarSuppliers)
+    const fiscalIds = new Set(existingSuppliersRaw.map(s => s.tax_id?.trim().toLowerCase()).filter(Boolean))
 
     const validRows = []
     const invalidRows = []
@@ -401,6 +411,13 @@ async function bulkValidateSuppliers(rows, importOptionsRaw, ctx = {}) {
             categoriesMap,
             paymentTermsMap,
         )
+        if (result.data.tax_id && result.data.tax_id.toLowerCase() !== 'cf') {
+            const key = result.data.tax_id.toLowerCase()
+            if (fiscalIds.has(key)) result.errors.push(`ID fiscal "${result.data.tax_id}" duplicado en el sistema o archivo`)
+            fiscalIds.add(key)
+        }
+        result.valid = result.errors.length === 0
+        checkSimilarity(result, result.data.name, matchName, importOptionsRaw)
 
         if (result.valid) {
             validRows.push({ rowIndex: result.rowIndex, data: result.data })
@@ -409,6 +426,8 @@ async function bulkValidateSuppliers(rows, importOptionsRaw, ctx = {}) {
                 rowIndex: result.rowIndex,
                 errors: result.errors,
                 hints: result.hints,
+                canCreateAnyway: result.canCreateAnyway,
+                similarMatches: result.similarMatches,
             })
         }
     }
@@ -485,7 +504,7 @@ async function ensurePaymentTermId(name, cache, companyId) {
  * @param {object} [importOptionsRaw]
  * @returns {Promise<Object>}
  */
-async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
+async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}, onProgress = () => {}, isCancelled = () => false) {
     const { companyId } = ctx
     normalizeImportOptions(importOptionsRaw)
 
@@ -494,13 +513,22 @@ async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
     let skipped = 0
     const categoryCache = new Map()
     const paymentCache = new Map()
-    let defaultPaymentIdCached = null
-    const resolveDefaultPaymentId = async () => {
-        if (defaultPaymentIdCached == null) defaultPaymentIdCached = await getDefaultPaymentTermId(companyId)
-        return defaultPaymentIdCached
+    let defaultPaymentIdPromise
+    const resolveDefaultPaymentId = () => (defaultPaymentIdPromise ||= getDefaultPaymentTermId(companyId))
+
+    // Resolve shared catalog values once before independent contact writes.
+    for (const label of new Set(validRows.flatMap(row => (row.data.party_type || 'SUPPLIER') === 'SUPPLIER' ? row.data.category_labels || [] : []))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureProductCategoryId(label, categoryCache, companyId)
+    }
+    for (const label of new Set(validRows.flatMap(row => row.data.payment_term_names || []))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensurePaymentTermId(label, paymentCache, companyId)
     }
 
-    for (const row of validRows) {
+    let processed = 0
+    const saveOne = async (row) => {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             const partyType = row.data.party_type || 'SUPPLIER'
             const createData = {
@@ -568,7 +596,15 @@ async function bulkCreateSuppliers(validRows, importOptionsRaw, ctx = {}) {
                 rowIndex: row.rowIndex,
                 error: err.message,
             })
+        } finally {
+            processed++
+            onProgress({ processed, total: validRows.length, created, skipped })
         }
+    }
+
+    for (let offset = 0; offset < validRows.length; offset += 4) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await Promise.all(validRows.slice(offset, offset + 4).map(saveOne))
     }
 
     return { created, skipped, errors }

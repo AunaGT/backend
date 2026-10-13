@@ -20,7 +20,7 @@ async function runCommercialDocumentExpiryJob() {
     return summary
   } catch (e) {
     console.error('[commercial-doc-expiry] error', e.message)
-    throw e
+    return null
   } finally {
     running = false
   }
