@@ -3,6 +3,7 @@ node_modules/
 
 # Env
 .env
+env
 
 # Logs
 npm-debug.log*
@@ -19,3 +20,5 @@ prisma/generated/
 coverage/
 dist/
 .vercel/
+
+

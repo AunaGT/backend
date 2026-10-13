@@ -15,6 +15,9 @@
 const XLSX = require('xlsx')
 const { prisma } = require('../models/prisma')
 const { applyBranchDelta } = require('./stockLocations')
+const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, nameCandidates, checkSimilarity, checkText, validMoney } = require('../utils/importValidation')
+const { parseCatalogKind, assertServiceFields, assertServicesEnabled } = require('./catalogItemRules')
 
 function normalizeImportOptions(raw) {
     const o = raw && typeof raw === 'object' ? raw : {}
@@ -123,6 +126,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
         'description': ['descripcion', 'description'],
         'available_for_sale': ['disponible_venta', 'disponible_para_venta', 'available_for_sale'],
         'tracks_expiry': ['controla_caducidad', 'controla_lotes', 'tracks_expiry'],
+        'kind': ['tipo', 'kind'],
+        'service_unit_label': ['unidad_cobro', 'service_unit_label'],
+        'quantity_decimals': ['decimales', 'quantity_decimals'],
     }
 
     // Normalize row keys (lowercase, trim) and resolve aliases
@@ -142,7 +148,25 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
         }
     }
 
+    try {
+        const aliases = { servicio: 'SERVICE', bien: 'STANDARD', producto: 'STANDARD' }
+        data.kind = parseCatalogKind(aliases[String(normalizedRow.kind).toLowerCase()] || normalizedRow.kind)
+        if (data.kind === 'KIT') errors.push('Los kits requieren configurar sus componentes desde la ficha, no desde esta plantilla')
+    } catch (error) { errors.push(error.message) }
+    const isService = data.kind === 'SERVICE'
+    if (isService) {
+        if (!importOptions.servicesEnabled) errors.push('Los servicios están desactivados para esta empresa')
+        const serviceFields = { service_unit_label: normalizedRow.service_unit_label, quantity_decimals: Number(normalizedRow.quantity_decimals ?? 0) }
+        for (const key of ['stock','min_stock','cost','tracks_expiry','brand','size']) if (normalizedRow[key] !== undefined) serviceFields[key] = normalizedRow[key]
+        if (normalizedRow.supplier !== undefined) serviceFields.supplier_id = normalizedRow.supplier
+        try { assertServiceFields(serviceFields) } catch (error) { errors.push(error.message) }
+        data.service_unit_label = String(normalizedRow.service_unit_label || '').trim()
+        data.quantity_decimals = serviceFields.quantity_decimals
+        data.supplier_id = null
+    }
+
     // Required: name
+    checkText(normalizedRow, { name: 150, category: 100, supplier: 150, brand: 100, size: 50, barcode: 100, description: 10000 }, errors)
     const nombre = String(normalizedRow.name || '').trim()
     if (!nombre) {
         errors.push('El campo "nombre" es requerido')
@@ -170,7 +194,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Required: supplier (proveedor SUPPLIER en BD, o aprobado para crear)
     const proveedor = String(normalizedRow.supplier || '').trim()
-    if (!proveedor) {
+    if (isService) {
+        data.supplier_id = null
+    } else if (!proveedor) {
         errors.push('El campo "proveedor" es requerido')
     } else {
         const supplierId = suppliersMap.get(proveedor.toLowerCase())
@@ -188,11 +214,11 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Required: price (must be positive number)
     const precioRaw = normalizedRow.price
-    const precio = parseFloat(precioRaw)
+    const precio = Number(precioRaw)
     if (precioRaw === '' || precioRaw === undefined || precioRaw === null) {
         errors.push('El campo "precio" es requerido')
-    } else if (isNaN(precio) || precio <= 0) {
-        errors.push(`El precio "${precioRaw}" debe ser un número mayor a 0`)
+    } else if (!validMoney(precio) || precio <= 0) {
+        errors.push(`El precio "${precioRaw}" debe ser un número finito mayor a 0 y menor que 10000000000, con hasta 2 decimales`)
     } else {
         data.price = precio
     }
@@ -212,9 +238,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: stock (default 0, must be >= 0)
     const stockRaw = normalizedRow.stock
     if (stockRaw !== '' && stockRaw !== undefined && stockRaw !== null) {
-        const stock = parseInt(stockRaw)
-        if (isNaN(stock) || stock < 0) {
-            errors.push(`El stock "${stockRaw}" debe ser un número mayor o igual a 0`)
+        const stock = Number(stockRaw)
+        if (!Number.isInteger(stock) || stock < 0 || stock > 2147483647) {
+            errors.push(`El stock "${stockRaw}" debe ser un entero entre 0 y 2147483647`)
         } else {
             data.stock = stock
         }
@@ -225,9 +251,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: min_stock (default 0, must be >= 0)
     const minStockRaw = normalizedRow.min_stock
     if (minStockRaw !== '' && minStockRaw !== undefined && minStockRaw !== null) {
-        const minStock = parseInt(minStockRaw)
-        if (isNaN(minStock) || minStock < 0) {
-            errors.push(`El stock mínimo "${minStockRaw}" debe ser un número mayor o igual a 0`)
+        const minStock = Number(minStockRaw)
+        if (!Number.isInteger(minStock) || minStock < 0 || minStock > 2147483647) {
+            errors.push(`El stock mínimo "${minStockRaw}" debe ser un entero entre 0 y 2147483647`)
         } else {
             data.min_stock = minStock
         }
@@ -238,9 +264,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     // Optional: cost (default 0, must be >= 0)
     const costoRaw = normalizedRow.cost
     if (costoRaw !== '' && costoRaw !== undefined && costoRaw !== null) {
-        const costo = parseFloat(costoRaw)
-        if (isNaN(costo) || costo < 0) {
-            errors.push(`El costo "${costoRaw}" debe ser un número mayor o igual a 0`)
+        const costo = Number(costoRaw)
+        if (!validMoney(costo)) {
+            errors.push(`El costo "${costoRaw}" debe ser un número finito entre 0 y 9999999999.99, con hasta 2 decimales`)
         } else {
             data.cost = costo
         }
@@ -252,7 +278,9 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
     const barcode = String(normalizedRow.barcode || '').trim()
     let existingProductId = null
     if (barcode) {
-        if (existingBarcodes.has(barcode)) {
+        if (batchBarcodes.has(barcode)) {
+            errors.push(`El código de barras "${barcode}" está duplicado en el archivo`)
+        } else if (existingBarcodes.has(barcode)) {
             // El catálogo es de la empresa: que el producto ya exista no es un
             // error, es que esta sucursal todavía no lo maneja (o ya lo maneja y
             // se está recargando su existencia). Ver `bulkCreateProducts`.
@@ -278,6 +306,11 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 
     // Optional: controla_caducidad (default false; exige fecha de caducidad en ingresos futuros)
     data.tracks_expiry = parseBooleanCell(normalizedRow.tracks_expiry, false)
+    if (isService) data.tracks_expiry = false
+    for (const field of ['available_for_sale', 'tracks_expiry']) {
+        const value = normalizedRow[field]
+        if (value != null && String(value).trim() && !TRUE_CELL_VALUES.has(String(value).trim().toLowerCase()) && !FALSE_CELL_VALUES.has(String(value).trim().toLowerCase())) errors.push(`${field}: usa sí/no, true/false o 1/0`)
+    }
 
     // Default status_id to 1 (active)
     data.status_id = 1
@@ -300,6 +333,14 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
 async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
     const importOptions = normalizeImportOptions(importOptionsRaw)
     const { companyId } = ctx
+    const hasServices = rows.some(row => Object.entries(row).some(([key,value]) => ['tipo','kind'].includes(key.toLowerCase().trim()) && ['service','servicio'].includes(String(value).toLowerCase().trim())))
+    importOptions.servicesEnabled = false
+    if (hasServices) {
+        try { await assertServicesEnabled(prisma,companyId); importOptions.servicesEnabled = true } catch (error) { if(error.status !== 403)throw error }
+    }
+    const barcodes = [...new Set(rows.flatMap(row => Object.entries(row)
+        .filter(([key]) => ['codigo_barras', 'barcode', 'codigo'].includes(key.toLowerCase().trim()))
+        .map(([, value]) => String(value ?? '').trim())).filter(Boolean))]
 
     const [categories, suppliers, products] = await Promise.all([
         prisma.productCategory.findMany({
@@ -311,8 +352,8 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
             select: { id: true, name: true },
         }),
         prisma.product.findMany({
-            where: { company_id: companyId, deleted: false },
-            select: { id: true, barcode: true },
+            where: { company_id: companyId, deleted: false, barcode: { in: barcodes } },
+            select: { id: true, barcode: true, kind: true },
         }),
     ])
 
@@ -322,6 +363,11 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
         products.filter((p) => p.barcode).map((p) => [p.barcode, p.id])
     )
     const batchBarcodes = new Set()
+    const kindsById = new Map(products.map(p => [p.id,p.kind || 'STANDARD']))
+    // ponytail: similarity candidates capped at 5000; use indexed search for very large catalogues.
+    const candidates = nameCandidates(rows, ['nombre', 'name'])
+    const similarProducts = candidates.length ? await prisma.product.findMany({ where: { company_id: companyId, deleted: false, OR: candidates }, select: { id: true, name: true }, take: 5000 }) : []
+    const matchName = nameMatcher(similarProducts)
 
     const validRows = []
     const invalidRows = []
@@ -342,6 +388,11 @@ async function validateBulkData(rows, importOptionsRaw, ctx = {}) {
             batchBarcodes,
             importOptions,
         )
+        checkSimilarity(result, result.data.name, matchName, importOptionsRaw)
+        if (result.existingProductId && (kindsById.get(result.existingProductId) === 'SERVICE' || result.data.kind === 'SERVICE')) {
+            result.errors.push('El código ya pertenece a un artículo del catálogo. Edita su ficha para actualizar el servicio; esta importación no cambia tipos ni existencias de servicios')
+            result.valid = false
+        }
         if (result.valid) {
             validRows.push(result)
         } else {
@@ -442,7 +493,7 @@ async function ensureSupplierIdForProductImport(name, cache, companyId) {
 /**
  * @param {Object[]} validRows
  */
-async function bulkCreateProducts(validRows, ctx = {}) {
+async function bulkCreateProducts(validRows, ctx = {}, onProgress = () => {}, isCancelled = () => false) {
     const { companyId, branchId, locationId } = ctx
     const errors = []
     let created = 0
@@ -451,9 +502,26 @@ async function bulkCreateProducts(validRows, ctx = {}) {
     const categoryCache = new Map()
     const supplierCache = new Map()
 
-    for (const row of validRows) {
+    for (const name of new Set(validRows.map(row => row.data.category_create_name).filter(Boolean))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureProductCategoryIdImport(name, categoryCache, companyId)
+    }
+    for (const name of new Set(validRows.map(row => row.data.supplier_create_name).filter(Boolean))) {
+        if (isCancelled()) throw new ImportCancelledError()
+        await ensureSupplierIdForProductImport(name, supplierCache, companyId)
+    }
+
+    let processed = 0
+    const saveOne = async (row) => {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             const d = { ...row.data, company_id: companyId }
+            if (d.kind === 'SERVICE') {
+                await assertServicesEnabled(prisma,companyId)
+                assertServiceFields({service_unit_label:d.service_unit_label,quantity_decimals:d.quantity_decimals})
+                if (row.existingProductId || d.supplier_create_name || d.stock || d.min_stock || d.cost || d.tracks_expiry) throw new Error('El servicio no admite existencias, proveedor ni adopción a sucursal')
+                Object.assign(d,{supplier_id:null,stock:0,min_stock:0,cost:0,tracks_expiry:false,stock_assembled:false})
+            }
             // Ya está en el catálogo de la empresa: no se duplica el producto, se
             // le fija la existencia en ESTA sucursal (lo que trae el archivo).
             if (row.existingProductId) {
@@ -461,7 +529,7 @@ async function bulkCreateProducts(validRows, ctx = {}) {
                 const initialMin = Number(d.min_stock || 0)
                 await adoptIntoBranch(row.existingProductId, branchId, initialStock, initialMin, locationId)
                 adopted++
-                continue
+                return
             }
             if (d.category_create_name) {
                 d.category_id = await ensureProductCategoryIdImport(d.category_create_name, categoryCache, companyId)
@@ -476,6 +544,7 @@ async function bulkCreateProducts(validRows, ctx = {}) {
             const initialMin = Number(d.min_stock || 0)
             d.stock = 0
             const prod = await prisma.product.create({ data: d })
+            if (d.kind === 'SERVICE') { created++; return }
             await prisma.productStock.create({
                 data: {
                     product_id: prod.id,
@@ -502,7 +571,22 @@ async function bulkCreateProducts(validRows, ctx = {}) {
                 rowIndex: row.rowIndex,
                 error: err.message,
             })
+        } finally {
+            processed++
+            onProgress({ processed, total: validRows.length, created, adopted, skipped })
         }
+    }
+
+    for (let offset = 0; offset < validRows.length; offset += 4) {
+        if (isCancelled()) throw new ImportCancelledError()
+        const pendingByProduct = new Map()
+        await Promise.all(validRows.slice(offset, offset + 4).map(row => {
+            if (!row.existingProductId) return saveOne(row)
+            const previous = pendingByProduct.get(row.existingProductId) || Promise.resolve()
+            const task = previous.then(() => saveOne(row))
+            pendingByProduct.set(row.existingProductId, task)
+            return task
+        }))
     }
 
     return { created, adopted, skipped, errors }
@@ -553,7 +637,10 @@ function generateTemplate() {
         'codigo_barras',
         'descripcion',
         'disponible_venta',
-        'controla_caducidad'
+        'controla_caducidad',
+        'tipo',
+        'unidad_cobro',
+        'decimales'
     ]
 
     const example = [
@@ -569,7 +656,10 @@ function generateTemplate() {
         '7891234567890',
         'Descripción del producto',
         'si',
-        'no'
+        'no',
+        'STANDARD',
+        '',
+        '0'
     ]
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example])
@@ -615,7 +705,10 @@ async function generateTemplateWithCatalogs(companyId) {
         'codigo_barras',
         'descripcion',
         'disponible_venta',
-        'controla_caducidad'
+        'controla_caducidad',
+        'tipo',
+        'unidad_cobro',
+        'decimales'
     ]
 
     const example = [
@@ -631,7 +724,10 @@ async function generateTemplateWithCatalogs(companyId) {
         '7891234567890',
         'Descripción del producto',
         'si',
-        'no'
+        'no',
+        'STANDARD',
+        '',
+        '0'
     ]
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example])

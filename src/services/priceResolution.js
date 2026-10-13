@@ -93,7 +93,7 @@ async function resolvePriceTierForContext(tx, ctx) {
 
   if (customerId) {
     const customer = await tx.supplier.findFirst({
-      where: { id: customerId, deleted: false, party_type: 'CUSTOMER' },
+      where: { id: customerId, deleted: false, party_type: 'CUSTOMER',...(ctx.companyId ? {company_id:ctx.companyId} : {}) },
       select: {
         id: true,
         default_price_tier: true,
@@ -103,6 +103,7 @@ async function resolvePriceTierForContext(tx, ctx) {
         },
       },
     })
+    if (!customer && ctx.companyId) throw Object.assign(new Error('Cliente no encontrado en esta empresa'),{status:400})
     if (customer) {
       const rules = customer.customer_price_rules || []
       const applicable = rules.filter((r) => !r.channel || r.channel === channel)

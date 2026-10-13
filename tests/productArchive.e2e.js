@@ -23,7 +23,7 @@ async function main() {
     where: { name: 'Disponible' }, update: {}, create: { name: 'Disponible' },
   })
   const { restoreStockMap, deductStockMap } = require('../src/services/bomStock')
-  const products = require('../src/controllers/products.controller')
+  const products = require('../src/modules/inventory/products.controller')
 
   const co = await prisma.company.create({ data: { name: 'Archivo SA', code: `AR${Date.now() % 100000}` } })
   const suc = await prisma.branch.create({ data: { company_id: co.id, name: 'Central', code: 'CTR', is_default: true } })

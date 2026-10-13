@@ -13,6 +13,8 @@
  * Handles validation and batch import for catalog items
  */
 const { prisma } = require('../models/prisma')
+const { ImportCancelledError } = require('../utils/importStream')
+const { nameMatcher, checkSimilarity, checkText, cell, rowSet } = require('../utils/importValidation')
 
 /**
  * Validate a single catalog item row
@@ -45,6 +47,7 @@ function validateCatalogRow(row, rowIndex, type, existingNames, batchNames) {
     }
 
     // Validate name (required)
+    checkText(normalizedRow, { name: 100 }, errors)
     const name = normalizedRow.name || ''
     if (!name) {
         errors.push('El nombre es requerido')
@@ -81,7 +84,7 @@ function validateCatalogRow(row, rowIndex, type, existingNames, batchNames) {
  * @param {string} type - 'categories' or 'payment-terms'
  * @returns {Object} Validation result with validRows and invalidRows
  */
-async function bulkValidateCatalogs(rows, type, companyId) {
+async function bulkValidateCatalogs(rows, type, companyId, importOptions = {}) {
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
         return {
             validRows: [],
@@ -100,13 +103,19 @@ async function bulkValidateCatalogs(rows, type, companyId) {
 
     // Track names in current batch to detect duplicates
     const batchNames = new Set()
+    const matchName = nameMatcher(existing)
+    const skips = rowSet(importOptions, 'skipRowIndexes')
+    const skippedRows = []
 
     const validRows = []
     const invalidRows = []
 
     rows.forEach((row, index) => {
         const rowIndex = index + 1 // 1-based for user display
+        if (skips.has(rowIndex)) { skippedRows.push({ rowIndex, reason: 'Omitida por el usuario' }); return }
         const validation = validateCatalogRow(row, rowIndex, type, existingNames, batchNames)
+        validation.rowIndex = rowIndex
+        checkSimilarity(validation, cell(row, ['nombre', 'name', 'nombre_categoria', 'nombre_termino']), matchName, importOptions, 1)
 
         if (validation.valid && validation.data) {
             validRows.push({
@@ -117,6 +126,8 @@ async function bulkValidateCatalogs(rows, type, companyId) {
             invalidRows.push({
                 rowIndex,
                 errors: validation.errors,
+                canCreateAnyway: validation.canCreateAnyway,
+                similarMatches: validation.similarMatches,
                 data: row
             })
         }
@@ -125,8 +136,10 @@ async function bulkValidateCatalogs(rows, type, companyId) {
     return {
         validRows,
         invalidRows,
+        skippedRows,
         totals: {
             total: rows.length,
+            skipped: skippedRows.length,
             valid: validRows.length,
             invalid: invalidRows.length
         }
@@ -139,7 +152,7 @@ async function bulkValidateCatalogs(rows, type, companyId) {
  * @param {string} type - 'categories' or 'payment-terms'
  * @returns {Object} Result with created count and skipped count
  */
-async function bulkCreateCatalogs(validRows, type, companyId) {
+async function bulkCreateCatalogs(validRows, type, companyId, onProgress = () => {}, isCancelled = () => false) {
     if (!validRows || validRows.length === 0) {
         return { created: 0, skipped: 0, errors: [] }
     }
@@ -149,7 +162,25 @@ async function bulkCreateCatalogs(validRows, type, companyId) {
     let skipped = 0
     const errors = []
 
-    for (const row of validRows) {
+    let processed = 0
+    for (let start = 0; start < validRows.length; start += 50) {
+      if (isCancelled()) throw new ImportCancelledError()
+      const batch = validRows.slice(start, start + 50)
+      try {
+        const result = await model.createMany({
+          data: batch.map(row => ({ name: row.data.name, company_id: companyId })),
+          skipDuplicates: true,
+        })
+        created += result.count
+        skipped += batch.length - result.count
+        processed += batch.length
+        onProgress({ processed, total: validRows.length, created, skipped })
+        continue
+      } catch (e) {
+        // Preserve row-level errors if the database cannot accept a whole batch.
+      }
+      for (const row of batch) {
+        if (isCancelled()) throw new ImportCancelledError()
         try {
             await model.create({
                 data: {
@@ -169,6 +200,9 @@ async function bulkCreateCatalogs(validRows, type, companyId) {
                 })
             }
         }
+        processed++
+        onProgress({ processed, total: validRows.length, created, skipped })
+      }
     }
 
     return { created, skipped, errors }

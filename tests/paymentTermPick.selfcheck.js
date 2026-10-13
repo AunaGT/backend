@@ -11,7 +11,7 @@
  */
 
 const { PrismaClient } = require('@prisma/client')
-const { CUSTOMER_TERM_PICK } = require('../src/services/receivables')
+const { CUSTOMER_TERM_PICK } = require('../src/modules/receivables')
 
 const prisma = new PrismaClient()
 const assert = (cond, msg) => {

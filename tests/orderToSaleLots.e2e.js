@@ -2,7 +2,7 @@
  * Reporte de QA: Cotización -> Pedido -> Venta dejaba "Existencia física" y
  * "Con lote" desincronizados (Sin lote quedaba negativo). convertToSale
  * descontaba stock físico pero nunca corría consumeLotsFEFO, a diferencia de
- * una venta directa. Ver src/controllers/orders.controller.js exports.convertToSale.
+ * una venta directa. Ver src/modules/orders/controller.js exports.convertToSale.
  *
  * Uso: contra un Postgres desechable ya migrado.
  */
@@ -31,7 +31,7 @@ async function main() {
   }
 
   const { restoreStockMap } = require('../src/services/bomStock')
-  const orders = require('../src/controllers/orders.controller')
+  const orders = require('../src/modules/orders/controller')
 
   const co = await prisma.company.create({ data: { name: 'Lotes SA', code: `LT${Date.now() % 100000}` } })
   const suc = await prisma.branch.create({ data: { company_id: co.id, name: 'Central', code: 'CTR', is_default: true } })

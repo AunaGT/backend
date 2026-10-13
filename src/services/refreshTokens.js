@@ -12,10 +12,10 @@ function hash(token) {
 }
 
 /** Crea un refresh token nuevo para el usuario y devuelve el valor en claro (va a la cookie). */
-async function issue(userId) {
+async function issue(userId, device) {
   const token = crypto.randomBytes(32).toString('hex')
   const expires_at = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000)
-  await prisma.refreshToken.create({ data: { user_id: userId, token_hash: hash(token), expires_at } })
+  await prisma.refreshToken.create({ data: { user_id: userId, token_hash: hash(token), expires_at, device: device?.slice(0, 200) } })
   return token
 }
 
@@ -47,10 +47,10 @@ async function rotate(oldToken) {
       data: { revoked_at: new Date(), replaced_by: hash(newToken) },
     }),
     prisma.refreshToken.create({
-      data: { user_id: row.user_id, token_hash: hash(newToken), expires_at },
+      data: { user_id: row.user_id, token_hash: hash(newToken), expires_at, session_id: row.session_id, device: row.device },
     }),
   ])
-  return { userId: row.user_id, token: newToken }
+  return { userId: row.user_id, token: newToken, sessionId: row.session_id }
 }
 
 /** Revoca un refresh token puntual (logout). No falla si no existe. */
@@ -62,4 +62,4 @@ async function revoke(token) {
   })
 }
 
-module.exports = { issue, rotate, revoke }
+module.exports = { issue, rotate, revoke, hash }

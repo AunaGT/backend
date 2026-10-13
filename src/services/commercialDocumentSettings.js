@@ -13,11 +13,12 @@ function parsePositiveInt(raw, fallback) {
   return Number.isFinite(n) && n >= 1 ? n : fallback
 }
 
-async function getCommercialDocSettings(client) {
+async function getCommercialDocSettings(client, companyId) {
   const db = client || prisma
   const rows = await db.systemSetting.findMany({
     where: {
       key: { in: ['quote_validity_days', 'order_validity_days', 'quote_soft_hold_hours'] },
+      ...(companyId ? { company_id: companyId } : {}),
     },
   })
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]))
@@ -34,8 +35,8 @@ function addDays(days) {
   return d
 }
 
-async function defaultQuoteValidUntil(client) {
-  const { quoteValidityDays } = await getCommercialDocSettings(client)
+async function defaultQuoteValidUntil(client, companyId) {
+  const { quoteValidityDays } = await getCommercialDocSettings(client, companyId)
   return addDays(quoteValidityDays)
 }
 
@@ -48,8 +49,8 @@ function addHours(hours) {
   return new Date(Date.now() + hours * 60 * 60 * 1000)
 }
 
-async function defaultQuoteSoftHoldExpiresAt(client) {
-  const { quoteSoftHoldHours } = await getCommercialDocSettings(client)
+async function defaultQuoteSoftHoldExpiresAt(client, companyId) {
+  const { quoteSoftHoldHours } = await getCommercialDocSettings(client, companyId)
   return addHours(quoteSoftHoldHours)
 }
 

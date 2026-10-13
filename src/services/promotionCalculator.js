@@ -21,6 +21,7 @@ const PROMOTION_TYPES = {
     FREE_GIFT: 'FREE_GIFT',
     MIN_QTY_DISCOUNT: 'MIN_QTY_DISCOUNT'
 }
+const {Prisma}=require('@prisma/client')
 
 /** Línea del carrito coincide con alcance por producto/categoría (promo no “aplica a todos”) */
 function itemMatchesRestrictedScope(promotion, item) {
@@ -84,10 +85,12 @@ function calculatePercentageDiscount(promotion, cartItems) {
         }
     }
 
-    const discount = applicableTotal * percentage
+    const eligibleItems=promotion.applies_to_all ? cartItems : cartItems.filter(item=>itemMatchesRestrictedScope(promotion,item))
+    const exactTotal=eligibleItems.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
+    const discount = exactTotal.mul(String(promotion.discount_percentage)).div(100).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
 
     return {
-        discount: Math.round(discount * 100) / 100,
+        discount,
         details: {
             type: PROMOTION_TYPES.PERCENTAGE,
             percentage: Number(promotion.discount_percentage),
@@ -101,11 +104,11 @@ function calculatePercentageDiscount(promotion, cartItems) {
  * Calculate fixed amount discount
  */
 function calculateFixedDiscount(promotion, cartItems) {
-    const cartTotal = cartItems.reduce((sum, item) => sum + (Number(item.price) * item.qty), 0)
+    const cartTotal = cartItems.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
     const discountValue = Number(promotion.discount_value)
 
     // Don't discount more than the cart total
-    const discount = Math.min(discountValue, cartTotal)
+    const discount = Prisma.Decimal.min(String(discountValue),cartTotal).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
 
     return {
         discount: Math.round(discount * 100) / 100,
@@ -309,6 +312,7 @@ function calculateMinQtyDiscount(promotion, cartItems) {
  */
 function applyPromotion(promotion, cartItems) {
     const typeName = promotion.type?.name || ''
+    if (![PROMOTION_TYPES.PERCENTAGE,PROMOTION_TYPES.FIXED_AMOUNT].includes(typeName)) cartItems=(cartItems || []).filter(item=>(item.item_kind ?? item.kind)!=='SERVICE')
     const cartTotal = (cartItems || []).reduce(
         (sum, item) => sum + (Number(item.price) * Number(item.qty || 0)),
         0
