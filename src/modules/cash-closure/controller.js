@@ -10,7 +10,7 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
-const { applyOpeningFloatToCashBreakdown, applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
+const { closureNotesWithUnidentifiedCollections, applyOpeningFloatToCashBreakdown, applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
 const { getTimezone } = require('../../utils/getTimezone')
 
 const number = (v) => {
@@ -306,11 +306,16 @@ exports.calculateTheoretical = async (req, res, next) => {
     })
 
     let theoreticalCollections = 0
+    let unidentifiedCollections = 0
     for (const col of collections) {
       const amount = number(col.amount)
       theoreticalCollections += amount
 
       const methodKey = col.payment_method_id
+      if (methodKey == null || !col.payment_method) {
+        unidentifiedCollections += amount
+        continue
+      }
       if (!paymentMethodsMap.has(methodKey)) {
         paymentMethodsMap.set(methodKey, {
           id: methodKey,
@@ -395,6 +400,7 @@ exports.calculateTheoretical = async (req, res, next) => {
         paid_at: c.paid_at,
         reference: c.reference
       })),
+      unidentified_collections_amount: Number(unidentifiedCollections.toFixed(2)),
       return_settlements: returnSettlements.map((settlement) => ({
         id: settlement.id,
         return_reference: settlement.return?.reference || null,
@@ -468,6 +474,11 @@ exports.create = async (req, res, next) => {
     }
     if (isOwnClosure && authUser?.sub && cashierId !== authUser.sub) {
       return res.status(403).json({ message: 'Solo puede registrar el cierre de su propia caja' })
+    }
+
+    const unidentifiedCollectionsAmount = req.body.unidentifiedCollectionsAmount ?? 0
+    if (typeof unidentifiedCollectionsAmount !== 'number' || !Number.isFinite(unidentifiedCollectionsAmount) || unidentifiedCollectionsAmount < 0 || unidentifiedCollectionsAmount > 9999999999.99) {
+      return res.status(400).json({ message: 'El importe de cobros con medio no registrado debe ser un monto válido no negativo' })
     }
 
     const tz = await getTimezone(prisma, req.companyId)
@@ -579,7 +590,7 @@ exports.create = async (req, res, next) => {
           total_transactions: totalTransactions,
           total_customers: totalCustomers,
           average_ticket: averageTicket,
-          notes: closureNotes || null,
+          notes: closureNotesWithUnidentifiedCollections(closureNotes, unidentifiedCollectionsAmount),
           status: 'Pendiente'
         }
       })

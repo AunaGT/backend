@@ -21,6 +21,9 @@ async function applyOpeningFloatToCashBreakdown(db,companyId,map,openingFloat) {
 function normalizeClosureNotes(notes) {
   return typeof notes === 'string' ? notes.trim() : ''
 }
+function closureNotesWithUnidentifiedCollections(notes, amount) {
+  return [normalizeClosureNotes(notes), Number(amount)>0 ? `Cobros históricos con medio no registrado: ${Number(amount).toFixed(2)} (moneda del cierre). Incluidos en el total esperado; no asignados a efectivo ni a otro medio.` : ''].filter(Boolean).join('\n') || null
+}
 
 function requiresDifferenceReason(difference, notes) {
   return Math.abs(Number(difference) || 0) >= CASH_DIFFERENCE_EPSILON && !normalizeClosureNotes(notes)
@@ -61,6 +64,7 @@ function applyReturnSettlements(paymentMethodsMap, settlements) {
 }
 
 module.exports = {
+  closureNotesWithUnidentifiedCollections,
   applyOpeningFloatToCashBreakdown,
   CASH_DIFFERENCE_EPSILON,
   applyReturnSettlements,

@@ -87,6 +87,8 @@ async function listPaymentMethodsCatalog(db,companyId,{page=1,pageSize=10,search
   const where={...preferenceWhere(companyId),...(state==='all'?{}:{enabled:state==='active'})}
   if(search)where.payment_method={...where.payment_method,name:{contains:search,mode:'insensitive'}}
   const totalItems=await db.companyPaymentMethod.count({where}),totalPages=Math.max(1,Math.ceil(totalItems/pageSize)),safePage=Math.min(page,totalPages)
+  if(totalItems===0&&await db.companyPaymentMethod.count({where:preferenceWhere(companyId)})===0)
+    fail('PM_SETUP_REQUIRED',409,'Esta empresa no tiene métodos inicializados. Revisa su configuración de pagos')
   let summary
   if(includeSummary){
     const rows=await db.companyPaymentMethod.findMany({where,select:{enabled:true,payment_method:{select:{is_credit:true}}}})

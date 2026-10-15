@@ -9,6 +9,7 @@
  */
 
 const { prisma } = require('../../models/prisma')
+const { listPaymentMethodChoices } = require('../../services/paymentMethods/access')
 
 exports.all = async (req, res, next) => {
   try {
@@ -16,7 +17,7 @@ exports.all = async (req, res, next) => {
       prisma.productCategory.findMany({ where: { company_id: req.companyId }, orderBy: { name: 'asc' } }),
       prisma.status.findMany({ orderBy: { name: 'asc' } }),
       prisma.stockStatus.findMany({ orderBy: { name: 'asc' } }),
-      prisma.paymentMethod.findMany({ orderBy: { name: 'asc' } }),
+      listPaymentMethodChoices(prisma, req.companyId),
       prisma.saleStatus.findMany({ orderBy: { name: 'asc' } }),
       prisma.paymentTerm.findMany({ where: { company_id: req.companyId }, orderBy: { name: 'asc' } }),
       prisma.alertType.findMany({ orderBy: { name: 'asc' } }),
