@@ -8,7 +8,7 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
-const { prisma } = require('../../models/prisma')
+const { prisma, prismaTransaction } = require('../../models/prisma')
 const { normalizeReturnPolicy } = require('../returns/domain')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
@@ -371,17 +371,6 @@ exports.update = async (req, res, next) => {
       'returns.policy',
     ])
 
-    for (const [key, value] of Object.entries(payload)) {
-      if (!allowedKeys.has(key)) continue
-      const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value)
-      const type = ['cash_closure_denominations', 'returns.policy'].includes(key) ? 'json' : 'string'
-      await prisma.systemSetting.upsert({
-        where: { company_id_key: { company_id: req.companyId, key } },
-        update: { value: valueStr, type },
-        create: { company_id: req.companyId, key, value: valueStr, type }
-      })
-    }
-
     // La identidad de la empresa vive en dos lados: la fila Company (selector,
     // traslados, contabilidad) y estas claves (PDFs, membretes). Se espejan para
     // que editar la configuración no deje el selector mostrando el nombre viejo.
@@ -390,13 +379,25 @@ exports.update = async (req, res, next) => {
     if (payload.company_nit !== undefined) companyFields.tax_id = String(payload.company_nit).slice(0, 100)
     if (payload.company_address !== undefined) companyFields.address = String(payload.company_address)
     if (payload.company_logo_url !== undefined) companyFields.logo_url = String(payload.company_logo_url).slice(0, 500)
-    if (Object.keys(companyFields).length > 0) {
-      await prisma.company.update({ where: { id: req.companyId }, data: companyFields })
-    }
+    const rows = await prismaTransaction.$transaction(async tx => {
+      for (const [key, value] of Object.entries(payload)) {
+        if (!allowedKeys.has(key)) continue
+        const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value)
+        const type = ['cash_closure_denominations', 'returns.policy'].includes(key) ? 'json' : 'string'
+        await tx.systemSetting.upsert({
+          where: { company_id_key: { company_id: req.companyId, key } },
+          update: { value: valueStr, type },
+          create: { company_id: req.companyId, key, value: valueStr, type }
+        })
+      }
+      if (Object.keys(companyFields).length > 0) {
+        await tx.company.update({ where: { id: req.companyId }, data: companyFields })
+      }
+      return tx.systemSetting.findMany({ where: { company_id: req.companyId }, orderBy: { key: 'asc' } })
+    }, { maxWait: 15_000, timeout: 30_000 })
 
     invalidateSystemConfigCache(req.companyId)
 
-    const rows = await prisma.systemSetting.findMany({ where: { company_id: req.companyId }, orderBy: { key: 'asc' } })
     const settings = {}
     for (const row of rows) {
       if (row.type === 'json') {
