@@ -5,6 +5,7 @@
  */
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
+const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
 const { Prisma } = require('@prisma/client')
 const { documentPaymentTerms, creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
@@ -880,7 +881,7 @@ exports.convertToSale = async (req, res, next) => {
     const result = await prismaTransaction.$transaction(async (tx) => {
       const cashSessionIdForSale = await requireCashSession(tx, user, cashRegisterId, order.branch_id)
 
-      const paymentMethod = await tx.paymentMethod.findUnique({ where: { id: paymentMethodId } })
+      const paymentMethod = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:paymentMethodId,purpose:'SALE'})
       if (!paymentMethod) {
         const err = new Error('Método de pago no encontrado')
         err.status = 400

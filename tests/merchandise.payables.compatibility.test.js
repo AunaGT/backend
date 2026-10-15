@@ -61,7 +61,7 @@ test("public merchandise handlers share balances and return a grouped-payment co
         branchIds: f.scope.branchIds,
         user: { sub: f.scope.userId, permissions: f.scope.permissions },
         body: {
-          amount: "25.00",
+          amount: "25.00",payment_method_id:1,
           paid_at: "2026-10-14T12:00:00Z",
           expected_revision: 0,
         },
@@ -104,7 +104,7 @@ test("individual payment creates a durable receipt; cancelled history does not r
     id = f.stored.entries[0].id,
     key = crypto.randomUUID(),
     body = {
-      amount: "25.00",
+      amount: "25.00", payment_method_id:1,
       paid_at: "2026-10-14T12:00:00Z",
       expected_revision: 0,
     };
@@ -143,7 +143,7 @@ test("manual PAID pays the actual balance; PENDING cannot hide payments and PART
     f.db,
     f.scope,
     id,
-    { payment_status: "PAID", paid_at: "2026-10-14T12:00:00Z" },
+    { payment_status: "PAID", paid_at: "2026-10-14T12:00:00Z",payment_method_id:1 },
     crypto.randomUUID(),
   );
   assert.equal(f.stored.payments.length, 1);
@@ -182,6 +182,7 @@ test("new paid PURCHASE records money, while INITIAL never creates a disbursemen
   const f = makePayablesFixture(),
     row = f.stored.entries[0];
   const settled = await settleNewPurchase(f.db, f.scope, row, {
+    payment_method_id:1,
     payment_status: "PAID",
     paid_at: "2026-10-14T12:00:00Z",
   });

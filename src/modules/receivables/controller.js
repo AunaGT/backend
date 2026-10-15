@@ -17,7 +17,8 @@ const { Prisma } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
 const { creditDueDate } = require('../../services/commercialPayment')
-const { prisma } = require('../../models/prisma')
+const { prisma, prismaTransaction } = require('../../models/prisma')
+const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
 const { requireCompany, requireBranch } = require('../../middlewares/tenant')
 const { round2 } = require('../../services/accounting/logic')
 const {allocationForReceipt,allocationSelect}=require('./domain/paymentAllocations')
@@ -491,23 +492,6 @@ exports.createPayment = async (req, res, next) => {
     })
     if (!customer) fail(404, 'Cliente no encontrado')
 
-    const method = await prisma.paymentMethod.findUnique({
-      where: { id: Number(body.payment_method_id) },
-      select: { id: true, name: true, is_credit: true },
-    })
-    if (!method) fail(400, 'Método de pago inválido')
-    // Cobrar «al crédito» no significa nada: el cobro es justo lo que cancela el crédito.
-    if (method.is_credit) fail(400, 'Un cobro no puede registrarse con un método de crédito')
-
-    if (body.cash_register_session_id) {
-      const sess = await prisma.cashRegisterSession.findFirst({
-        where: { id: String(body.cash_register_session_id), cashRegister: { branch_id: branchId } },
-        select: { id: true, status: true },
-      })
-      if (!sess) fail(400, 'Sesión de caja no encontrada en esta sucursal')
-      if (sess.status !== 'OPEN') fail(400, 'La sesión de caja ya está cerrada')
-    }
-
     // Aplicación manual: la UI manda a qué facturas va el dinero. Si no viene
     // nada, se reparte FIFO (lo normal en mostrador).
     let manualApplications = null
@@ -518,7 +502,16 @@ exports.createPayment = async (req, res, next) => {
     let reference = body.reference != null ? String(body.reference).trim() : ''
     if (reference.length > 255) reference = reference.slice(0, 255)
 
-    const created = await prisma.$transaction(async (tx) => {
+    const created = await prismaTransaction.$transaction(async (tx) => {
+      const method = await resolvePaymentMethod(tx,{companyId,methodId:body.payment_method_id,purpose:'RECEIPT'})
+      if (body.cash_register_session_id) {
+        const sess = await tx.cashRegisterSession.findFirst({
+          where: { id: String(body.cash_register_session_id), cashRegister: { branch_id: branchId } },
+          select: { id: true, status: true },
+        })
+        if (!sess) fail(400, 'Sesión de caja no encontrada en esta sucursal')
+        if (sess.status !== 'OPEN') fail(400, 'La sesión de caja ya está cerrada')
+      }
       const { paymentId } = await applyPayment(tx, {
         customerId: customer.id,
         branchId,

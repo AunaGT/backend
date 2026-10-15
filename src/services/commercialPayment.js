@@ -1,6 +1,7 @@
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../utils/getTimezone')
 const { applyPayment } = require('../modules/receivables')
+const { resolvePaymentMethod } = require('./paymentMethods/access')
 
 function fail(message) { throw Object.assign(new Error(message), { status: 400 }) }
 
@@ -42,8 +43,7 @@ function initialPaymentAmount(body, total, isCredit) {
 async function recordInitialPayment(tx, req, sale, amount, sessionId) {
   if (!amount) return
   if (!sessionId) fail('Abre un turno de caja antes de recibir el abono inicial')
-  const method = await tx.paymentMethod.findUnique({ where: { id: Number(req.body.initial_payment.payment_method_id) || 0 } })
-  if (!method || method.is_credit) fail('Selecciona un medio de cobro válido para el abono inicial')
+  const method = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.initial_payment.payment_method_id,purpose:'RECEIPT'})
   await applyPayment(tx, {
     customerId: sale.customer_contact_id, branchId: sale.branch_id, amount,
     paidAt: sale.date, paymentMethodId: method.id, cashRegisterSessionId: sessionId,

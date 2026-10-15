@@ -178,6 +178,8 @@ function completionFixture({ failSettlement = false } = {}) {
   }
   const tx = {
     $queryRaw: async () => [{ id: approvedReturn.id }],
+    $executeRaw:async()=>0,
+    companyPaymentMethod:{findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Efectivo',is_credit:false}})},
     return: {
       findFirst: async () => ({ ...approvedReturn, status: { name: state.status }, sale: state.sale, return_items: state.lines }),
       update: async ({ data }) => {
@@ -216,6 +218,7 @@ function completionFixture({ failSettlement = false } = {}) {
     ensureAlerts: async () => {},
   }
   const params = {
+    companyId:'A',
     id: approvedReturn.id,
     scope: { branch_id: 'branch-1' },
     userId: 'user-1',
@@ -225,8 +228,15 @@ function completionFixture({ failSettlement = false } = {}) {
       settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
     },
   }
-  return { state, client, deps, params }
+  return { state, client, deps, params,tx }
 }
+
+test('new refund requires current availability and rolls back stock',async()=>{
+  const f=completionFixture();f.params.companyId='A';f.tx.$executeRaw=async()=>0
+  f.tx.companyPaymentMethod={findFirst:async()=>({enabled:false,payment_method:{id:1,is_credit:false,name:'Efectivo'}})}
+  await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.code==='PM_DISABLED')
+  assert.equal(f.state.stock,0);assert.equal(f.state.settlements.length,0)
+})
 
 test('Aprobada se completa una sola vez con la misma clave', async () => {
   const fixture = completionFixture()

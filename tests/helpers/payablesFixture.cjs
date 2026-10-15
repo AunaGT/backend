@@ -60,6 +60,7 @@ function makePayablesFixture({ entries = [{ total: "100.00" }] } = {}) {
       ),
     };
   const db = {
+    companyPaymentMethod: { findFirst: async ({where}) => where.company_id===companyId ? {enabled:true,payment_method:{id:where.payment_method_id,company_id:null,is_credit:where.payment_method_id===2}} : null },
     companyModule: {
       findMany: async () => [{ module_code: "merchandise", status: "ACTIVE" }],
     },

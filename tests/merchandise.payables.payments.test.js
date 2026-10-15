@@ -5,6 +5,11 @@ const { test } = require("node:test"),
   {
     createSupplierPayment,
   } = require("../src/modules/merchandise/payables/payments");
+test('supplier payment rejects disabled method without recording receipt',async()=>{
+  const f=makePayablesFixture();f.db.companyPaymentMethod={findFirst:async()=>({enabled:false,payment_method:{id:1,is_credit:false}})}
+  await assert.rejects(createSupplierPayment(f.db,f.scope,f.input),e=>e.code==='PM_DISABLED')
+  assert.equal(f.stored.payments.length,0)
+})
 test("grouped supplier payment persists one receipt and two applications with durable exact replay", async () => {
   const f = makePayablesFixture({
       entries: [{ total: "60.00" }, { total: "40.00" }],

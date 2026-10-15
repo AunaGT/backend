@@ -58,7 +58,6 @@ async function individual(tx, scope, row, body, key) {
         },
       ],
     },
-    { allowMissingMethod: true },
   );
 }
 const addIndividualPayment = (db, scope, id, body, key) =>
@@ -164,6 +163,7 @@ async function settleNewPurchase(tx, scope, row, body) {
       {
         amount: balance.balance,
         paid_at: body.paid_at,
+        payment_method_id: body.payment_method_id,
         reference: body.payment_reference,
       },
       crypto.randomUUID(),

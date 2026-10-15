@@ -42,9 +42,8 @@ async function createScopedReceipt(tx,scope,engagement,input){
   return tx.customerPayment.create({data:{branch_id:engagement.branch_id,customer_id:engagement.customer_id,amount,paid_at:new Date(input.paidAt),payment_method_id:method.id,
     cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||null,notes:input.notes||null,registered_by:scope.userId}})
 }
-async function validateScopedMethod(tx,scope,input){
-  const method=await tx.paymentMethod.findUnique({where:{id:input.paymentMethodId}})
-  if(!method||method.is_credit)fail('INVALID_PAYMENT_METHOD','Selecciona un medio de cobro, no crédito')
+async function validateScopedMethod(tx,scope,input,purpose='RECEIPT'){
+  const method=await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose})
   const cash=/efectivo|cash/.test(method.name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,''))
   if(cash&&!input.cashRegisterSessionId)fail('CASH_SESSION_REQUIRED','Abre un turno de caja antes de recibir efectivo')
   if(input.cashRegisterSessionId){
@@ -108,7 +107,7 @@ async function confirmScopedRefund(tx,scope,engagement,input){
   const refund=await tx.customerPaymentRefund.findFirst({where:{id:input.refundId,company_id:scope.companyId,branch_id:engagement.branch_id,customer_id:engagement.customer_id,engagement_id:engagement.id,payment_id:input.receiptId}})
   if(!refund||refund.status!=='REQUESTED'||!refund.amount.eq(input.amount))fail('REFUND_NOT_PENDING','Selecciona la solicitud pendiente y su importe original',409)
   const c=await reservedReceipt(tx,scope,engagement,input),now=new Date()
-  const method=await validateScopedMethod(tx,scope,{...input,paidAt:now.toISOString()})
+  const method=await validateScopedMethod(tx,scope,{...input,paidAt:now.toISOString()},'REFUND')
   if(!/efectivo|cash/i.test(method.name)&&!input.reference)fail('REFUND_REFERENCE_REQUIRED','Registra la referencia real del reintegro')
   const effective=await tx.customerPaymentRefund.update({where:{id:refund.id},data:{status:'CONFIRMED',confirmed_at:now,confirmed_key:input.idempotencyKey,payment_method_id:method.id,cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||'',registered_by:scope.userId}})
   await decreaseCommitment(tx,c,refund.amount,'REFUNDED')

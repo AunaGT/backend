@@ -25,6 +25,7 @@ function fixture() {
   const order = { id: 'order-1', fulfillment_mode: 'SEPARATE', status: 'FULFILLED', branch_id: 'branch-1', lines }
   let existing = null
   const tx = {
+    companyPaymentMethod:{findFirst:async({where})=>where.company_id==='company-1'?{enabled:true,payment_method:{id:1,is_credit:false}}:null},
     appointmentEngagement:{findFirst:async()=>null},
     $queryRaw: async (strings, ...values) => { events.push(['lock', values]); return [{ id: order.id }] },
     commercialDocument: { findUnique: async () => { events.push(['load']); return order } },
@@ -47,6 +48,11 @@ function fixture() {
     body: { request_key: key, lines: [{ line_id: 'line-1', qty: 4 }], payment_method_id: 1 } }
   return { tx, req, order, events, setExisting: value => { existing = value } }
 }
+test('partial invoicing rejects disabled company method before writing sale',async()=>{
+  const f=fixture();f.tx.companyPaymentMethod={findFirst:async()=>({enabled:false,payment_method:{id:1,is_credit:false}})}
+  await assert.rejects(invoice(f.tx,f.req,async()=> 'session-1'),e=>e.code==='PM_DISABLED')
+  assert.equal(f.events.some(e=>e[0]==='sale'),false)
+})
 test('consulta tenant y sucursal bajo bloqueo antes de leer cantidades', async () => {
   const { tx, req, events } = fixture()
   tx.$queryRaw = async (strings, ...values) => { events.push(values); return [] }

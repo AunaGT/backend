@@ -181,13 +181,7 @@ async function postSupplierPayment(tx, scope, raw, options = {}) {
     currency = settings.find((s) => s.key === "currency_code")?.value || "GTQ";
   if (input.currencyCode !== currency)
     fail("La moneda no corresponde a la empresa");
-  if (input.paymentMethodId !== null) {
-    const method = await tx.paymentMethod.findUnique({
-      where: { id: input.paymentMethodId },
-    });
-    if (!method || method.is_credit)
-      fail("Selecciona un medio efectivo de pago, no crédito");
-  }
+  await require('../../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose:'SUPPLIER_PAYMENT'});
   const balances = rows.map((row) => ({ id: row.id, ...balanceOf(row) })),
     applications = planApplications(balances, input),
     id = crypto.randomUUID();

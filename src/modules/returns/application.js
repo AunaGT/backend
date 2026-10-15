@@ -247,8 +247,7 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
     }else paymentMethodId = Number(current.sale.payment_method?.id)
   }
   if (!Number.isInteger(paymentMethodId)) throw invalid('Debe indicar el método real del reintegro')
-  const method = await tx.paymentMethod.findUnique({ where: { id: paymentMethodId }, select: { id: true, name: true, is_credit: true } })
-  if (!method || method.is_credit) throw invalid('El método de reintegro no es válido')
+  const method = await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:actor.companyId,methodId:paymentMethodId,purpose:'REFUND'})
 
   const externalReference = String(settlement.external_reference || '').trim() || null
   if (resolution === 'REFUND_TRANSFER' && !externalReference) {
@@ -322,7 +321,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
   let direct = !isExchange && plan.resolution === 'CUSTOMER_CREDIT'
     ? { paymentMethodId: null, cashSessionId: null, externalReference: null }
     : !isExchange
-      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable,{userId,isAdmin})
+      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable,{userId,isAdmin,companyId})
       : { paymentMethodId: null, cashSessionId: null, externalReference: null }
 
   const restoreStock = deps.restoreStock || restoreDispositionStock
@@ -389,7 +388,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
         : channel === 'TRANSFER'
           ? 'REFUND_TRANSFER'
           : 'REFUND_ORIGINAL'
-      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount,{userId,isAdmin})
+      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount,{userId,isAdmin,companyId})
       if (difference.direction === 'COLLECTION') {
         await tx.sale.update({
           where: { id: replacement.sale.id },

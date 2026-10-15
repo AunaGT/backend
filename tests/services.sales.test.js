@@ -34,7 +34,7 @@ test('approved replacement retains its own original unit and precision after cat
   tx.systemSetting.findUnique=async()=>({value:'false'})
   await assert.rejects(resolvePricedSaleItems(tx,{items:[{product_id:'s',qty:'1.25'}],approvedSnapshots:approved,companyId:'A'}),error=>error.status===403)
 })
-for(const felEnabled of [false,true])test(`direct POS service sale keeps cash checks and one fiscal request when enabled=${felEnabled}`,async()=>{
+for(const [felEnabled,disabled] of [[false,false],[true,false],[false,true]])test(`direct POS service sale fiscal=${felEnabled} disabled=${disabled}`,async()=>{
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
   const model=require.resolve('../src/models/prisma')
   const target=require.resolve('../src/modules/sales/controller')
@@ -42,12 +42,18 @@ for(const felEnabled of [false,true])test(`direct POS service sale keeps cash ch
   const reference=require.resolve('../src/services/referenceGenerator')
   let stored=null,paymentCount=0,lines=[],documents=[],history=[]
   const tx={...fixture(),branch:{findUnique:async()=>({id:'B',code:'QA'})},cashRegister:{findFirst:async()=>({id:'C'})},cashRegisterSession:{findFirst:async()=>({id:'CS',opened_by_id:'U'})},saleStatus:{findFirst:async()=>({id:1})},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo',is_credit:false})},
+    companyPaymentMethod:{findFirst:async()=>({enabled:!disabled,payment_method:{id:1,name:'Efectivo',is_credit:false}})},$executeRaw:async()=>0,
     sale:{findFirst:async()=>stored,create:async({data})=>{stored={id:'V',version:1,status:{name:'Completada'},sale_dtes:documents,...data};return stored},update:async({data})=>{stored.version+=data.version.increment;return stored}},saleItem:{createMany:async({data})=>{lines=data;stored.sale_items=data}},$transaction:async run=>run(tx),
     saleDte:{create:async({data})=>{assert.equal(data.company_id,'A');assert.equal(data.branch_id,'B');const doc={id:'doc',...data};documents.push(doc);return doc}},saleHistory:{create:async({data})=>{history.push(data);return data}}}
   tx.systemSetting.findMany=async({where})=>where.key==='fel_enabled'&&felEnabled?[{value:'true'}]:[]
   await withMocks({[model]:{prisma:tx,prismaTransaction:tx},[reference]:{nextDocumentReference:async()=> 'V-QA-1'},[payments]:{...require(payments),recordInitialPayment:async()=>{paymentCount++}}},target,async controller=>{
     const req={companyId:'A',branchId:'B',user:{sub:'U'},body:{items:[{product_id:'s',qty:'1.5'}],payment_method_id:1,cash_register_id:'C',idempotency_key:'service-attempt',sales_channel:'WHOLESALE'}}
     const res=jsonResponse()
+    if(disabled){
+      let error;await controller.create(req,res,e=>{error=e})
+      assert.equal(error?.code,'PM_DISABLED');assert.equal(error?.status,409)
+      assert.equal(stored,null);assert.equal(paymentCount,0);return
+    }
     await controller.create(req,res,error=>{throw error})
     assert.equal(res.statusCode,201)
     assert.equal(stored.items,0)

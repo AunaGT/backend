@@ -9,6 +9,7 @@
  */
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
+const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
 const { Prisma } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
@@ -780,10 +781,7 @@ exports.create = async (req, res, next) => {
       // ---- Venta al crédito (cuentas por cobrar) ----
       // Con un método marcado is_credit no entra dinero: queda un saldo por
       // cobrar a nombre del cliente, con vencimiento y sujeto a su límite.
-      const paymentMethod = await tx.paymentMethod.findUnique({
-        where: { id: Number(saleData.payment_method_id) },
-        select: { id: true, name: true, is_credit: true },
-      })
+      const paymentMethod = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:saleData.payment_method_id,purpose:'SALE'})
       if (!paymentMethod) {
         const err = new Error('Método de pago inválido')
         err.status = 400

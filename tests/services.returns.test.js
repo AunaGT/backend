@@ -50,10 +50,13 @@ test('linked receipt sales cannot fabricate a paid replacement sale through the 
 test('historical service refund approves and settles once with no stock facilities or feature flag',async()=>{
   let record={id:'R',type:'REFUND',status:{name:'Pendiente'},requested_resolution:'REFUND_ORIGINAL',approved_resolution:null,total_refund:50,return_items:[{id:1,sale_item_id:1,product_id:'s',qty_returned:'0.5'}],sale:{id:'v',branch_id:'B',total:150,adjusted_total:150,total_returned:0,payment_method_id:1,payment_method:{name:'Efectivo',is_credit:false},sale_items:[original]}}
   const settlements=[]
+  // Full transaction boundary for scoped payment availability.
   const tx={$queryRaw:async()=>[{id:'R'}],return:{findFirst:async()=>record,update:async({data})=>{record={...record,...data,status:{name:data.status_id===2?'Aprobada':'Completada'}};return record}},returnStatus:{findFirst:async({where})=>({id:where.name==='Aprobada'?2:3,name:where.name})},returnItem:{update:async({data})=>Object.assign(record.return_items[0],data)},sale:{update:async({data})=>Object.assign(record.sale,data)},returnSettlement:{findFirst:async()=>settlements[0] || null,create:async({data})=>{const row={id:'settlement',...data};settlements.push(row);return row}},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo'})},cashRegisterSession:{findFirst:async()=>({id:'CS'})}}
   await approveReturn(tx,{id:'R',scope:{branch_id:'B'},companyId:'A',resolution:'REFUND_ORIGINAL',lines:[{return_item_id:1}],policy:{enabledResolutions:['REFUND_ORIGINAL']}})
   const params={id:'R',scope:{branch_id:'B'},companyId:'A',payload:{idempotency_key:'once',lines:[{return_item_id:1}],settlement:{payment_method_id:1,cash_register_session_id:'CS'}}}
   const client={$transaction:fn=>fn(tx)}
+  tx.$executeRaw=async()=>0
+  tx.companyPaymentMethod={findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Efectivo',is_credit:false}})}
   await completeReturn(client,params)
   assert.equal(record.sale.adjusted_total,100)
   assert.equal(record.return_items[0].restock_qty,null)

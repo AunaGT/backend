@@ -97,7 +97,7 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   }
   if (!['CONFIRMED', 'PARTIALLY_FULFILLED', 'FULFILLED', 'EXPIRED'].includes(order.status)) fail('El pedido no admite facturación', 409)
   const lines = selectLines(order.lines, req.body.lines, true)
-  const method = await tx.paymentMethod.findUnique({ where: { id: Number(req.body.payment_method_id) || 0 } })
+  const method = await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.payment_method_id,purpose:'SALE'})
   if (!method) fail('Método de pago inválido')
   const round = value => Math.round(value * 100) / 100
   const originalLines = new Map(order.lines.map(line => [line.id, line]))
