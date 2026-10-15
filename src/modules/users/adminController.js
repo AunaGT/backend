@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs')
-const { prisma } = require('../../models/prisma')
+const { prisma, prismaTransaction } = require('../../models/prisma')
+const roleService = require('./roles/service')
 const { requireCompany } = require('../../middlewares/tenant')
 const { listQuery, assertGrant, permissions, fail, PASSWORD_CHANGE_REQUIRED } = require('../../services/userAccess')
 const { expandPermissions } = require('../../config/permissionDeps')
@@ -174,59 +175,9 @@ exports.activity = handle(async (req, res) => {
   const actorNames = new Map(actors.map(actor => [actor.id, actor.name]))
   res.json({ items: items.map(item => ({ ...item, actor_name: actorNames.get(item.actor_id) || null })), totalItems, page, pageSize, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) })
 })
-exports.getRoles = handle(async (req, res) => res.json(await prisma.role.findMany({ where: rolesWhere(req), orderBy: { name: 'asc' } })))
-const mapRole = role => ({ id: role.id, name: role.name, description: role.description, company_id: role.company_id, protected: !role.company_id, permissions: role.permissions.map(p => p.permission), usersCount: role._count?.memberships || 0 })
-exports.getRolesWithPermissions = handle(async (req, res) => {
-  const { page, pageSize } = listQuery(req.query), where = { AND: [rolesWhere(req)] }
-  if (req.query.search) where.AND.push({ name: { contains: String(req.query.search), mode: 'insensitive' } })
-  if (req.query.module) where.AND.push({ permissions: { some: { permission: { code: { startsWith: `${req.query.module}.` } } } } })
-  if (req.query.kind === 'protected') where.AND.push({ company_id: null })
-  if (req.query.kind === 'custom') where.AND.push({ company_id: req.companyId })
-  const totalItems = await prisma.role.count({ where }), totalPages = Math.max(1, Math.ceil(totalItems / pageSize)), safePage = Math.min(page, totalPages)
-  const roles = await prisma.role.findMany({ where, skip: (safePage - 1) * pageSize, take: pageSize, orderBy: { name: 'asc' }, include: roleInclude })
-  const items = await Promise.all(roles.map(async role => ({ ...mapRole(role), usersCount: await prisma.userCompany.count({ where: { company_id: req.companyId, OR: [{ role_id: role.id }, { role_id: null, user: { role_id: role.id } }] } }) })))
-  const totalRoles = await prisma.role.count({ where: rolesWhere(req) })
-  const assignedUsers = await prisma.userCompany.count({ where: { company_id: req.companyId } })
-  const codes = await prisma.permission.findMany({ select: { code: true } })
-  res.json({ items, page: safePage, pageSize, totalItems, totalPages, nextPage: safePage < totalPages ? safePage + 1 : null, prevPage: safePage > 1 ? safePage - 1 : null, stats: { totalRoles, assignedUsers, modules: new Set(codes.map(p => p.code.split('.')[0])).size } })
-})
-exports.getRoleWithPermissions = handle(async (req, res) => {
-  const role = await prisma.role.findFirst({ where: { id: Number(req.params.id), ...rolesWhere(req) }, include: roleInclude })
-  if (!role) fail(404, 'Rol no encontrado')
-  res.json(mapRole(role))
-})
-async function saveRole(req, res, creating) {
-  const { name, description, permissions: codes } = req.body || {}
-  if (typeof name !== 'string' || !name.trim() || name.trim().length > 50 || ['admin', 'administrador'].includes(name.trim().toLowerCase())) fail(400, 'Nombre de rol inválido')
-  if (description != null && (typeof description !== 'string' || description.length > 500)) fail(400, 'Descripción inválida')
-  if (!Array.isArray(codes) || codes.some(c => typeof c !== 'string')) fail(400, 'Permisos inválidos')
-  const expanded = expandPermissions(codes), all = await prisma.permission.findMany({ where: { code: { in: expanded } } })
-  if (all.length !== new Set(expanded).size) fail(400, 'Hay permisos desconocidos')
-  assertGrant(req.user, { name, permissions: all })
-  const saved = await prisma.$transaction(async tx => {
-    if (!creating) {
-      const old = await tx.role.findFirst({ where: { id: Number(req.params.id), company_id: requireCompany(req) } })
-      if (!old) fail(403, 'Los roles de sistema son de solo lectura; duplica el rol para personalizarlo')
-      if (req.user.role_id === old.id) fail(409, 'No puedes modificar los permisos de tu propio rol')
-    }
-    const data = { name: name.trim(), description: description?.trim() || null }
-    const role = creating ? await tx.role.create({ data: { ...data, company_id: requireCompany(req) } }) : await tx.role.update({ where: { id: Number(req.params.id) }, data })
-    await tx.rolePermission.deleteMany({ where: { role_id: role.id } })
-    if (all.length) await tx.rolePermission.createMany({ data: all.map(p => ({ role_id: role.id, permission_id: p.id })) })
-    await event(tx, req, req.user.sub, `${creating ? 'Creación' : 'Edición'} de rol: ${role.name}`)
-    return tx.role.findUnique({ where: { id: role.id }, include: roleInclude })
-  })
-  res.status(creating ? 201 : 200).json(mapRole(saved))
-}
-exports.createRole = handle((req, res) => saveRole(req, res, true))
-exports.updateRole = handle((req, res) => saveRole(req, res, false))
-exports.deleteRole = handle(async (req, res) => {
-  await prisma.$transaction(async tx => {
-    const role = await tx.role.findFirst({ where: { id: Number(req.params.id), company_id: requireCompany(req) } })
-    if (!role) fail(403, 'Rol protegido o no disponible')
-    if (await tx.user.count({ where: { role_id: role.id } }) || await tx.userCompany.count({ where: { role_id: role.id } })) fail(409, 'Reasigna los usuarios antes de eliminar este rol')
-    await tx.rolePermission.deleteMany({ where: { role_id: role.id } })
-    await tx.role.delete({ where: { id: role.id } })
-  })
-  res.json({ id: Number(req.params.id), message: 'Rol eliminado' })
-})
+exports.getRoles = handle(async (req, res) => res.json(await roleService.listRoles(prisma, req)))
+exports.getRolesWithPermissions = handle(async (req, res) => res.json(await roleService.listRoles(prisma, req, { paged: true })))
+exports.getRoleWithPermissions = handle(async (req, res) => res.json(await roleService.getRole(prisma, req, req.params.id)))
+exports.createRole = handle(async (req, res) => res.status(201).json(await roleService.saveRole(prismaTransaction || prisma, req, null, req.body)))
+exports.updateRole = handle(async (req, res) => res.json(await roleService.saveRole(prismaTransaction || prisma, req, req.params.id, req.body)))
+exports.deleteRole = handle(async (req, res) => res.json(await roleService.deleteRole(prismaTransaction || prisma, req, req.params.id, req.body)))
