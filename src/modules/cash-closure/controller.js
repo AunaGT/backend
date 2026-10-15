@@ -10,64 +10,13 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
-const { applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
+const { applyOpeningFloatToCashBreakdown, applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
 const { getTimezone } = require('../../utils/getTimezone')
 
 const number = (v) => {
   if (v === null || v === undefined) return 0
   const n = typeof v === 'number' ? v : parseFloat(String(v))
   return Number.isFinite(n) ? n : 0
-}
-
-function isCashPaymentMethodName(name) {
-  const n = String(name || '').toLowerCase()
-  return n.includes('efectivo') || n.includes('cash')
-}
-
-/** Suma el fondo inicial al teórico de efectivo (arqueo por turno). */
-async function applyOpeningFloatToCashBreakdown(paymentMethodsMap, openingFloat) {
-  const float = number(openingFloat)
-  if (float <= 0) {
-    return { openingFloat: 0, cashSalesAmount: 0 }
-  }
-
-  let cashEntry = null
-  for (const method of paymentMethodsMap.values()) {
-    if (isCashPaymentMethodName(method.name)) {
-      cashEntry = method
-      break
-    }
-  }
-
-  if (!cashEntry) {
-    const cashPm = await prisma.paymentMethod.findFirst({
-      where: {
-        OR: [
-          { name: { equals: 'Efectivo', mode: 'insensitive' } },
-          { name: { contains: 'efectivo', mode: 'insensitive' } },
-          { name: { contains: 'cash', mode: 'insensitive' } }
-        ]
-      }
-    })
-    if (cashPm) {
-      cashEntry = {
-        id: cashPm.id,
-        name: cashPm.name,
-        theoretical_amount: 0,
-        theoretical_count: 0,
-        sales: []
-      }
-      paymentMethodsMap.set(cashPm.id, cashEntry)
-    }
-  }
-
-  if (!cashEntry) {
-    return { openingFloat: float, cashSalesAmount: 0 }
-  }
-
-  const cashSalesAmount = number(cashEntry.theoretical_amount)
-  cashEntry.theoretical_amount = cashSalesAmount + float
-  return { openingFloat: float, cashSalesAmount }
 }
 
 /** Verifica permiso según tipo de cierre (día = todos, own = solo mi cierre). Devuelve { allowed } o { allowed: false, status, message }. */
@@ -304,6 +253,7 @@ exports.calculateTheoretical = async (req, res, next) => {
         paymentMethodsMap.set(methodKey, {
           id: methodKey,
           name: methodName,
+          settlement_kind:sale.payment_method.settlement_kind??null,
           theoretical_amount: 0,
           theoretical_count: 0,
           sales: []
@@ -365,6 +315,7 @@ exports.calculateTheoretical = async (req, res, next) => {
         paymentMethodsMap.set(methodKey, {
           id: methodKey,
           name: col.payment_method.name,
+          settlement_kind:col.payment_method.settlement_kind??null,
           theoretical_amount: 0,
           theoretical_count: 0,
           sales: []
@@ -405,7 +356,7 @@ exports.calculateTheoretical = async (req, res, next) => {
 
     let theoreticalTotal = theoreticalSales - theoreticalReturns + theoreticalCollections
 
-    const cashDetail = await applyOpeningFloatToCashBreakdown(paymentMethodsMap, sessionOpeningFloat)
+    const cashDetail = await applyOpeningFloatToCashBreakdown(prisma,req.companyId,paymentMethodsMap, sessionOpeningFloat)
     if (cashDetail.openingFloat > 0) {
       theoreticalTotal += cashDetail.openingFloat
     }
@@ -419,6 +370,7 @@ exports.calculateTheoretical = async (req, res, next) => {
     const paymentBreakdown = Array.from(paymentMethodsMap.values()).map(method => ({
       payment_method_id: method.id,
       payment_method_name: method.name,
+      settlement_kind:method.settlement_kind??null,
       theoretical_amount: Number(method.theoretical_amount.toFixed(2)),
       theoretical_count: method.theoretical_count,
       sales_detail: method.sales

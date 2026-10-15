@@ -1,4 +1,5 @@
 const {money}=require('../../modules/receivables/domain/paymentAllocations')
+const {isCashMethod}=require('../paymentMethods/behavior')
 const {resolveEffectiveModules}=require('../../modules/platform/registry')
 const {AccountingError,lockAccountingCompany,getEngagementAccounts,createEntry}=require('./core')
 const sources={RECEIVE:'CUSTOMER_ADVANCE',APPLY:'CUSTOMER_ADVANCE_APPLIED',REFUND:'CUSTOMER_PAYMENT_REFUND'}
@@ -39,7 +40,7 @@ async function postEngagementMovement(tx,scope,movement){
   const old=await tx.journalEntry.findFirst({where:{company_id:scope.companyId,source_type:sourceType,source_id:movement.id},select:{id:true}})
   if(old)return old.id
   const accounts=await getEngagementAccounts(tx,scope.companyId)
-  const isCash=/efectivo|cash/.test(String(source.method?.name||'').toLowerCase().normalize('NFD').replace(/\p{M}/gu,''))
+  const isCash=isCashMethod(source.method,name=>/efectivo|cash/.test(name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'')))
   const lines=buildEngagementPosting({kind:movement.kind,amount:source.amount,isCash},accounts)
   const entry=await createEntry(tx,{company_id:scope.companyId,branch_id:source.branchId,date:source.date,created_by:source.actorId,
     description:movement.kind==='RECEIVE'?'Anticipo de contratación':movement.kind==='APPLY'?'Aplicación de anticipo a venta':'Devolución efectiva de anticipo',source_type:sourceType,source_id:movement.id,lines})

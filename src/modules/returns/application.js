@@ -253,7 +253,7 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
   if (resolution === 'REFUND_TRANSFER' && !externalReference) {
     throw invalid('La transferencia de reintegro requiere una referencia')
   }
-  const isCash = resolution === 'REFUND_CASH' || /efectivo|cash/i.test(method.name)
+  const isCash = resolution === 'REFUND_CASH' || require('../../services/paymentMethods/behavior').isCashMethod(method,name=>/efectivo|cash/i.test(name))
   const cashSessionId = String(settlement.cash_register_session_id || '').trim() || null
   if (isCash && !cashSessionId) throw invalid('El reintegro en efectivo requiere una sesión de caja abierta')
   if (cashSessionId) {

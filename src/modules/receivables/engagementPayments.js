@@ -1,4 +1,5 @@
 const {Prisma}=require('@prisma/client')
+const {isCashMethod}=require('../../services/paymentMethods/behavior')
 const {createHash}=require('node:crypto')
 const {money,allocationForReceipt,allocationSelect}=require('./domain/paymentAllocations')
 const {lockCustomer,syncSaleStatus,ReceivableError}=require('./domain/receivables')
@@ -44,7 +45,7 @@ async function createScopedReceipt(tx,scope,engagement,input){
 }
 async function validateScopedMethod(tx,scope,input,purpose='RECEIPT'){
   const method=await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose})
-  const cash=/efectivo|cash/.test(method.name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,''))
+  const cash=isCashMethod(method,name=>/efectivo|cash/.test(name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'')))
   if(cash&&!input.cashRegisterSessionId)fail('CASH_SESSION_REQUIRED','Abre un turno de caja antes de recibir efectivo')
   if(input.cashRegisterSessionId){
     await tx.$queryRaw`SELECT id FROM cash_register_sessions WHERE id=${input.cashRegisterSessionId}::uuid FOR UPDATE`
@@ -108,7 +109,7 @@ async function confirmScopedRefund(tx,scope,engagement,input){
   if(!refund||refund.status!=='REQUESTED'||!refund.amount.eq(input.amount))fail('REFUND_NOT_PENDING','Selecciona la solicitud pendiente y su importe original',409)
   const c=await reservedReceipt(tx,scope,engagement,input),now=new Date()
   const method=await validateScopedMethod(tx,scope,{...input,paidAt:now.toISOString()},'REFUND')
-  if(!/efectivo|cash/i.test(method.name)&&!input.reference)fail('REFUND_REFERENCE_REQUIRED','Registra la referencia real del reintegro')
+  if(!isCashMethod(method,name=>/efectivo|cash/i.test(name))&&!input.reference)fail('REFUND_REFERENCE_REQUIRED','Registra la referencia real del reintegro')
   const effective=await tx.customerPaymentRefund.update({where:{id:refund.id},data:{status:'CONFIRMED',confirmed_at:now,confirmed_key:input.idempotencyKey,payment_method_id:method.id,cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||'',registered_by:scope.userId}})
   await decreaseCommitment(tx,c,refund.amount,'REFUNDED')
   await tx.paymentAllocationEvent.create({data:allocationData(scope,engagement,c.payment,c,input,'REFUNDED',refund.amount)})

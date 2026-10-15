@@ -15,6 +15,7 @@
  */
 
 const { Prisma } = require('@prisma/client')
+const { isCashMethod } = require('../paymentMethods/behavior')
 const { splitIva, round2 } = require('./logic')
 const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, getOptionalAccount, AccountingError } = require('./core')
 
@@ -52,13 +53,11 @@ async function pendingIds(prisma, sourceType, companyId, candidatos) {
  *
  * El crédito se decide por la bandera `is_credit` y no por el nombre: un método
  * llamado «Crédito 30d» o con un typo caía en Bancos sin que nada lo avisara.
- * El efectivo sí sigue por nombre porque no tiene bandera propia y el catálogo
- * lo trae sembrado con ese nombre exacto.
+ * Los registros legados conservan su clasificación por nombre.
  */
 function cashOrBank(defaults, paymentMethod) {
   if (paymentMethod?.is_credit) return defaults.receivables
-  const name = String(paymentMethod?.name || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
-  if (name.includes('efectivo')) return defaults.cash
+  if (isCashMethod(paymentMethod,name=>name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'').includes('efectivo'))) return defaults.cash
   return defaults.bank
 }
 
@@ -184,7 +183,7 @@ async function postPendingOperations(prisma, userId, companyId) {
       id: true, reference: true, date: true, total: true, customer: true, branch_id: true,
       settlement_source:true,
       customerContact: { select: { name: true } },
-      payment_method: { select: { name: true, is_credit: true } },
+      payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
       sale_items: { select: { qty: true,item_kind:true, unit_cost: true, product: { select: { cost: true,kind:true } } } },
     },
     orderBy: { date: 'asc' },
@@ -224,7 +223,7 @@ async function postPendingOperations(prisma, userId, companyId) {
         select: {
           reference: true, customer: true, branch_id: true,settlement_source:true,
           customerContact: { select: { name: true } },
-          payment_method: { select: { name: true, is_credit: true } },
+          payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
         },
       },
       return_items: {
@@ -238,7 +237,7 @@ async function postPendingOperations(prisma, userId, companyId) {
       settlements: {
         select: {
           kind: true, amount: true,
-          payment_method: { select: { name: true, is_credit: true } },
+          payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
         },
       },
     },
@@ -380,7 +379,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     select: {
       id: true, amount: true, paid_at: true, branch_id: true, kind: true,
       customer: { select: { name: true } },
-      payment_method: { select: { name: true, is_credit: true } },
+      payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
     },
     orderBy: { paid_at: 'asc' },
   })
