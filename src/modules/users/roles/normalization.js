@@ -66,4 +66,24 @@ function verifyRoleNormalization(before,after) {
  if(JSON.stringify(before.users.map(u=>u.id))!==JSON.stringify(after.users.map(u=>u.id)))changes.push('Cambiaron usuarios')
  return {ok:changes.length===0,changes,unresolved:planRoleNormalization(after).unresolved}
 }
-module.exports={planRoleNormalization,readRoleSnapshot,snapshotHash,verifyRoleNormalization}
+async function applyRoleNormalization(tx,snapshot) {
+ const plan=planRoleNormalization(snapshot)
+ if(plan.conflicts.length)throw Object.assign(new Error('Conflictos de normalización; no se aplicó ningún cambio'),{conflicts:plan.conflicts})
+ let adminId=plan.canonicalAdminId
+ if(adminId)await tx.role.update({where:{id:adminId},data:{name:'admin',system_key:'ADMIN'}})
+ else adminId=(await tx.role.upsert({where:{system_key:'ADMIN'},update:{},create:{name:'admin',system_key:'ADMIN'}})).id
+ if(plan.adminAliasIds.length) {
+  await tx.user.updateMany({where:{role_id:{in:plan.adminAliasIds}},data:{role_id:adminId}})
+  await tx.userCompany.updateMany({where:{role_id:{in:plan.adminAliasIds}},data:{role_id:adminId}})
+ }
+ if(plan.copies.length)await tx.role.createMany({data:plan.copies.map(c=>({company_id:c.companyId,legacy_role_id:c.sourceId,name:c.name,description:c.description}))})
+ const local=await tx.role.findMany({where:{legacy_role_id:{in:[...new Set(plan.membershipChanges.map(c=>c.sourceId))]}}})
+ const bySource=new Map(local.map(r=>[`${r.company_id}:${r.legacy_role_id}`,r.id]))
+ const permissionRows=plan.copies.flatMap(c=>c.permissionIds.map(permission_id=>({role_id:bySource.get(`${c.companyId}:${c.sourceId}`),permission_id})))
+ if(permissionRows.length)await tx.rolePermission.createMany({data:permissionRows,skipDuplicates:true})
+ for(const c of plan.membershipChanges)await tx.userCompany.update({where:{user_id_company_id:{user_id:c.userId,company_id:c.companyId}},data:{role_id:bySource.get(`${c.companyId}:${c.sourceId}`)}})
+ const after=await readRoleSnapshot(tx),verification=verifyRoleNormalization(snapshot,after)
+ if(!verification.ok)throw Object.assign(new Error('La normalización alteraría accesos; transacción cancelada'),{verification})
+ return {plan,verification,after}
+}
+module.exports={planRoleNormalization,readRoleSnapshot,snapshotHash,verifyRoleNormalization,applyRoleNormalization}

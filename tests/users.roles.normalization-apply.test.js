@@ -1,0 +1,21 @@
+const test=require('node:test'),assert=require('node:assert/strict')
+const api=require('../src/modules/users/roles/normalization'),{resolveVisibleRole}=require('../src/modules/users/roles/policy')
+const {roleNormalizationFixture,normalizationStore}=require('./helpers/roleNormalizationFixture.cjs')
+test('normalizer preserves access across companies, is repeatable, aliases are read-only',async()=>{
+ assert.equal(typeof api.applyRoleNormalization,'function')
+ const before=roleNormalizationFixture({shared:true,adminAlias:true}),f=normalizationStore(before)
+ await f.db.$transaction(tx=>api.applyRoleNormalization(tx,before))
+ const after=f.snapshot();assert.equal(api.verifyRoleNormalization(before,after).ok,true)
+ assert.equal(after.roles.filter(r=>r.legacy_role_id===61).length,2)
+ await f.db.$transaction(tx=>api.applyRoleNormalization(tx,after));assert.deepEqual(f.snapshot(),after)
+ assert.equal((await resolveVisibleRole(f.db,'company-a',61)).company_id,'company-a')
+ assert.equal(await resolveVisibleRole(f.db,'company-a',61,{alias:false}),null)
+ assert.equal(await resolveVisibleRole(f.db,'company-c',61),null)
+})
+test('normalization conflict writes nothing and failed writes rollback',async()=>{
+ assert.equal(typeof api.applyRoleNormalization,'function')
+ const before=roleNormalizationFixture(),f=normalizationStore(before);f.db.failWrite=true
+ await assert.rejects(f.db.$transaction(tx=>api.applyRoleNormalization(tx,before)),/write failed/);assert.deepEqual(f.snapshot(),before)
+ before.roles.push({id:99,name:' admin ',company_id:null,permissions:[]});const g=normalizationStore(before)
+ await assert.rejects(g.db.$transaction(tx=>api.applyRoleNormalization(tx,before)),/conflict/i);assert.deepEqual(g.snapshot(),before)
+})
