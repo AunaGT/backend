@@ -115,6 +115,8 @@ exports.update = handle(async (req, res) => {
   const updated = await (prismaTransaction || prisma).$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM companies WHERE id = ${requireCompany(req)}::uuid FOR UPDATE`
     await roleService.freshActor(tx, req, ['users.edit'])
+    // All companies serialize the shared fallback before locking any membership.
+    if (body.role_id !== undefined) await tx.$queryRaw`SELECT id FROM users WHERE id=${req.params.id}::uuid AND EXISTS (SELECT 1 FROM user_companies m WHERE m.user_id=users.id AND m.company_id=${req.companyId}::uuid) FOR UPDATE`
     const user = await target(tx, req)
     if (user._count.user_companies > 1 && req.user.sub !== user.id && ((body.name !== undefined && body.name !== user.name) || (body.email !== undefined && body.email !== user.email) || body.password)) fail(403, 'La identidad de una cuenta compartida solo puede editarla su titular')
     if (body.password) { data.password = await bcrypt.hash(body.password, 10); data.auth_version = { increment: 1 }; data.password_changed_at = null }
