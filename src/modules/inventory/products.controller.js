@@ -1789,7 +1789,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 
       const settledPurchase = await require('../merchandise/payables/compatibility').settleNewPurchase(
         tx, require('../merchandise/payables/access').payableScope(req), incomingMerchandise,
-        { payment_status, paid_at, payment_reference }
+        { payment_status, paid_at, payment_reference, payment_method_id:body.payment_method_id }
       )
       if (settledPurchase) Object.assign(incomingMerchandise, {
         payment_status: settledPurchase.payment_status,

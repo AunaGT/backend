@@ -1,6 +1,26 @@
 const test=require('node:test'),assert=require('node:assert/strict')
 const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
 const {Prisma}=require('@prisma/client')
+test('paid incoming merchandise forwards its selected real medium to supplier receipt',async()=>{
+  const {makePayablesFixture}=require('./helpers/payablesFixture.cjs'),f=makePayablesFixture(),row=f.stored.entries[0]
+  const originalSupplier=f.db.supplier.findFirst
+  f.db.supplier.findFirst=async args=>{const r=await originalSupplier(args);return r?{...r,supplier_payment_terms:[]}:null}
+  f.db.supplier.findUnique=async()=>({id:row.supplier_id});f.db.supplier.update=async()=>({})
+  f.db.product={findMany:async()=>[{id:'P',name:'Bien',kind:'STANDARD',supplier_id:row.supplier_id,cost:10,stock:0}],update:async()=>({})}
+  f.db.productStock={aggregate:async()=>({_sum:{stock:0}})}
+  f.db.incomingMerchandise.create=async()=>row
+  f.db.purchaseLog={create:async()=>({})};f.db.incomingMerchandiseItem={create:async()=>({})}
+  const mocks={
+    [require.resolve('../src/models/prisma')]:{prisma:f.db,prismaTransaction:f.db},
+    [require.resolve('../src/services/stockLocations')]:{defaultLocationId:async()=> 'LOC'},
+    [require.resolve('../src/services/bomStock')]:{restoreStockMap:async()=>[{stock:10,min_stock:0}]},
+    [require.resolve('../src/services/stockAlerts')]:{ensureStockAlert:async()=>{}},
+  }
+  await withMocks(mocks,require.resolve('../src/modules/inventory/products.controller'),async ctrl=>{
+    await ctrl.registerIncomingMerchandise({companyId:f.scope.companyId,branchId:f.scope.branchId,branchIds:f.scope.branchIds,user:{sub:f.scope.userId,permissions:f.scope.permissions},body:{supplier_id:row.supplier_id,items:[{product_id:'P',quantity:10,unit_cost:10}],payment_status:'PAID',payment_method_id:1}},jsonResponse(),e=>{throw e})
+  })
+  assert.equal(f.stored.payments.length,1);assert.equal(f.stored.payments[0].payment_method_id,1)
+})
 test('legacy order conversion rejects disabled medium before a sale is written',async()=>{
   let writes=0
   const method={id:7,name:'Tarjeta',is_credit:false}

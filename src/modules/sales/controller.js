@@ -195,7 +195,12 @@ exports.list = async (req, res, next) => {
       // filter by related status name (e.g., ?status=pendiente)
       where.status = { name: String(status) }
     }
-    if (paymentName) {
+    if (req.query.payment_method_id !== undefined) {
+      const raw=req.query.payment_method_id
+      if(!['number','string'].includes(typeof raw)||!/^[1-9]\d*$/.test(String(raw))||!Number.isSafeInteger(Number(raw))||Number(raw)>2147483647)
+        return res.status(400).json({message:'Método de pago inválido'})
+      where.payment_method_id=Number(raw)
+    } else if (paymentName) {
       where.payment_method = { name: { equals: paymentName, mode: 'insensitive' } }
     }
 
