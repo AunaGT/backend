@@ -14,6 +14,8 @@ const { PrismaClient } = require('@prisma/client')
 const { ensureSystemAdmin } = require('../src/modules/users/roles/seed')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 const { seedCompanyModules } = require('../src/modules/platform/service')
+const { ensurePaymentMethodBasics } = require('../src/services/paymentMethods/basics')
+const { seedCompanyPaymentMethods } = require('../src/services/paymentMethods/seed')
 const prisma = new PrismaClient()
 
 // Mismos ids que la migración 20260811120000_multi_company_branches, para que
@@ -75,23 +77,17 @@ async function main() {
   const statuses = ['Activa', 'Resuelta', 'Pendiente']
   const stockStatuses = ['Disponible', 'Bajo', 'Agotado']
   const saleStatuses = ['Completada', 'Cancelada']
-  // is_credit marca los que generan cuenta por cobrar en vez de entrar a caja
-  const paymentMethods = [
-    { name: 'Efectivo', is_credit: false },
-    { name: 'Tarjeta', is_credit: false },
-    { name: 'Transferencia', is_credit: false },
-    { name: 'Crédito', is_credit: true },
-  ]
   const alertTypes = ['Stock Bajo', 'Sin Stock', 'Vencimiento', 'Precio']
   const alertPriorities = ['Baja', 'Media', 'Alta', 'Crítica']
   const returnStatuses = ['Pendiente', 'Aprobada', 'Rechazada', 'Completada']
 
   await prisma.status.createMany({ data: statuses.map(name => ({ name })), skipDuplicates: true })
   await prisma.stockStatus.createMany({ data: stockStatuses.map(name => ({ name })), skipDuplicates: true })
-  await prisma.paymentMethod.createMany({ data: paymentMethods, skipDuplicates: true })
-  // skipDuplicates deja intacto un «Crédito» preexistente sin la bandera, que es
-  // justo el caso de las empresas que ya lo habían creado a mano.
-  await prisma.paymentMethod.updateMany({ where: { name: 'Crédito' }, data: { is_credit: true } })
+  await prisma.$transaction(async tx => {
+    await ensurePaymentMethodBasics(tx)
+    const companies=await tx.company.findMany({select:{id:true}})
+    for(const company of companies) await seedCompanyPaymentMethods(tx,company.id)
+  },{timeout:30000,maxWait:15000})
   await prisma.saleStatus.createMany({ data: saleStatuses.map(name => ({ name })), skipDuplicates: true })
   await prisma.alertType.createMany({ data: alertTypes.map(name => ({ name })), skipDuplicates: true })
   await prisma.alertPriority.createMany({ data: alertPriorities.map(name => ({ name })), skipDuplicates: true })

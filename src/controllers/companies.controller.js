@@ -12,6 +12,7 @@ const { prisma, prismaTransaction } = require('../models/prisma')
 const { isSystemAdmin } = require('../modules/users/roles/policy')
 const { lockRoleCompany, resolveAssignableRole } = require('../modules/users/roles/service')
 const { seedCompanySettings } = require('../services/companySettings')
+const { seedCompanyPaymentMethods } = require('../services/paymentMethods/seed')
 const { seedChartOfAccounts } = require('../services/accounting/seedChartOfAccounts')
 const { invalidateSystemConfigCache } = require('../utils/getTimezone')
 const { seedCompanyModules } = require('../modules/platform/service')
@@ -63,6 +64,7 @@ exports.create = async (req, res, next) => {
       await tx.userBranch.create({ data: { user_id: req.user.sub, branch_id: branch.id } })
       // Nace configurada: moneda, zona horaria, denominaciones y sus datos fiscales
       await seedCompanySettings(tx, company.id, company)
+      await seedCompanyPaymentMethods(tx, company.id)
       // Nace con catálogo de cuentas y mapeo por defecto: sin esto no puede contabilizar nada
       await seedChartOfAccounts(tx, company.id)
       // Compatibilidad inicial: las empresas nuevas reciben el catálogo modular

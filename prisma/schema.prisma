@@ -389,6 +389,8 @@ model AppointmentRequest {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  own_payment_methods PaymentMethod[] @relation("CompanyOwnedPaymentMethods")
+  payment_method_preferences CompanyPaymentMethod[]
   roles Role[]
   supplier_payments SupplierPayment[]
   merchandise_payment_events MerchandisePaymentAuditEvent[]
@@ -836,11 +838,35 @@ enum ReturnSettlementKind {
   CUSTOMER_CREDIT
 }
 
+enum PaymentMethodSettlementKind {
+  CASH
+  BANK
+  CREDIT
+}
+
+model CompanyPaymentMethod {
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  payment_method_id Int
+  payment_method PaymentMethod @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
+  enabled Boolean @default(true)
+  position Int @default(0)
+  updated_at DateTime @default(now()) @updatedAt
+  @@id([company_id, payment_method_id])
+  @@index([company_id, enabled, position])
+  @@map("company_payment_methods")
+}
+
 model PaymentMethod {
+  company_id String? @db.Uuid
+  company Company? @relation("CompanyOwnedPaymentMethods", fields: [company_id], references: [id], onDelete: Restrict)
+  base_code String? @unique @db.VarChar(20)
+  settlement_kind PaymentMethodSettlementKind?
+  company_preferences CompanyPaymentMethod[]
   supplier_payments SupplierPayment[]
   customer_payment_refunds CustomerPaymentRefund[]
   id                    Int                  @id @default(autoincrement())
-  name                  String               @unique @db.VarChar(50)
+  name                  String               @db.VarChar(50)
   /// Venta a crédito: no entra dinero al cobrar, genera cuenta por cobrar.
   /// Es bandera y no un match por nombre porque «Crédito 30d» o un typo
   /// mandaban la venta a Bancos en silencio (ver cashOrBank en postingEngine).
@@ -850,6 +876,7 @@ model PaymentMethod {
   cash_closure_payments CashClosurePayment[] // Relación para saber qué método de pago se usó en cada línea del cierre
   return_settlements    ReturnSettlement[]
 
+  @@unique([company_id, name])
   @@map("payment_methods")
 }
 
