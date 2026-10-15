@@ -1,0 +1,10 @@
+const test=require('node:test'),assert=require('node:assert/strict')
+const {isCashMethod}=require('../src/services/paymentMethods/behavior')
+test('explicit type wins over labels while null keeps each legacy rule',()=>{
+  const exact=n=>n.toLowerCase()==='efectivo',partial=n=>/cash|efectivo/i.test(n)
+  assert.equal(isCashMethod({name:'Mostrador',settlement_kind:'CASH'},exact),true)
+  assert.equal(isCashMethod({name:'Efectivo digital',settlement_kind:'BANK'},partial),false)
+  assert.equal(isCashMethod({name:'Cash'},exact),false)
+  assert.equal(isCashMethod({name:'Cash'},partial),true)
+  assert.equal(isCashMethod(null,partial),false)
+})
