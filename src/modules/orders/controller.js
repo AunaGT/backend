@@ -579,7 +579,7 @@ exports.create = async (req, res, next) => {
         salesChannel,
       })
 
-      let validUntil = validUntilRaw ? new Date(validUntilRaw) : await defaultOrderValidUntil(tx)
+      let validUntil = validUntilRaw ? new Date(validUntilRaw) : await defaultOrderValidUntil(tx, req.companyId)
       if (Number.isNaN(validUntil.getTime())) {
         const err = new Error('valid_until inválido')
         err.status = 400
@@ -663,7 +663,7 @@ exports.update = async (req, res, next) => {
 
       let validUntil = existing.valid_until
       if (validUntilRaw !== undefined) {
-        validUntil = validUntilRaw ? new Date(validUntilRaw) : await defaultOrderValidUntil(tx)
+        validUntil = validUntilRaw ? new Date(validUntilRaw) : await defaultOrderValidUntil(tx, req.companyId)
         if (Number.isNaN(validUntil.getTime())) {
           const err = new Error('valid_until inválido')
           err.status = 400

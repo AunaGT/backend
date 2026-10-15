@@ -14,11 +14,14 @@ function parsePositiveInt(raw, fallback) {
 }
 
 async function getCommercialDocSettings(client, companyId) {
+  if (typeof companyId !== 'string' || !companyId.trim()) {
+    throw Object.assign(new Error('Empresa requerida para configuración comercial'), { status: 403 })
+  }
   const db = client || prisma
   const rows = await db.systemSetting.findMany({
     where: {
       key: { in: ['quote_validity_days', 'order_validity_days', 'quote_soft_hold_hours'] },
-      ...(companyId ? { company_id: companyId } : {}),
+      company_id: companyId,
     },
   })
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]))
@@ -40,8 +43,8 @@ async function defaultQuoteValidUntil(client, companyId) {
   return addDays(quoteValidityDays)
 }
 
-async function defaultOrderValidUntil(client) {
-  const { orderValidityDays } = await getCommercialDocSettings(client)
+async function defaultOrderValidUntil(client, companyId) {
+  const { orderValidityDays } = await getCommercialDocSettings(client, companyId)
   return addDays(orderValidityDays)
 }
 
