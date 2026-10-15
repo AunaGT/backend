@@ -28,6 +28,8 @@ for (const failModules of [false, true]) {
         return { id: model === 'company' ? 'company-a' : model === 'account' ? `account-${data.code}` : 'branch-a', ...data }
       }
       const tx = {
+        paymentMethod: { findMany: async () => [1,2,3,4].map(id=>({id})) },
+        companyPaymentMethod: { createMany: async ({data}) => query('paymentPreferences',data) },
         company: { create: async ({ data }) => query('company', data) },
         branch: { create: async ({ data }) => query('branch', data) },
         userCompany: { create: async ({ data }) => query('userCompany', data) },
@@ -61,6 +63,7 @@ for (const failModules of [false, true]) {
     }
     assert.equal(error, undefined)
     assert.equal(status, 201)
+    assert.equal(committed.find(row=>row.model==='paymentPreferences').data.length,4)
     assert.equal(response.code, 'QA')
     assert.deepEqual(response.branches, [{ id: 'branch-a', company_id: 'company-a', name: 'Principal', code: 'PRIN', is_default: true }])
     assert.equal(committed.filter(row => row.model === 'account').length, 34)
