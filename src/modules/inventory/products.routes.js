@@ -45,6 +45,15 @@ const uploadImage = multer({
 })
 
 const router = Router()
+const BarcodeLabels = require('./barcodeLabels/controller')
+router.get('/shelf-labels/layout', Auth, hasPermission('products.view'), BarcodeLabels.shelfLayout)
+router.put('/shelf-labels/layout', Auth, hasPermission('products.view'), hasPermission('settings.manage'), BarcodeLabels.shelfSaveLayout)
+router.get('/shelf-labels/candidates', Auth, hasPermission('products.view'), BarcodeLabels.shelfCandidates)
+router.post('/shelf-labels/prepare', Auth, hasPermission('products.view'), hasPermission('products.export', 'reports.view'), BarcodeLabels.shelfPrepare)
+router.get('/barcode-labels/layout', Auth, hasPermission('products.view'), BarcodeLabels.layout)
+router.put('/barcode-labels/layout', Auth, hasPermission('products.view'), hasPermission('settings.manage'), BarcodeLabels.saveLayout)
+router.get('/barcode-labels/candidates', Auth, hasPermission('products.view'), BarcodeLabels.candidates)
+router.post('/barcode-labels/prepare', Auth, hasPermission('products.view'), hasPermission('products.export', 'reports.view'), BarcodeLabels.prepare)
 
 /**
  * @openapi

@@ -1,0 +1,11 @@
+const {prisma,prismaTransaction}=require('../../../models/prisma')
+const {barcodeScope}=require('./access'),layouts=require('./layouts'),{prepareBarcodeLabels}=require('./preparations')
+const handle=(fn,status=200)=>async(req,res,next)=>{try{const value=await fn(req,barcodeScope(req));return res.status(status).json(value)}catch(e){if(e.status)return res.status(e.status).json({code:e.code,message:e.message,...(e.productId?{productId:e.productId}:{}),...(e.field?{field:e.field}:{})});next(e)}}
+exports.layout=handle((req,scope)=>layouts.readBarcodeLayout(prisma,scope))
+exports.saveLayout=handle((req,scope)=>layouts.saveBarcodeLayout(prismaTransaction,scope,req.body))
+exports.candidates=handle((req,scope)=>layouts.listBarcodeCandidates(prisma,scope,req.query))
+exports.prepare=handle((req,scope)=>prepareBarcodeLabels(prismaTransaction,scope,req.body),201)
+exports.shelfLayout=handle((req,scope)=>layouts.readBarcodeLayout(prisma,scope,'shelf'))
+exports.shelfSaveLayout=handle((req,scope)=>layouts.saveBarcodeLayout(prismaTransaction,scope,req.body,'shelf'))
+exports.shelfCandidates=handle((req,scope)=>layouts.listBarcodeCandidates(prisma,scope,req.query,'shelf'))
+exports.shelfPrepare=handle((req,scope)=>require('./shelfPrices').prepareShelfLabels(prismaTransaction,scope,req.body),201)

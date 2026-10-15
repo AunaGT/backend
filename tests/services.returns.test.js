@@ -34,6 +34,19 @@ test('service approval and completion have no physical disposition and reject in
   assert.equal(plan.lines[0].stock_location_id,null)
   assert.throws(()=>buildCompletionPlan(record,{idempotency_key:'return-service',lines:[{return_item_id:1,received_qty:1,disposition:'SELLABLE',stock_location_id:'L'}]}),/servicio/i)
 })
+test('an explicit sale ID cannot expose a draft in return eligibility',async()=>{
+  const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
+  const model=require.resolve('../src/models/prisma'),target=require.resolve('../src/modules/returns/controller')
+  const db={systemSetting:{findUnique:async()=>null},sale:{findFirst:async()=>({id:'draft-id'}),findMany:async({where})=>{assert.deepEqual(where.status,{name:'Completada'});return []}}}
+  await withMocks({[model]:{prisma:db,prismaTransaction:db}},target,async controller=>{
+    const res=jsonResponse();await controller.eligibleSales({companyId:'A',branchId:'B',query:{sale_id:'draft-id'}},res,e=>{throw e})
+    assert.equal(res.body.totalItems,0)
+  })
+})
+test('linked receipt sales cannot fabricate a paid replacement sale through the legacy exchange shortcut',()=>{
+  const record={status:{name:'Aprobada'},approved_resolution:'EXCHANGE',total_refund:30,sale:{total:100,total_returned:0,settlement_source:'ENGAGEMENT_RECEIPTS'},return_items:[{id:1,product_id:'s',qty_returned:'0.3',sale_item:original}]}
+  assert.throws(()=>buildCompletionPlan(record,{idempotency_key:'linked-exchange',lines:[{return_item_id:1}]}),/saldo a favor|devolución/i)
+})
 test('historical service refund approves and settles once with no stock facilities or feature flag',async()=>{
   let record={id:'R',type:'REFUND',status:{name:'Pendiente'},requested_resolution:'REFUND_ORIGINAL',approved_resolution:null,total_refund:50,return_items:[{id:1,sale_item_id:1,product_id:'s',qty_returned:'0.5'}],sale:{id:'v',branch_id:'B',total:150,adjusted_total:150,total_returned:0,payment_method_id:1,payment_method:{name:'Efectivo',is_credit:false},sale_items:[original]}}
   const settlements=[]

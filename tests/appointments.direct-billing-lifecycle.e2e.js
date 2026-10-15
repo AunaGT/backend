@@ -1,0 +1,57 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto')
+const {withCommercialAgendaTestDb}=require('./helpers/commercialAgendaFixture.cjs')
+const {activityInput}=require('./helpers/agendaActivityFixture.cjs')
+const A=require('../src/modules/appointments/application'),Activities=require('../src/modules/appointments/activities'),B=require('../src/modules/appointments/billingSources')
+const key=()=>crypto.randomUUID(),action=(name,version=1)=>({action:name,expectedVersion:version,idempotencyKey:key(),reason:name==='CANCEL'?'Solicitud del cliente':''})
+test('real private handlers return a read-only200 preview and idempotent201 preparation',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs'),b=await A.createBooking(db,scope,f.individualInput)
+  await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db,prismaTransaction:db}},require.resolve('../src/modules/appointments/controller'),async controller=>{
+    const req={companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId,role_name:'admin'},params:{kind:'bookings',id:b.id},body:{}}
+    const preview=jsonResponse();await controller.billingSourcePreview(req,preview,e=>{throw e})
+    assert.equal(preview.statusCode,200);assert.equal(await db.appointmentEngagement.count(),0)
+    req.body={expectedVersion:preview.body.origin.version,reviewHash:preview.body.reviewHash,idempotencyKey:key()}
+    const result=jsonResponse();await controller.prepareSourceBilling(req,result,e=>{throw e});assert.equal(result.statusCode,201)
+    const retry=jsonResponse();await controller.prepareSourceBilling(req,retry,e=>{throw e});assert.equal(retry.statusCode,201);assert.equal(retry.body.id,result.body.id)
+    assert.equal(await db.appointmentEngagement.count(),1)
+  })
+}))
+async function prepare(db,scope,kind,id,choices={}){const p=await B.previewBillingSource(db,scope,kind,id,choices);return B.prepareBillingSource(db,scope,kind,id,{...choices,expectedVersion:p.origin.version,reviewHash:p.reviewHash,idempotencyKey:key()})}
+test('class completion does not complete participant billing, but individual attendance does',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const other=await db.supplier.create({data:{company_id:scope.companyId,name:'Otro cliente',contact:'QA',party_type:'CUSTOMER'}})
+  const second=await A.enrollBooking(db,scope,f.groupSessionId,{contactId:other.id,quantity:'1',notes:'',idempotencyKey:key()})
+  const one=await prepare(db,scope,'bookings',f.confirmedBookingId),two=await prepare(db,scope,'bookings',second.id)
+  assert.notEqual(one.id,two.id)
+  const start=new Date(Date.now()-3600000),end=new Date(Date.now()-1800000)
+  await db.appointmentSession.update({where:{id:f.groupSessionId},data:{status:'IN_PROGRESS',starts_at:start,ends_at:end,occupied_from:start,occupied_until:end}})
+  await A.transitionSession(db,scope,f.groupSessionId,action('COMPLETE'))
+  assert.deepEqual((await db.appointmentEngagementSchedule.findMany()).map(r=>r.state),['COMMITTED','COMMITTED'])
+  assert.equal((await db.appointmentBooking.findUnique({where:{id:second.id}})).status,'CONFIRMED')
+  let b=await A.transitionBooking(db,scope,f.confirmedBookingId,action('ARRIVE'))
+  b=await A.transitionBooking(db,scope,b.id,action('START',b.version))
+  await A.transitionBooking(db,scope,b.id,action('COMPLETE',b.version))
+  assert.equal((await db.appointmentEngagementSchedule.findFirst({where:{booking_id:b.id}})).state,'COMPLETED')
+  assert.equal((await db.appointmentEngagementSchedule.findFirst({where:{booking_id:second.id}})).state,'COMMITTED')
+  assert.equal(await db.customerPayment.count(),0)
+}))
+test('linked activity locks service identity, allows reprogramming and preserves money on cancellation',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const input=activityInput(f,{purpose:'EVENT',productId:f.workProductId,serviceScheduling:'CONFIGURED'}),activity=await Activities.createActivity(db,scope,input)
+  const e=await prepare(db,scope,'activities',activity.id,{contactId:f.contactId,quantity:'1'})
+  await assert.rejects(Activities.updateActivity(db,scope,activity.id,{...input,productId:f.productId,expectedVersion:activity.version,reason:'Cambiar servicio',idempotencyKey:key()}),{status:409,code:'SOURCE_COMMERCIAL_LOCKED'})
+  const updated=await Activities.updateActivity(db,scope,activity.id,{...input,title:'Nuevo título',startsAt:new Date(new Date(input.startsAt).getTime()+172800000).toISOString(),endsAt:new Date(new Date(input.endsAt).getTime()+172800000).toISOString(),expectedVersion:activity.version,reason:'Nueva fecha',idempotencyKey:key()})
+  assert.equal(updated.engagementId,e.id)
+  await Activities.transitionActivity(db,scope,activity.id,action('CANCEL',updated.version))
+  const saved=await require('../src/modules/appointments/commercialQueries').getEngagement(db,scope,e.id)
+  assert.equal(saved.money.agreedTotal,'500.00');assert.equal(saved.lines[0].schedules[0].state,'CANCELLED');assert.equal(await db.customerPaymentRefund.count(),0)
+}))
+test('source billing enforces permissions, tenant and module boundaries on direct callers and retries',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const booking=await A.createBooking(db,scope,f.individualInput),p=await B.previewBillingSource(db,scope,'bookings',booking.id,{})
+  const permissions=['appointments.view','appointments.create','receivables.view','products.view','contacts.clients.view']
+  for(const missing of permissions)await assert.rejects(B.previewBillingSource(db,{...scope,isAdmin:false,permissions:permissions.filter(p=>p!==missing)},'bookings',booking.id,{}),{status:403})
+  for(const alternate of [{...scope,branchId:f.secondBranchId},{...scope,companyId:key()}])await assert.rejects(B.previewBillingSource(db,alternate,'bookings',booking.id,{}),e=>[403,404].includes(e.status))
+  await assert.rejects(B.previewBillingSource(db,{...scope,branchId:null},'bookings',booking.id,{}),{code:'BRANCH_REQUIRED'})
+  const input={expectedVersion:p.origin.version,reviewHash:p.reviewHash,idempotencyKey:key()}
+  await B.prepareBillingSource(db,scope,'bookings',booking.id,input)
+  await assert.rejects(B.prepareBillingSource(db,{...scope,isAdmin:false,permissions:permissions.filter(p=>p!=='receivables.view')},'bookings',booking.id,input),{status:403})
+  await db.companyModule.create({data:{company_id:scope.companyId,module_code:'sales',status:'DISABLED'}})
+  await assert.rejects(B.previewBillingSource(db,scope,'bookings',booking.id,{}),{status:403,code:'MODULE_DISABLED'})
+}))

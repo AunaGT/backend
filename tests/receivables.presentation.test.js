@@ -6,7 +6,7 @@ function controller(t, prisma) {
   const paths = ['../src/models/prisma', '../src/middlewares/tenant', '../src/utils/getTimezone', '../src/modules/receivables/controller'].map(require.resolve)
   const cached = paths.map(path => require.cache[path])
   require.cache[paths[0]] = { exports: { prisma } }
-  require.cache[paths[1]] = { exports: { requireCompany: req => req.companyId, requireBranch: req => req.branchId } }
+  require.cache[paths[1]] = { exports: { requireCompany: req => req.companyId, requireBranch: req => req.branchId, hasPerm:()=>false } }
   require.cache[paths[2]] = { exports: { getTimezone: async () => 'America/Guatemala' } }
   delete require.cache[paths[3]]
   t.after(() => paths.forEach((path, index) => { if (cached[index]) require.cache[path] = cached[index]; else delete require.cache[path] }))
@@ -54,7 +54,7 @@ test('estado de cuenta: historial por páginas sin truncar el resumen ni las con
     sale: {
       count: async args => { assert.equal(args.where.branch_id, 'branch'); return 300 },
       findMany: async args => {
-        assert.equal(args.where.branch_id, 'branch')
+        assert.equal((args.where.AND?args.where.AND[1]:args.where).branch_id, 'branch')
         if (args.skip !== undefined) { assert.equal(args.skip, 100); assert.equal(args.take, 100); return [] }
         return [{ id: 'old', adjusted_total: 80, due_date: new Date('2025-01-01'), paymentEntries: [] }]
       },

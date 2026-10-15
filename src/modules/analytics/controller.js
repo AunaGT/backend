@@ -25,7 +25,7 @@ async function analyticsContext(req) {
   const completedStatus = await prisma.saleStatus.findFirst({ where: { name: 'Completada' } })
   const minAgg = await prisma.sale.aggregate({
     _min: { date: true },
-    where: { ...branchWhere(req), ...(completedStatus ? { status_id: completedStatus.id } : {}) },
+    where: require('../sales/commercialState').confirmedSaleWhere(branchWhere(req)),
   })
   const firstSaleYear = minAgg._min.date
     ? DateTime.fromJSDate(minAgg._min.date, { zone: 'utc' }).setZone('America/Guatemala').year
@@ -72,7 +72,7 @@ exports.summary = async (req, res, next) => {
         sale: {
           ...tenantSales,
           date: { gte: startUtc, lte: endUtc },
-          ...(completedStatus ? { status_id: completedStatus.id } : {}),
+          status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS},
         },
       },
       include: { sale: true, product: { include: { category: true } } },
@@ -83,7 +83,7 @@ exports.summary = async (req, res, next) => {
       where: {
         ...tenantSales,
         date: { gte: startUtc, lte: endUtc },
-        ...(completedStatus ? { status_id: completedStatus.id } : {}),
+        status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS},
       },
       select: {
         id: true,

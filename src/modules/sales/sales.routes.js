@@ -169,4 +169,8 @@ router.post('/', Auth, hasPermission('sales.create'), requirePromotionsForSale, 
  */
 router.patch('/:id/status', Auth, hasPermission('sales.cancel', 'sales.create'), Sales.updateStatus)
 
+router.post('/:id/external-invoices',Auth,hasPermission('sales.fiscal.register'),Sales.registerExternalInvoice)
+router.post('/:id/invoice-request',Auth,hasPermission('sales.fiscal.register'),Sales.requestFiscalInvoice)
+router.patch('/:id/external-invoices/:documentId',Auth,hasPermission('sales.fiscal.register'),Sales.correctExternalInvoice)
+
 module.exports = router

@@ -128,7 +128,7 @@ function checkedLineTotal(qty,price) {
 }
 
 async function moveSaleStock(tx, items, branchId, ctx) {
-  const stockMap = await expandLinesToStockMap(tx, items, {companyId:ctx.companyId})
+  const stockMap = await expandLinesToStockMap(tx, items, {companyId:ctx.companyId,allowArchivedServices:ctx.allowArchivedServices===true})
   if (!stockMap.size) return []
   const groupId = randomUUID()
   const products = await deductStockMap(tx, stockMap, branchId, { ...ctx, groupId })
@@ -137,7 +137,7 @@ async function moveSaleStock(tx, items, branchId, ctx) {
   return products
 }
 
-async function createSaleRecordAndStock(tx, { saleData, items, userId, companyId }, deps = {}) {
+async function insertSaleRecord(tx, { saleData, items, userId }) {
   for (const field of ['subtotal','discount_total','total']) if (saleData[field]!=null && !validMoney(Number(saleData[field]))) fail('Importe de venta fuera de rango')
   if (!Number.isSafeInteger(saleData.items) || saleData.items<0 || saleData.items>2147483647) fail('Cantidad física total fuera de rango')
   const netTotals = items.every((item) => item.line_total != null)
@@ -155,8 +155,13 @@ async function createSaleRecordAndStock(tx, { saleData, items, userId, companyId
       ...(item.item_kind ? {item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals} : {}),
     })),
   })
+  return sale
+}
+
+async function createSaleRecordAndStock(tx, { saleData, items, userId, companyId,allowArchivedServices=false }, deps = {}) {
+  const sale=await insertSaleRecord(tx,{saleData,items,userId})
   await (deps.moveStock || moveSaleStock)(tx, items, saleData.branch_id, {
-    reason: 'SALE', refType: 'sale', refId: sale.id, userId, companyId,
+    reason: 'SALE', refType: 'sale', refId: sale.id, userId, companyId,allowArchivedServices,
   })
   return sale
 }
@@ -240,6 +245,8 @@ async function createReplacementSale(tx, {
 }
 
 module.exports = {
+  insertSaleRecord,
+  moveSaleStock,
   createReplacementSale,
   createSaleRecordAndStock,
   exchangeDifference,

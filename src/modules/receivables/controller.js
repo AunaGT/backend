@@ -20,6 +20,7 @@ const { creditDueDate } = require('../../services/commercialPayment')
 const { prisma } = require('../../models/prisma')
 const { requireCompany, requireBranch } = require('../../middlewares/tenant')
 const { round2 } = require('../../services/accounting/logic')
+const {allocationForReceipt,allocationSelect}=require('./domain/paymentAllocations')
 const {
   ROUND_EPS,
   ReceivableError,
@@ -163,12 +164,15 @@ exports.list = async (req, res, next) => {
       credito AS (
         SELECT
           cp.customer_id AS cid,
-          SUM(cp.amount - COALESCE(a.applied, 0)) AS credito
+          SUM(cp.amount - COALESCE(a.applied, 0) - COALESCE(pc.committed, 0) - COALESCE(rf.refunded, 0)) AS credito,
+          SUM(COALESCE(pc.committed,0)) AS comprometido
         FROM customer_payments cp
         LEFT JOIN (
           SELECT customer_payment_id, SUM(amount) AS applied
           FROM sale_payment_entries GROUP BY customer_payment_id
         ) a ON a.customer_payment_id = cp.id
+        LEFT JOIN (SELECT payment_id,SUM(amount) AS committed FROM payment_commitments WHERE state='COMMITTED' GROUP BY payment_id) pc ON pc.payment_id=cp.id
+        LEFT JOIN (SELECT payment_id,SUM(amount) AS refunded FROM (SELECT payment_id,amount FROM customer_payment_refunds WHERE status='CONFIRMED' UNION ALL SELECT payment_id,amount FROM payment_allocation_events WHERE action='SALE_REFUNDED') returned GROUP BY payment_id) rf ON rf.payment_id=cp.id
         WHERE cp.branch_id IN (${branchIn})
         GROUP BY cp.customer_id
       )
@@ -181,11 +185,13 @@ exports.list = async (req, res, next) => {
         COALESCE(d.facturas, 0)             AS facturas,
         d.vence_primero                     AS vence_primero,
         GREATEST(COALESCE(c.credito, 0), 0) AS credito
+        ,COALESCE(c.comprometido,0) AS comprometido
       FROM deuda d
       FULL OUTER JOIN credito c ON c.cid = d.cid
       JOIN suppliers sup ON sup.id = COALESCE(d.cid, c.cid)
       WHERE COALESCE(d.saldo, 0) > ${ROUND_EPS}
          OR COALESCE(c.credito, 0) > ${ROUND_EPS}
+         OR COALESCE(c.comprometido,0) > ${ROUND_EPS}
       ORDER BY vencido DESC, saldo DESC
     `
     const items = rows.map((r) => {
@@ -194,6 +200,7 @@ exports.list = async (req, res, next) => {
       return {
         customer_id: r.customer_id,
         customer_name: r.customer_name,
+        credito_comprometido:round2(number(r.comprometido)),
         credit_limit: r.credit_limit == null ? null : round2(number(r.credit_limit)),
         saldo,
         vencido: round2(number(r.vencido)),
@@ -342,6 +349,7 @@ exports.statement = async (req, res, next) => {
         where: { customer_id: customer.id, ...where },
         select: {
           id: true, amount: true, paid_at: true, reference: true, notes: true, kind: true,
+          ...allocationSelect,
           payment_method: { select: { id: true, name: true } },
           registeredBy: { select: { id: true, name: true } },
           applications: {
@@ -356,6 +364,7 @@ exports.statement = async (req, res, next) => {
       prisma.customerPayment.count({ where: paymentsWhere }),
     ])
 
+    const origins=await require('../appointments').linkedEngagementOrigins(prisma,req,{paymentIds:payments.map(p=>p.id)})
     const now = new Date()
     res.json({
       history: { page: historyPage, pageSize: historySize, total_sales: totalSales, total_payments: totalPayments, hasNextPage: historyPage * historySize < Math.max(totalSales, totalPayments) },
@@ -389,6 +398,7 @@ exports.statement = async (req, res, next) => {
       })),
       cobros: payments.map((p) => {
         const aplicado = round2(p.applications.reduce((acc, a) => acc + number(a.amount), 0))
+        const allocation=allocationForReceipt(p)
         return {
           id: p.id,
           amount: round2(number(p.amount)),
@@ -399,7 +409,8 @@ exports.statement = async (req, res, next) => {
           payment_method: p.payment_method,
           registered_by: p.registeredBy,
           aplicado,
-          no_aplicado: round2(number(p.amount) - aplicado),
+          no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),
+          engagementId:origins.payments[p.id]||null,
           aplicaciones: p.applications.map((a) => ({
             sale_id: a.sale?.id,
             reference: a.sale?.reference,
@@ -575,13 +586,16 @@ exports.deletePayment = async (req, res, next) => {
     if (!uid) fail(401, 'Usuario no autenticado')
 
     const payment = await prisma.customerPayment.findFirst({
-      where: { id: req.params.id, branch: { company_id: companyId } },
+      where: { id: req.params.id, branch: { company_id: companyId },...branchFilter(req) },
       select: {
         id: true, customer_id: true, branch_id: true,
-        applications: { select: { sale_id: true } },
+        applications: { select: { sale_id: true, sale:{select:{appointment_engagement:{select:{id:true}}}} } },
+        commitments:{select:{id:true},take:1},allocation_events:{select:{id:true},take:1},refunds:{select:{id:true},take:1},
       },
     })
     if (!payment) fail(404, 'Cobro no encontrado')
+    const assertDeletable=row=>{if(row?.commitments?.length||row?.allocation_events?.length||row?.refunds?.length||row?.applications?.some(a=>a.sale?.appointment_engagement))throw Object.assign(new ReceivableError('Este recibo tiene historial de una contratación. Corrígelo mediante una liberación o devolución trazable',409),{code:'PAYMENT_LINKED_TO_ENGAGEMENT'})}
+    assertDeletable(payment)
 
     const posted = await prisma.journalEntry.findFirst({
       where: { company_id: companyId, source_type: 'SALE_PAYMENT', source_id: payment.id },
@@ -591,6 +605,7 @@ exports.deletePayment = async (req, res, next) => {
     const saleIds = [...new Set(payment.applications.map((a) => a.sale_id))]
     await prisma.$transaction(async (tx) => {
       await lockCustomer(tx, payment.customer_id)
+      assertDeletable(await tx.customerPayment.findUnique({where:{id:payment.id},select:{applications:{select:{sale:{select:{appointment_engagement:{select:{id:true}}}}}},commitments:{select:{id:true},take:1},allocation_events:{select:{id:true},take:1},refunds:{select:{id:true},take:1}}}))
       await tx.customerPayment.delete({ where: { id: payment.id } })
       for (const saleId of saleIds) await syncSaleStatus(tx, saleId)
     }, PAYMENT_TX_OPTIONS)
@@ -746,6 +761,7 @@ exports.updateDueDate = async (req, res, next) => {
         id: req.params.id,
         branch: { company_id: companyId },
         payment_method: { is_credit: true },
+        status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS},
         ...branchFilter(req),
       },
       select: { id: true, reference: true, due_date: true, date: true, payment_status: true },
@@ -779,6 +795,7 @@ exports.receipt = async (req, res, next) => {
       where: { id: req.params.id, branch: { company_id: companyId } },
       select: {
         id: true, amount: true, paid_at: true, reference: true, notes: true, kind: true,
+        ...allocationSelect,
         payment_method: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, tax_id: true, phone: true, address: true } },
         branch: { select: { id: true, name: true } },
@@ -793,13 +810,14 @@ exports.receipt = async (req, res, next) => {
     })
     if (!payment) fail(404, 'Cobro no encontrado')
 
+    const allocation=allocationForReceipt(payment)
     const aplicado = round2(payment.applications.reduce((s, a) => s + number(a.amount), 0))
     const resumen = await customerBalance(prisma, payment.customer.id, branchFilter(req))
     res.json({
       ...payment,
       amount: round2(number(payment.amount)),
       aplicado,
-      no_aplicado: round2(number(payment.amount) - aplicado),
+      no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),
       aplicaciones: payment.applications.map((a) => ({
         sale_id: a.sale?.id,
         reference: a.sale?.reference,

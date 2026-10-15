@@ -44,7 +44,7 @@ const prisma = {
       .map(record => ({
         ...record,
         createdBy: args.include?.createdBy ? { id: 'seller-1', name: 'Ana', email: 'ana@example.com' } : undefined,
-        payment_method: Object.fromEntries(Object.keys(args.include.payment_method.select).map(key => [key, record.payment_method[key]])),
+        payment_method: record.payment_method?Object.fromEntries(Object.keys(args.include.payment_method.select).map(key => [key, record.payment_method[key]])):null,
       })),
     aggregate: async args => {
       const rows = filtered(args, 'aggregate')
@@ -121,6 +121,15 @@ test('list rows expose a small seller projection and the payment credit flag', a
   assert.equal(response.items[0].payment_method.is_credit, true)
   assert.deepEqual(calls.find(([operation]) => operation === 'findMany')[1].include.createdBy, { select: { id: true, name: true, email: true } })
 })
+test('draft row has explicit commercial state and no invented payment or confirmation authority',async()=>{
+  records=[sale('draft',{status:{name:'Borrador'},version:3,origin_engagement_id:'engagement',payment_method_id:null,payment_method:null})]
+  const response=await list({})
+  assert.equal(response.items[0].commercial.state,'DRAFT')
+  assert.equal(response.items[0].commercial.originEngagementId,'engagement')
+  assert.equal(response.items[0].commercial.fiscalState,'DISABLED')
+  assert.equal(response.items[0].payment_method,null)
+  assert.equal(response.items[0].capabilities.confirm,false)
+})
 
 test('summary covers more than 500 matching sales, uses net totals including zero and excludes other scopes', async () => {
   records = Array.from({ length: 501 }, (_, index) => sale(`sale-${index}`, { payment_method_id: index < 200 ? 1 : 2 }))
@@ -133,24 +142,26 @@ test('summary covers more than 500 matching sales, uses net totals including zer
   const response = await list({ status: 'Completada', period: 'month', includeSummary: 'true', pageSize: '1' })
   assert.equal(response.items.length, 1)
   assert.equal(response.items[0].adjusted_total, '0.00')
-  assert.deepEqual(response.summary, { totalSales: 5010, transactionCount: 502, averageTicket: 5010 / 502, preferredPaymentMethod: 'Crédito 30 días' })
+  assert.deepEqual(response.summary, { totalSales: 5010, transactionCount: 502, averageTicket: 5010 / 502, preferredPaymentMethod: 'Crédito 30 días',draftCount:0,draftTotal:0 })
   const aggregate = calls.find(([operation]) => operation === 'aggregate')[1]
   const count = calls.find(([operation]) => operation === 'count')[1]
-  assert.deepEqual(aggregate.where, count.where)
+  assert.equal(aggregate.where.AND[0].status.name,'Completada')
+  assert.equal(aggregate.where.AND[1].branch_id,count.where.branch_id)
+  assert.deepEqual(aggregate.where.AND[1].date,count.where.date)
   assert.equal(aggregate.take, undefined)
   assert.equal(aggregate.skip, undefined)
-  assert.deepEqual(calls.find(([operation]) => operation === 'groupBy')[1].where, count.where)
+  assert.deepEqual(calls.find(([operation]) => operation === 'groupBy')[1].where, aggregate.where)
 })
 
 test('summary respects payment and consolidated scope, returns zero for empty sets and settles payment ties', async () => {
   records = [sale('cash'), sale('credit', { payment_method_id: 2 }), sale('other-branch', { branch_id: 'branch-b' })]
   const filteredResponse = await list({ payment: 'Efectivo', includeSummary: 'true' }, { branchId: null, branchIds: ['branch-a', 'branch-b'] })
-  assert.deepEqual(filteredResponse.summary, { totalSales: 20, transactionCount: 2, averageTicket: 10, preferredPaymentMethod: 'Efectivo' })
+  assert.deepEqual(filteredResponse.summary, { totalSales: 20, transactionCount: 2, averageTicket: 10, preferredPaymentMethod: 'Efectivo',draftCount:0,draftTotal:0 })
   const tie = await list({ includeSummary: 'true' })
   assert.equal(tie.summary.preferredPaymentMethod, 'Crédito 30 días')
   records = []
   const empty = await list({ includeSummary: 'true' })
-  assert.deepEqual(empty.summary, { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—' })
+  assert.deepEqual(empty.summary, { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—',draftCount:0,draftTotal:0 })
 })
 
 test('global search retains count-free extra-row pagination and payment filtering', async () => {
@@ -173,13 +184,13 @@ test('customer purchase summary remains completed-only alongside the optional li
   records = [sale('completed'), sale('cancelled', { status: { id: 2, name: 'Cancelada' }, adjusted_total: '20.00' })]
   const response = await list({ customer_contact_id: 'customer-1', includeSummary: 'true' })
   assert.deepEqual(response.customerPurchaseSummary, { totalPurchases: 10, lastSaleDate: '2026-10-06T12:00:00.000Z' })
-  assert.equal(response.summary.totalSales, 30)
-  assert.equal(response.summary.transactionCount, 2)
+  assert.equal(response.summary.totalSales, 10)
+  assert.equal(response.summary.transactionCount, 1)
 })
 
 test('short search returns an empty optional summary without querying sales', async () => {
   const response = await list({ search: 'An', includeSummary: 'true' })
-  assert.deepEqual(response.summary, { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—' })
+  assert.deepEqual(response.summary, { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—',draftCount:0,draftTotal:0 })
   assert.equal(response.searchMeta.tooShort, true)
   assert.equal(calls.length, 0)
 })
@@ -195,7 +206,10 @@ test('sale detail selects product images while preserving reference lookup and c
     assert.equal(query.include.sale_items.include.product.select.image_url, true)
     assert.equal(query.include.sale_items.include.product.select.barcode, true)
     assert.equal(query.include.sale_dtes, true)
-    assert.deepEqual(response, { ...record,line_count:0, customerContact: null })
+    assert.deepEqual(response, { ...record,line_count:0, customerContact: null,
+      commercial:{state:'LEGACY',originEngagementId:null,version:1,confirmedAt:null,fiscalState:'DISABLED'},
+      capabilities:{confirm:false,requestInvoice:false,collect:false,reason:'Selecciona la sucursal de la venta para realizar acciones'},
+    })
   } finally {
     prisma.sale.findFirst = previousFind
   }

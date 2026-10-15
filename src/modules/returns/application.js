@@ -15,6 +15,9 @@ function invalid(message, status = 400) {
   error.status = status
   return error
 }
+function assertReceiptReturnResolution(sale,resolution){
+  if(sale?.settlement_source==='ENGAGEMENT_RECEIPTS'&&resolution==='EXCHANGE')throw Object.assign(invalid('Esta venta se liquida con recibos. Registra una devolución o saldo a favor y factura el reemplazo con sus pagos reales.',409),{code:'LINKED_EXCHANGE_REQUIRES_CREDIT'})
+}
 
 function isServiceLine(record,item) {
   return (item.sale_item ?? record.sale?.sale_items?.find(line=>Number(line.id)===Number(item.sale_item_id)))?.item_kind==='SERVICE'
@@ -43,6 +46,7 @@ function buildCompletionPlan(returnRecord, payload = {}) {
   if (returnRecord?.status?.name !== 'Aprobada') {
     throw invalid('La devolución debe aprobarse antes de completarse', 409)
   }
+  assertReceiptReturnResolution(returnRecord.sale,returnRecord.approved_resolution)
   const key = String(payload.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
 
@@ -149,6 +153,7 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy,
   assertReturnTransition(current.status.name, 'Aprobada')
 
   const approvedResolution = String(resolution || current.requested_resolution || '')
+  assertReceiptReturnResolution(current.sale,approvedResolution)
   if (!RETURN_RESOLUTIONS.includes(approvedResolution)) throw invalid('La solución aprobada no es válida')
   const normalizedPolicy = normalizeReturnPolicy(policy)
   if (!normalizedPolicy.enabledResolutions.includes(approvedResolution)) {
@@ -230,11 +235,16 @@ async function restoreDispositionStock(tx, lines, branchId, ctx) {
   return updated
 }
 
-async function validateDirectSettlement(tx, current, resolution, settlement, amount) {
+async function validateDirectSettlement(tx, current, resolution, settlement, amount,actor={}) {
   if (amount <= 0) return { paymentMethodId: null, cashSessionId: null, externalReference: null }
   let paymentMethodId = Number(settlement.payment_method_id)
   if (resolution === 'REFUND_ORIGINAL' && !Number.isInteger(paymentMethodId)) {
-    paymentMethodId = Number(current.sale.payment_method?.id)
+    if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS'){
+      const paid=await tx.salePaymentEntry.findMany({where:{sale_id:current.sale.id},select:{customerPayment:{select:{payment_method_id:true}}}})
+      const methods=[...new Set(paid.map(p=>p.customerPayment.payment_method_id).filter(Boolean))]
+      if(methods.length!==1)throw invalid('Los recibos usan varios medios; selecciona el medio real del reintegro')
+      paymentMethodId=methods[0]
+    }else paymentMethodId = Number(current.sale.payment_method?.id)
   }
   if (!Number.isInteger(paymentMethodId)) throw invalid('Debe indicar el método real del reintegro')
   const method = await tx.paymentMethod.findUnique({ where: { id: paymentMethodId }, select: { id: true, name: true, is_credit: true } })
@@ -248,18 +258,23 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
   const cashSessionId = String(settlement.cash_register_session_id || '').trim() || null
   if (isCash && !cashSessionId) throw invalid('El reintegro en efectivo requiere una sesión de caja abierta')
   if (cashSessionId) {
+    if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS')await tx.$queryRaw`SELECT id FROM cash_register_sessions WHERE id=${cashSessionId}::uuid FOR UPDATE`
     const session = await tx.cashRegisterSession.findFirst({
       where: { id: cashSessionId, status: 'OPEN', cashRegister: { branch_id: current.sale.branch_id } },
-      select: { id: true },
+      select: { id: true,opened_by_id:true },
     })
     if (!session) throw invalid('La sesión de caja no está abierta en la sucursal de la venta', 409)
+    if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS'&&!actor.isAdmin&&session.opened_by_id!==actor.userId)throw invalid('El reintegro en efectivo requiere tu propio turno autorizado',403)
   }
   return { paymentMethodId, cashSessionId, externalReference: externalReference?.slice(0, 255) || null }
 }
 
-async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload }, deps = {}) {
+async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload,isAdmin=false }, deps = {}) {
   const key = String(payload?.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
+  const beforeLock=await tx.return.findFirst({where:{id,sale:{...scope}},select:{sale:{select:{customer_contact_id:true}}}})
+  if(!beforeLock)throw invalid('Devolución no encontrada',404)
+  if(beforeLock.sale.customer_contact_id)await require('../receivables').lockCustomer(tx,beforeLock.sale.customer_contact_id)
   await tx.$queryRaw`SELECT r.id FROM sales s JOIN returns r ON r.sale_id = s.id WHERE r.id = ${id}::uuid FOR UPDATE OF s, r`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
@@ -290,7 +305,8 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
   const isExchange = plan.resolution === 'EXCHANGE'
   await assertDispositionLocations(tx, current.sale.branch_id, plan.lines)
 
-  const isCreditSale = current.sale.payment_method?.is_credit === true
+  const linkedReceipts=current.sale.settlement_source==='ENGAGEMENT_RECEIPTS'
+  const isCreditSale = current.sale.payment_method?.is_credit === true||linkedReceipts
   const paid = isCreditSale ? paidOf(current.sale) : Number(current.sale.adjusted_total)
   const receivable = !isExchange && isCreditSale
     ? planReceivableReturn({ adjustedTotal: current.sale.adjusted_total, paid, refundAmount: current.total_refund })
@@ -306,7 +322,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
   let direct = !isExchange && plan.resolution === 'CUSTOMER_CREDIT'
     ? { paymentMethodId: null, cashSessionId: null, externalReference: null }
     : !isExchange
-      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable)
+      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable,{userId,isAdmin})
       : { paymentMethodId: null, cashSessionId: null, externalReference: null }
 
   const restoreStock = deps.restoreStock || restoreDispositionStock
@@ -322,7 +338,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
     where: { id: current.sale.id },
     data: plan.saleAdjustment,
   })
-  if (!isExchange && isCreditSale && receivable.releaseApplications > 0) {
+  if (!isExchange && isCreditSale && receivable.releaseApplications > 0 && !linkedReceipts) {
     await releaseSaleOverpayment(tx, current.sale.id, receivable.releaseApplications)
   } else if (!isExchange && isCreditSale) {
     await syncSaleStatus(tx, current.sale.id)
@@ -373,7 +389,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
         : channel === 'TRANSFER'
           ? 'REFUND_TRANSFER'
           : 'REFUND_ORIGINAL'
-      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount)
+      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount,{userId,isAdmin})
       if (difference.direction === 'COLLECTION') {
         await tx.sale.update({
           where: { id: replacement.sale.id },
@@ -438,6 +454,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       idempotency_key: key,
     },
   })
+  if(linkedReceipts&&!isExchange&&receivable.releaseApplications>0)await releaseSaleOverpayment(tx,current.sale.id,receivable.releaseApplications,{returnSettlementId:settlement.id,userId,reason:current.reason||'Corrección de venta'})
   if (!isExchange && receivable.refundable > 0 && receivable.creditOffset > 0) {
     await tx.returnSettlement.create({
       data: {
@@ -462,6 +479,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
     },
     include: { status: true, sale: true, return_items: true, settlements: true },
   })
+  if(linkedReceipts)await require('../../services/accounting/postingEngine').postReturnInTransaction(tx,{companyId,branchId:current.sale.branch_id,userId},id)
   return {
     ...updated,
     _settlement: settlement,
@@ -483,6 +501,7 @@ function completeReturn(client, params, deps) {
 }
 
 module.exports = {
+  assertReceiptReturnResolution,
   approveReturn,
   buildCompletionPlan,
   completeApprovedReturn,

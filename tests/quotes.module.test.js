@@ -465,6 +465,7 @@ test('la cotización pública evita tenant y las rutas privadas lo conservan', a
       'update',
       'updateStatus',
       'convertToOrder',
+      'previewServiceConditions',
     ].map((name) => [name, handler])),
   }
   delete require.cache[routesPath]

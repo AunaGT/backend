@@ -11,7 +11,7 @@
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
 const PDFDocument = require('pdfkit')
-const { getBrandingForPdf } = require('../../utils/pdfBranding')
+const { getBrandingForPdf, setupReportPdf, ensureReportSpace, drawReportTable, finishReportPdf } = require('../../utils/pdfBranding')
 const { authorizedReportWhere, reportDateWhere, resolveReportPeriod, validateReportScope } = require('./reportFilters')
 const { createReportMeta, assertReportSize } = require('./reportModel')
 const { buildSalesReport, buildFinancialReport } = require('./models/commercial')
@@ -28,11 +28,11 @@ async function prepareReportMeta(req, branding, current = false) {
 
 // Brand & styles inspired by Products PDF
 const BRAND = {
-  primary: '#0b1220',      // dark slate
-  secondary: '#0ea5a4',    // teal
-  accent: '#f59e0b',       // amber
-  muted: '#475569',        // slate-500
-  border: '#e6eef6',       // light divider
+  primary: '#0c203a',
+  secondary: '#44749f',
+  accent: '#ff6f00',
+  muted: '#63758b',
+  border: '#d8e1eb',
 }
 
 // Utility: parse period range (supports: week, month, quarter, semester, year, all)
@@ -287,151 +287,42 @@ function makeMoney(currencyCode) {
 }
 
 function newDoc(res, title) {
-  // Switch to US Letter for better print alignment (612 x 792 points) and slightly smaller margins
-  const doc = new PDFDocument({ margin: 44, size: 'LETTER' })
+  const doc = new PDFDocument({ margin: 44, size: 'LETTER', bufferPages: true })
   res.setHeader('Content-Type', 'application/pdf')
   res.setHeader('Content-Disposition', `inline; filename="${title.toLowerCase().replace(/\s+/g,'-')}.pdf"`)
   doc.pipe(res)
-  // subtle background band
-  const w = doc.page.width, h = doc.page.height
-  doc.save()
-  doc.rect(0, 0, w, 105).fill('#f8fafc') // reduced band height for Letter
-  doc.restore()
   return doc
 }
 
-// Helper: add a new Letter page and redraw the subtle top band for visual continuity
 function addPageWithBand(doc) {
   doc.addPage({ size: 'LETTER', margin: 44 })
-  const w = doc.page.width
-  doc.save()
-  doc.rect(0, 0, w, 105).fill('#f8fafc')
-  doc.restore()
 }
 
-// Helper: ensure there is enough vertical space for a block; if not, start a fresh page
 function ensureSpace(doc, needed) {
-  const bottom = doc.page.height - doc.page.margins.bottom
-  if (doc.y + needed > bottom) addPageWithBand(doc)
+  ensureReportSpace(doc, needed)
 }
 
-function header(doc, title, periodLabel, companyName = 'Depósito', logoBuffer = null, scopeLabel = null) {
-  const left = doc.page.margins.left
-  const right = doc.page.width - doc.page.margins.right
-  let titleX = left
-  let titleY = 32
-
-  if (logoBuffer) {
-    try {
-      doc.image(logoBuffer, left, 16, { fit: [44, 26] })
-      titleX = left + 50
-      titleY = 26
-    } catch {
-      /* sin logo */
-    }
-  }
-
-  doc.fillColor(BRAND.primary).fontSize(20).text(title, titleX, titleY, { align: 'left', width: Math.max(80, right - titleX) })
-  doc.fontSize(9).fillColor(BRAND.muted).text(`Generado: ${DateTime.now().setZone('America/Guatemala').toFormat('yyyy-LL-dd HH:mm')}  |  Período: ${periodLabel}`, titleX, doc.y + 2, { align: 'left', width: Math.max(80, right - titleX) })
-  if (scopeLabel) {
-    doc.fontSize(9).fillColor(BRAND.muted).text(`Sucursal: ${scopeLabel}`, titleX, doc.y + 1, { align: 'left', width: Math.max(80, right - titleX) })
-  }
-  doc.moveTo(left, doc.y + 4).lineTo(right, doc.y + 4).lineWidth(1).strokeColor(BRAND.border).stroke()
-  doc.moveDown(0.6)
+function header(doc, title, periodLabel, companyName = 'Depósito', logoBuffer = null, scopeLabel = null, branding = {}) {
+  setupReportPdf(doc, { branding: { ...branding, company_name: companyName, logoBuffer }, title, metadata: [
+    `Generado: ${DateTime.now().setZone(branding.timezone || 'America/Guatemala').toFormat('yyyy-LL-dd HH:mm')}  |  Período: ${periodLabel}`,
+    ...(scopeLabel ? [`Sucursal: ${scopeLabel}`] : []),
+  ] })
 }
 
-function footer(doc, companyName = 'Depósito') {
-  const bottom = doc.page.height - doc.page.margins.bottom + 12
-  doc.fontSize(8).fillColor(BRAND.muted)
-    .text(`Reporte generado por ${companyName}`, doc.page.margins.left, bottom, { align: 'center' })
+function footer(doc) {
+  finishReportPdf(doc)
 }
 
 function sectionTitle(doc, text) {
-  const left = doc.page.margins.left
-  const right = doc.page.width - doc.page.margins.right
-  const usableWidth = right - left
-  // Make sure the title never gets stranded at the very bottom
   ensureSpace(doc, 40)
-  doc.moveDown(0.5)
-  // centered, bold, slightly larger for stronger emphasis
-  doc.font('Helvetica-Bold').fontSize(14).fillColor(BRAND.primary)
-    .text(text, left, undefined, { width: usableWidth, align: 'center' })
-  // underline divider
-  doc.moveTo(left, doc.y + 3).lineTo(right, doc.y + 3).lineWidth(1).strokeColor(BRAND.border).stroke()
-  doc.moveDown(0.5)
-  // restore default font
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(BRAND.primary)
+    .text(text, doc.page.margins.left, doc.y + 5, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right })
+  doc.y += 8
   doc.font('Helvetica')
 }
 
 function drawTable(doc, columns, rows, widths, options = {}) {
-  const left = doc.page.margins.left
-  const right = doc.page.width - doc.page.margins.right
-  const usableWidth = right - left
-  const colWidths = widths && widths.length ? widths : new Array(columns.length).fill(usableWidth / columns.length)
-  const padX = 6
-  const padY = 4 // tighter vertical padding for Letter
-  const colAligns = Array.isArray(options.align) ? options.align : []
-  const headerAligns = Array.isArray(options.headerAlign) ? options.headerAlign : []
-
-  const drawHeaderBand = () => {
-    const y0 = doc.y
-  const headerHeight = 20
-    doc.save()
-    // Cabecera estilo plataforma: banda ámbar + texto claro
-    doc.rect(left, y0, usableWidth, headerHeight).fill(BRAND.accent)
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9)
-    let x = left
-    columns.forEach((c, idx) => {
-      const label = typeof c === 'string' ? c : (c.text || '')
-      const hAlign = headerAligns[idx] || (typeof c === 'object' && c.align) || 'left'
-      doc.text(label, x + padX, y0 + (headerHeight - 12) / 2, { width: colWidths[idx] - padX * 2, align: hAlign })
-      x += colWidths[idx]
-    })
-    doc.restore()
-    doc.moveTo(left, y0 + headerHeight).lineTo(right, y0 + headerHeight).strokeColor(BRAND.border).lineWidth(1).stroke()
-    doc.y = y0 + headerHeight + 2
-  }
-
-  // initial header
-  drawHeaderBand()
-
-  // rows with dynamic height and page breaks
-  doc.fontSize(8).fillColor('#111') // slightly smaller for print fit
-  for (let rIdx = 0; rIdx < rows.length; rIdx++) {
-    const row = rows[rIdx]
-    // compute row height based on tallest cell
-    const heights = row.map((cell, cIdx) => {
-      const text = String(cell)
-  const h = doc.heightOfString(text, { width: colWidths[cIdx] - padX * 2, align: isNumeric(text) ? 'right' : 'left' })
-  return Math.max(13, h + padY)
-    })
-    const rowHeight = Math.max(...heights)
-    // page break if needed
-    if (doc.y + rowHeight > doc.page.height - doc.page.margins.bottom) {
-      addPageWithBand(doc)
-      drawHeaderBand()
-    }
-    // Y fija por fila: PDFKit mueve doc.y tras cada text(); si reutilizáramos doc.y por celda, los datos quedan escalonados.
-    const rowTop = doc.y
-    // zebra background
-    if (rIdx % 2 === 1) {
-      doc.save(); doc.rect(left, rowTop - 1, usableWidth, rowHeight + 2).fill('#fafafa'); doc.restore()
-    }
-    // draw text cells (misma línea base vertical para todas las columnas)
-    let rx = left
-    row.forEach((cell, cIdx) => {
-      const text = String(cell)
-      const forcedAlign = colAligns[cIdx]
-      const align = forcedAlign || (isNumeric(text) ? 'right' : 'left')
-      doc.fillColor('#111').text(text, rx + padX, rowTop + padY / 2, { width: colWidths[cIdx] - padX * 2, align })
-      rx += colWidths[cIdx]
-    })
-    // row divider
-    const yAfter = rowTop + rowHeight
-    doc.moveTo(left, yAfter).lineTo(right, yAfter).strokeColor('#f3f4f6').lineWidth(1).stroke()
-    doc.y = yAfter + 1
-  }
-  doc.moveDown(0.4)
+  drawReportTable(doc, columns, rows, { ...options, widths, align: options.align || columns.map((_, i) => rows.length && rows.every(row => isNumeric(row[i])) ? 'right' : 'left') })
 }
 
 function isNumeric(text) {
@@ -605,7 +496,7 @@ async function getSalesData(startUtc, endUtc, req) {
 
   // Obtener sale_items (productos / categorías / costos)
   const items = await prisma.saleItem.findMany({
-    where: { sale: { ...tenantSales, branch: { company_id: req.companyId }, date: reportDateWhere(req, startUtc, endUtc), ...(status ? { status_id: status.id } : {}) } },
+    where: { sale: require('../sales/commercialState').confirmedSaleWhere({ ...tenantSales, branch: { company_id: req.companyId }, date: reportDateWhere(req, startUtc, endUtc) }) },
     include: {
       product: { include: { category: true } },
       return_items:{where:{return:{status:{name:'Completada'}}},select:{refund_amount:true,qty_returned:true,restock_qty:true}},
@@ -628,7 +519,7 @@ async function getSalesData(startUtc, endUtc, req) {
       ...tenantSales,
       branch: { company_id: req.companyId },
       date: reportDateWhere(req, startUtc, endUtc),
-      ...(status ? { status_id: status.id } : {})
+      status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS}
     },
     select: {
       id: true,
@@ -892,7 +783,7 @@ async function getFinancialData(startUtc, endUtc, req) {
         ...branchWhere(req),
         branch: { company_id: req.companyId },
         date: reportDateWhere(req, startUtc, endUtc),
-        ...(status ? { status_id: status.id } : {})
+        status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS}
       }
     },
     include: { product: { include: { category: true } } }
@@ -1136,7 +1027,7 @@ async function salesReport(req, res, next) {
       return
     }
     const doc = newDoc(res, 'Reporte de Ventas')
-    header(doc, 'Reporte de Ventas', label, companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte de Ventas', label, companyName, logoBuffer, scope.label, branding)
     sectionTitle(doc, 'Resumen')
     drawSummaryCards(doc, [
       { label: 'Ventas Brutas', value: money(data.totalRevenueGross) },
@@ -1266,7 +1157,7 @@ async function inventoryReport(req,res,next){
       return
     }
     const doc = newDoc(res, 'Reporte de Inventario')
-    header(doc, 'Reporte de Inventario', 'Actual', companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte de Inventario', 'Actual', companyName, logoBuffer, scope.label, branding)
     sectionTitle(doc, 'Resumen')
     const totalProducts = products.length
     const totalValue = products.reduce((acc,p)=>acc+ number(p.stock)* number(p.cost),0)
@@ -1388,7 +1279,7 @@ async function suppliersReport(req, res, next) {
     }
 
     const doc = newDoc(res, 'Reporte de Proveedores')
-    header(doc, 'Reporte de Proveedores', 'Actual', companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte de Proveedores', 'Actual', companyName, logoBuffer, scope.label, branding)
     sectionTitle(doc, 'Resumen')
     drawSummaryCards(doc, [
       { label: 'Total proveedores', value: String(summary.totalSuppliers) },
@@ -1551,7 +1442,7 @@ async function financialReport(req, res, next) {
     }
 
     const doc = newDoc(res, 'Reporte Financiero')
-    header(doc, 'Reporte Financiero', label, companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte Financiero', label, companyName, logoBuffer, scope.label, branding)
 
     sectionTitle(doc, 'Resumen - inventario, compras y margen')
     drawSummaryCards(doc, [
@@ -1870,7 +1761,7 @@ async function alertsReport(req, res, next) {
     }
 
     const doc = newDoc(res, 'Reporte de Alertas')
-    header(doc, 'Reporte de Alertas', 'Actual', companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte de Alertas', 'Actual', companyName, logoBuffer, scope.label, branding)
 
     sectionTitle(doc, 'Resumen - riesgo de stock y seguimiento')
     drawSummaryCards(doc, [
@@ -2154,7 +2045,7 @@ async function productsReport(req, res, next) {
       const section=prepared.sections[0],rows=section.rows.map(row=>section.columns.map(c=>c.type==='money' ? money(row[c.id]) : c.type==='boolean' ? row[c.id] ? 'Sí' : 'No' : row[c.id]))
       if(['csv','excel'].includes(format))return sendCsv(res,'servicios.csv',[prepared.title], [{title:section.title,columns:section.columns.map(c=>c.label),rows}])
       const doc=newDoc(res,prepared.title)
-      header(doc,prepared.title,'Catálogo actual',companyName,logoBuffer,'Empresa')
+      header(doc,prepared.title,'Catálogo actual',companyName,logoBuffer,'Empresa',branding)
       drawTable(doc,section.columns.map(c=>c.label),rows,[150,100,70,55,65,60]);footer(doc,companyName);doc.end();return
     }
     const { products, summary, categoryRows, supplierRows, topByInv, topByRetail, tightMargins } = data
@@ -2293,7 +2184,7 @@ async function productsReport(req, res, next) {
     }
 
     const doc = newDoc(res, 'Análisis de Productos')
-    header(doc, 'Análisis de Productos', 'Actual', companyName, logoBuffer, scope.label)
+    header(doc, 'Análisis de Productos', 'Actual', companyName, logoBuffer, scope.label, branding)
 
     if (byBranch.length) {
       sectionTitle(doc, 'Existencias por sucursal')
@@ -2545,16 +2436,7 @@ async function inventoryCountSessionReport(req, res, next) {
     }
 
     const doc = newDoc(res, `Inventariado ${session.name || id.slice(0, 8)}`)
-    if (logoBuffer) {
-      try {
-        doc.image(logoBuffer, doc.page.margins.left, doc.y, { fit: [44, 26] })
-        doc.moveDown(1.8)
-      } catch {
-        /* sin logo */
-      }
-    }
-    doc.fontSize(16).fillColor(BRAND.primary).text('Inventariado (conteo físico)', { align: 'left' })
-    doc.moveDown(0.3)
+    setupReportPdf(doc, { branding, title: 'Inventariado (conteo físico)', metadata: [`Sesión: ${session.name || id}`, `Estado: ${inventoryCountStatusLabel(session.status)}`] })
     doc
       .fontSize(9)
       .fillColor(BRAND.muted)
@@ -2587,10 +2469,10 @@ async function inventoryCountSessionReport(req, res, next) {
       const diff = L.qty_counted != null ? L.qty_counted - L.stock_snapshot : null
       const vd = diff != null ? diff * number(L.product.cost) : null
       return [
-        String(L.product.name).slice(0, 22),
+        String(L.product.name),
         L.product.barcode || '—',
         // En un conteo físico importa más dónde está que de qué categoría es.
-        String(L.location.code).slice(0, 10),
+        String(L.location.code),
         L.stock_snapshot,
         L.qty_counted ?? '—',
         L.qty_counted_secondary ?? '—',
@@ -2603,17 +2485,13 @@ async function inventoryCountSessionReport(req, res, next) {
     drawTable(
       doc,
       ['Producto', 'Cód.', 'Ubic.', 'Teór.', 'C1', 'C2', 'Diff.', 'Valor'],
-      tableRows.slice(0, 100),
+      tableRows,
       [102, 54, 48, 30, 28, 28, 28, 48],
       {
         align: ['left', 'left', 'left', 'right', 'right', 'right', 'right', 'right'],
         headerAlign: ['left', 'left', 'left', 'right', 'right', 'right', 'right', 'right'],
       }
     )
-    if (lines.length > 100) {
-      ensureSpace(doc, 20)
-      doc.fontSize(8).fillColor(BRAND.muted).text(`… ${lines.length - 100} líneas más (ver CSV).`, doc.page.margins.left)
-    }
 
     footer(doc, companyName)
     doc.end()
@@ -2767,11 +2645,7 @@ async function inventoryCountsHistoryReport(req, res, next) {
     }
 
     const doc = newDoc(res, `Historial inventariados ${label}`)
-    doc.fontSize(16).fillColor(BRAND.primary).text('Historial de inventariados', { align: 'left' })
-    doc.moveDown(0.3)
-    doc.fontSize(9).fillColor(BRAND.muted).text(`${companyName} · ${label}`)
-    doc.text(`Generado: ${genAt}`)
-    doc.moveDown(0.6)
+    setupReportPdf(doc, { branding, title: 'Historial de inventariados', metadata: [`Período: ${label}`, `Generado: ${genAt}`] })
 
     sectionTitle(doc, 'Resumen')
     drawSummaryCards(doc, [
@@ -2785,9 +2659,9 @@ async function inventoryCountsHistoryReport(req, res, next) {
 
     sectionTitle(doc, 'Sesiones')
     const pdfRows = tableData.map(({ s, counted, valueDiff, mermaValue }) => [
-      String(s.name || s.id.slice(0, 8)).slice(0, 26),
-      inventoryCountStatusLabel(s.status).slice(0, 12),
-      fmtDate(s.created_at).slice(0, 16),
+      String(s.name || s.id.slice(0, 8)),
+      inventoryCountStatusLabel(s.status),
+      fmtDate(s.created_at),
       s._count.lines,
       counted,
       money(valueDiff),
@@ -2898,7 +2772,7 @@ async function merchandiseReport(req, res, next) {
     }
 
     const doc = newDoc(res, 'Reporte de Mercancía')
-    header(doc, 'Reporte de Ingresos de Mercancía', label, companyName, logoBuffer, scope.label)
+    header(doc, 'Reporte de Ingresos de Mercancía', label, companyName, logoBuffer, scope.label, branding)
     sectionTitle(doc, 'Resumen')
     drawSummaryCards(doc, [
       { label: 'Registros', value: String(records.length) },

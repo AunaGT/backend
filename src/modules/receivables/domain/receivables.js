@@ -19,6 +19,8 @@
  */
 
 const { round2 } = require('../../../services/accounting/logic')
+const {allocationForReceipt,allocationSelect}=require('./paymentAllocations')
+const {confirmedSaleWhere,CONFIRMED_SALE_STATUS}=require('../../sales/commercialState')
 
 /** Mismo epsilon que compras: por debajo de medio centavo se considera saldado. */
 const ROUND_EPS = 0.005
@@ -145,13 +147,12 @@ function planManual(openSales, requested, amount) {
  */
 async function openSalesOf(db, customerId, branchWhereClause = {}) {
   const sales = await db.sale.findMany({
-    where: {
+    where: confirmedSaleWhere({
       customer_contact_id: customerId,
       payment_status: { in: ['PENDING', 'PARTIAL'] },
       payment_method: { is_credit: true },
-      status: { name: 'Completada' },
       ...branchWhereClause,
-    },
+    }),
     select: {
       id: true, reference: true, date: true, due_date: true,
       adjusted_total: true, payment_status: true,
@@ -168,9 +169,10 @@ async function openSalesOf(db, customerId, branchWhereClause = {}) {
 async function syncSaleStatus(tx, saleId) {
   const sale = await tx.sale.findUnique({
     where: { id: saleId },
-    select: { id: true, adjusted_total: true, paymentEntries: { select: { amount: true } } },
+    select: { id: true, status:{select:{name:true}},adjusted_total: true, paymentEntries: { select: { amount: true } } },
   })
   if (!sale) return
+  if(sale.status?.name!==CONFIRMED_SALE_STATUS)throw Object.assign(new ReceivableError('Confirma la venta antes de aplicar cobros',409),{code:'SALE_NOT_CONFIRMED'})
   const status = statusFor(Number(sale.adjusted_total), paidOf(sale))
   await tx.sale.update({ where: { id: saleId }, data: { payment_status: status } })
 }
@@ -194,7 +196,12 @@ function planApplicationRelease(entries, amount) {
 }
 
 /** Devuelve a saldo a favor la parte de abonos que ya excede el total ajustado. */
-async function releaseSaleOverpayment(tx, saleId, amount) {
+async function releaseSaleOverpayment(tx, saleId, amount, resolution=null) {
+  const source=await tx.sale.findUnique({where:{id:saleId},select:{appointment_engagement:{select:{id:true,company_id:true,branch_id:true,customer_id:true}}}})
+  if(source?.appointment_engagement&&amount>ROUND_EPS){
+    if(!resolution)throw Object.assign(new ReceivableError('Decide si el dinero vuelve a la contratación o al saldo libre antes de liberar el abono',409),{code:'ENGAGEMENT_RESOLUTION_REQUIRED'})
+    return require('../engagementPayments').releaseEngagementSaleOverpayment(tx,source.appointment_engagement,saleId,amount,resolution)
+  }
   const entries = await tx.salePaymentEntry.findMany({
     where: { sale_id: saleId },
     select: { id: true, amount: true, created_at: true },
@@ -219,17 +226,12 @@ async function unappliedPayments(db, customerId, branchWhereClause = {}) {
     where: { customer_id: customerId, ...branchWhereClause },
     select: {
       id: true, amount: true, paid_at: true, kind: true, reference: true,
-      applications: { select: { amount: true } },
+      ...allocationSelect,
     },
     orderBy: { paid_at: 'asc' },
   })
   return payments
-    .map((p) => ({
-      ...p,
-      unapplied: round2(
-        Number(p.amount) - p.applications.reduce((s, a) => s + Number(a.amount), 0)
-      ),
-    }))
+    .map(p=>{const allocation=allocationForReceipt(p);return {...p,allocation,unapplied:Number(allocation.available)}})
     .filter((p) => p.unapplied > ROUND_EPS)
 }
 

@@ -1,0 +1,33 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path'),os=require('node:os')
+const {withDevDb,devDbEnabled}=require('./helpers/salesDevFixture.cjs')
+test('real development DB: shelf layout persistence, fresh-price replay, expiry, and no catalogue mutation',{skip:!devDbEnabled||!process.env.AUNA_SHELF_QA_LEDGER},()=>withDevDb(async db=>{
+  const existing=JSON.parse(fs.readFileSync(process.env.AUNA_SHELF_QA_LEDGER,'utf8'))
+  const {companyId,branchId,userId}=existing,company=await db.company.findUnique({where:{id:companyId}})
+  assert.ok(company?.name.startsWith('QA Etiquetas'),'Only the explicitly identified owned barcode QA company may be used')
+  assert.ok(await db.branch.findFirst({where:{id:branchId,company_id:companyId,active:true}}))
+  assert.ok(await db.userCompany.findFirst({where:{user_id:userId,company_id:companyId}}))
+  const base=await db.product.findFirst({where:{company_id:companyId},select:{category_id:true,status_id:true,supplier_id:true}});assert.ok(base)
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'auna-shelf-qa-')),ledger={companyId,branchId,userId,productId:crypto.randomUUID(),retained:true,requestKeys:[],createdAt:new Date().toISOString()},ledgerPath=path.join(dir,'ledger.json')
+  fs.chmodSync(dir,0o700);fs.writeFileSync(ledgerPath,JSON.stringify(ledger),{mode:0o600})
+  try{
+    const scope={companyId,branchId,branchIds:[branchId],userId,isAdmin:false,permissions:['products.view','products.export','settings.manage']}
+    const {readBarcodeLayout,saveBarcodeLayout,listBarcodeCandidates}=require('../src/modules/inventory/barcodeLabels/layouts'),{prepareShelfLabels}=require('../src/modules/inventory/barcodeLabels/shelfPrices'),v=require('../src/modules/inventory/barcodeLabels/validation')
+    const barcodeBefore=await readBarcodeLayout(db,scope),shelfBefore=await readBarcodeLayout(db,scope,'shelf'),design=v.createShelfLabelTemplate('price'),paper=v.defaultPaper()
+    await saveBarcodeLayout(db,scope,{expectedRevision:shelfBefore.revision,design,defaultPaper:paper},'shelf')
+    assert.deepEqual((await readBarcodeLayout(db,scope,'shelf')).design,design);assert.deepEqual(await readBarcodeLayout(db,scope),barcodeBefore)
+    await db.product.create({data:{id:ledger.productId,company_id:companyId,...base,name:`QA precio estante ${ledger.productId}`,kind:'STANDARD',available_for_sale:true,cost:25,price:75,price_wholesale:65,price_promotion:60,promotion_valid_until:new Date(Date.now()+86400000),barcode:null,stock:0}})
+    const before=await db.product.findUnique({where:{id:ledger.productId}}),candidate=await listBarcodeCandidates(db,scope,{ids:ledger.productId},'shelf');assert.equal(candidate.items.length,1);assert.equal(candidate.items[0].shelfPrices.length,3);assert.equal(Object.hasOwn(candidate.items[0],'cost'),false)
+    const input={requestKey:crypto.randomUUID(),scope:{branchId,inBranch:false},items:[{productId:ledger.productId,copies:3,expectedBarcode:null,assignment:{mode:'keep'}}],design,paper,confirmAssignments:false};ledger.requestKeys.push(input.requestKey)
+    const first=await prepareShelfLabels(db,scope,input);assert.equal(first.products[0].shelfPrices.length,3);assert.deepEqual(first.assignedProductIds,[])
+    assert.deepEqual(await prepareShelfLabels(db,scope,input),first)
+    assert.deepEqual(await db.product.findUnique({where:{id:ledger.productId}}),before)
+    await db.product.update({where:{id:ledger.productId},data:{promotion_valid_until:new Date(Date.now()-60000)}})
+    await assert.rejects(()=>prepareShelfLabels(db,scope,input),e=>e.code==='STALE_PRICES')
+    const next={...input,requestKey:crypto.randomUUID()};ledger.requestKeys.push(next.requestKey)
+    const second=await prepareShelfLabels(db,scope,next);assert.equal(second.products[0].shelfPrices.length,2);assert.equal(second.products[0].warnings.length,1)
+    const unavailable={...input,requestKey:crypto.randomUUID(),items:[{...input.items[0],priceTiers:['PROMOTION']}]}
+    await assert.rejects(()=>prepareShelfLabels(db,scope,unavailable),e=>e.code==='PRICE_UNAVAILABLE')
+    assert.equal(await db.barcodePrintPreparation.count({where:{company_id:companyId,request_key:{in:ledger.requestKeys}}}),2)
+    assert.deepEqual(await readBarcodeLayout(db,scope),barcodeBefore)
+  }finally{fs.writeFileSync(ledgerPath,JSON.stringify(ledger),{mode:0o600});console.log(`Owned shelf-price QA ledger: ${ledgerPath}`)}
+}))

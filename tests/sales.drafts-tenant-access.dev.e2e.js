@@ -1,0 +1,28 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto')
+const {devDbEnabled,withSalesDevFixture,snapshotSaleEffects}=require('./helpers/salesDevFixture.cjs')
+test('operational reader receives no financial evidence; real second tenant cannot mutate origin',{skip:!devDbEnabled},()=>withSalesDevFixture(async({db,scope,fixtures:f,ledger})=>{
+  const booking=await require('../src/modules/appointments/application').createBooking(db,scope,f.individualInput)
+  const draft=await db.sale.findFirst({where:{branch_id:scope.branchId,origin_engagement_id:{not:null}}})
+  const operational={...scope,isAdmin:false,permissions:['appointments.view','appointments.view_team']}
+  const q=require('../src/modules/appointments/commercialQueries'),view=await q.getEngagement(db,operational,draft.origin_engagement_id)
+  for(const key of ['money','receipts','refunds','paymentState','capabilities','commercialDocument'])assert.equal(Object.hasOwn(view,key),false,key)
+  assert.ok(view.history.every(h=>['CREATED','PROGRAMMED','OPERATION_CHANGED'].includes(h.action)))
+  assert.equal(booking.commercialPreparation,'READY')
+  await db.companyModule.update({where:{company_id_module_code:{company_id:scope.companyId,module_code:'sales'}},data:{status:'DISABLED'}})
+  const pending=await require('../src/modules/appointments/application').createBooking(db,{...operational,permissions:[...operational.permissions,'appointments.create','products.view','contacts.clients.view']},{...f.individualInput,startsAt:new Date(new Date(f.individualInput.startsAt).getTime()+3600000).toISOString(),idempotencyKey:crypto.randomUUID()})
+  assert.equal(pending.commercialPreparation,'PENDING');assert.equal(pending.commercialPreparationReason,'INTEGRATION_DISABLED');assert.equal(pending.commercial,null)
+  assert.equal(await db.sale.count({where:{branch_id:scope.branchId,origin_engagement_id:{not:null}}}),1)
+  await db.companyModule.update({where:{company_id_module_code:{company_id:scope.companyId,module_code:'sales'}},data:{status:'ACTIVE'}})
+  const companyId=crypto.randomUUID(),branchId=crypto.randomUUID()
+  ledger.additionalCompanyIds=[companyId];ledger.additionalBranchIds=[branchId]
+  await db.$transaction(async tx=>{
+    await tx.company.create({data:{id:companyId,name:`QA-SALES-DRAFTS-FOREIGN-${companyId}`,code:companyId.slice(0,16)}})
+    await tx.branch.create({data:{id:branchId,company_id:companyId,name:'QA aislamiento',code:'QA'}})
+    await tx.companyModule.createMany({data:['appointments','sales','inventory','contacts','receivables'].map(module_code=>({company_id:companyId,module_code,status:'ACTIVE'}))})
+  })
+  const foreign={...scope,companyId,branchId,branchIds:[branchId]},before=await snapshotSaleEffects(db,scope,draft.origin_engagement_id)
+  await assert.rejects(()=>q.getEngagement(db,foreign,draft.origin_engagement_id),{code:'NOT_FOUND'})
+  await assert.rejects(()=>require('../src/modules/appointments/engagementSales').issueEngagementSale(db,foreign,draft.origin_engagement_id,{...f.saleTerms,expectedVersion:1,idempotencyKey:crypto.randomUUID()}),{code:'NOT_FOUND'})
+  await assert.rejects(()=>require('../src/modules/sales/externalInvoices').registerExternalInvoice(db,foreign,f.priorSale.id,{expectedVersion:1,idempotencyKey:crypto.randomUUID(),documentType:'FACT',authorization:'QA-FOREIGN',series:'QA',number:'1',date:'2026-10-14'}),{code:'NOT_FOUND'})
+  assert.deepEqual(await snapshotSaleEffects(db,scope,draft.origin_engagement_id),before)
+}))

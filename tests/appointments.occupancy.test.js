@@ -1,0 +1,11 @@
+const test=require('node:test'),assert=require('node:assert/strict')
+const {sessionOccupies}=require('../src/modules/appointments/domain/availability')
+test('actividad sin inscripciones ocupa y finalizar conserva desmontaje/vuelta hasta su límite',()=>{
+  const now=new Date('2030-01-01T15:00Z')
+  assert.equal(sessionOccupies({record_type:'ACTIVITY',status:'SCHEDULED'},[],now),true)
+  assert.equal(sessionOccupies({record_type:'ACTIVITY',status:'IN_PROGRESS'},[],now),true)
+  assert.equal(sessionOccupies({record_type:'ACTIVITY',status:'COMPLETED',occupied_until:new Date('2030-01-01T16:00Z')},[],now),true)
+  assert.equal(sessionOccupies({record_type:'ACTIVITY',status:'COMPLETED',occupied_until:now},[],now),false)
+  assert.equal(sessionOccupies({record_type:'ACTIVITY',status:'CANCELLED'},[],now),false)
+  assert.equal(sessionOccupies({record_type:'SCHEDULED_SERVICE',id:'s',mode:'INDIVIDUAL',status:'SCHEDULED'},[{session_id:'s',status:'HELD',expires_at:now}],now),false)
+})

@@ -15,6 +15,9 @@
  */
 
 const { prisma } = require('../../models/prisma')
+const {Prisma}=require('@prisma/client')
+const {parseCouponDesign,assertCouponRestrictionFields}=require('./couponDesign')
+const {claimCouponAssets}=require('./couponAssets')
 const { DateTime } = require('luxon')
 const { applyPromotion, applyMultiplePromotions, PROMOTION_TYPES } = require('../../services/promotionCalculator')
 const { buildPromotionListWhere, attachPromotionUsage } = require('./listFilters')
@@ -377,12 +380,15 @@ exports.create = async (req, res, next) => {
         const branchTarget = await parseBranchIds(req)
 
         const promotion = await prisma.$transaction(async (tx) => {
+            const design=Object.hasOwn(req.body,'coupon_design')?parseCouponDesign(req.body.coupon_design):undefined
+            if(design!==undefined)assertCouponRestrictionFields(design,{...req.body,start_date:req.body.start_date||new Date(),applies_to_all_branches:branchTarget?branchTarget.all:true})
             // Create promotion
             const newPromotion = await tx.promotion.create({
                 data: {
                     company_id: req.companyId,
                     name,
                     description,
+                    ...(design===undefined?{}:{coupon_design:design===null?Prisma.DbNull:design}),
                     type_id,
                     discount_value: discount_value ? Number(discount_value) : null,
                     discount_percentage: discount_percentage ? Number(discount_percentage) : null,
@@ -403,6 +409,7 @@ exports.create = async (req, res, next) => {
             })
 
             // Sucursales donde aplica (vacío = todas)
+            if(design!==undefined)await claimCouponAssets(tx,{companyId:req.companyId,userId:req.user.id,draftId:req.body.coupon_draft_id},newPromotion.id,design)
             if (branchTarget && !branchTarget.all) {
                 await tx.promotionBranch.createMany({
                     data: branchTarget.ids.map(bid => ({
@@ -621,9 +628,7 @@ exports.update = async (req, res, next) => {
         if (raw.applies_to_all !== undefined) data.applies_to_all = Boolean(raw.applies_to_all)
         if (raw.trigger_product_id !== undefined) data.trigger_product_id = raw.trigger_product_id || null
         if (raw.target_product_id !== undefined) data.target_product_id = raw.target_product_id || null
-        if (raw.start_date !== undefined) {
-            data.start_date = raw.start_date ? parsePromotionDate(raw.start_date) : undefined
-        }
+        if (raw.start_date) data.start_date = parsePromotionDate(raw.start_date)
         if (raw.end_date !== undefined) {
             data.end_date = raw.end_date ? parsePromotionDate(raw.end_date, true) : null
         }
@@ -666,6 +671,12 @@ exports.update = async (req, res, next) => {
         if (branchTarget) data.applies_to_all_branches = branchTarget.all
 
         await prisma.$transaction(async (tx) => {
+            if(Object.hasOwn(raw,'coupon_design')){
+                const design=parseCouponDesign(raw.coupon_design)
+                assertCouponRestrictionFields(design,{...existing,...data})
+                await claimCouponAssets(tx,{companyId:req.companyId,userId:req.user.id,draftId:raw.coupon_draft_id},id,design)
+                data.coupon_design=design===null?Prisma.DbNull:design
+            }
             if (Object.keys(data).length > 0) {
                 await tx.promotion.update({ where: { id }, data })
             }
@@ -807,7 +818,7 @@ exports.validateCode = async (req, res, next) => {
             const priorUses = customerId ? await prisma.salePromotion.count({
                 where: {
                     promotion_id: promotion.id,
-                    sale: { is: { customer_contact_id: customerId, status: { is: { name: { not: 'Cancelada' } } } } },
+                    sale: { is: { customer_contact_id: customerId, status: { is: { name: require('../sales/commercialState').CONFIRMED_SALE_STATUS } } } },
                 },
             }) : 0
             const message = customerLimitError(promotion.max_uses_per_customer, customerId, priorUses)

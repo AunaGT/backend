@@ -41,6 +41,7 @@ function defaultCompanySettings(company = {}) {
     ['company_name', company.name || 'Mi Empresa', 'string'],
     ['company_logo_url', company.logo_url || '', 'string'],
     ['company_nit', company.tax_id || '', 'string'],
+    ['fel_enabled', 'false', 'string'],
     ['company_address', company.address || '', 'string'],
     ['company_municipality', '', 'string'],
     ['company_department', '', 'string'],
@@ -63,13 +64,10 @@ function defaultCompanySettings(company = {}) {
 
 /** Crea las claves que falten; nunca pisa lo ya configurado. */
 async function seedCompanySettings(tx, companyId, company = {}) {
-  for (const [key, value, type] of defaultCompanySettings(company)) {
-    await tx.systemSetting.upsert({
-      where: { company_id_key: { company_id: companyId, key } },
-      update: {},
-      create: { company_id: companyId, key, value, type },
-    })
-  }
+  await tx.systemSetting.createMany({
+    data: defaultCompanySettings(company).map(([key, value, type]) => ({ company_id: companyId, key, value, type })),
+    skipDuplicates: true,
+  })
 }
 
 module.exports = { seedCompanySettings, defaultCompanySettings, DEFAULT_DENOMINATIONS }

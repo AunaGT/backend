@@ -12,6 +12,7 @@ const { Router } = require('express')
 const router = Router()
 const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const Receivables = require('./controller')
+router.use(Auth, require('../platform').requireModule('sales'))
 
 // Cartera
 router.get('/', Auth, hasPermission('receivables.view'), Receivables.list)

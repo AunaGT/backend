@@ -12,6 +12,15 @@
 
 /** code → permisos que otorga implícitamente. */
 const IMPLIES = {
+  'appointments.create': ['appointments.view'],
+  'appointments.edit': ['appointments.view'],
+  'appointments.cancel': ['appointments.view'],
+  'appointments.attend': ['appointments.view'],
+  'appointments.configure': ['appointments.view'],
+  'appointments.view_team': ['appointments.view'],
+  'appointments.collect':['appointments.view','receivables.view'],
+  'appointments.refund':['appointments.view','receivables.view'],
+  'appointments.issue_sale':['appointments.view','sales.view'],
   'hr.documents.manage': ['hr.documents.view'],
   'hr.documents.archive': ['hr.documents.view'],
   // --- Usuarios y roles -----------------------------------------------------
@@ -83,6 +92,7 @@ const IMPLIES = {
   'sales.view_detail': ['sales.view'],
   'sales.view_invoice': ['sales.view'],
   'sales.cancel': ['sales.view', 'sales.view_detail'],
+  'sales.fiscal.register':['sales.view','sales.view_detail'],
   'quotes.create': ['quotes.view', 'products.view', 'contacts.clients.view'],
   'quotes.manage': ['quotes.view'],
   'orders.create': ['orders.view', 'products.view', 'contacts.clients.view'],

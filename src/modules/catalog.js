@@ -21,6 +21,7 @@ const manifests = [
   require('./transfers/manifest'),
   require('./hr/manifest'),
   require('./payroll/manifest'),
+  require('./appointments/manifest'),
 ]
 
 const MODULE_MANIFESTS = Object.freeze([...manifests])

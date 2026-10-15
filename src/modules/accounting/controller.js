@@ -145,7 +145,7 @@ exports.updateConfig = async (req, res, next) => {
     if (existing) {
       try { current = JSON.parse(existing.value) } catch { current = {} }
     }
-    const defaults = {}
+    const defaults = { ...current }
     for (const key of DEFAULT_ACCOUNT_KEYS) {
       const code = incoming[key]
       if (!code) return res.status(400).json({ error: `Falta la cuenta para «${key}»` })
@@ -159,7 +159,7 @@ exports.updateConfig = async (req, res, next) => {
       const code = incoming[key] || current[key]
       if (!code) continue
       const acc = await prisma.account.findFirst({ where: { code: String(code), company_id: req.companyId } })
-      if (!acc || !acc.active || acc.is_group) {
+      if (!acc || !acc.active || acc.is_group || (key === 'customerAdvances' && acc.type !== 'LIABILITY')) {
         return res.status(400).json({ error: `Cuenta ${code} inválida para «${key}» (debe existir, activa y no agrupadora)` })
       }
       defaults[key] = String(code)

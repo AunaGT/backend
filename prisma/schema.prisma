@@ -15,6 +15,372 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// Agenda operativa: no crea ventas, pagos ni movimientos físicos.
+model ServiceScheduleProfile {
+  allowed_venue_kinds String[] @default(["BRANCH"])
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  product_id String @unique @db.Uuid
+  product Product @relation(fields: [company_id, product_id], references: [company_id, id], onDelete: Restrict)
+  enabled Boolean @default(false)
+  mode String @db.VarChar(20)
+  scheduling_style String @default("APPOINTMENT") @db.VarChar(20)
+  duration_policy String @default("FIXED") @db.VarChar(20)
+  completion_policy String @default("MANUAL") @db.VarChar(10)
+  duration_minutes Int
+  before_minutes Int @default(0)
+  after_minutes Int @default(0)
+  interval_minutes Int @default(15)
+  lead_minutes Int @default(0)
+  horizon_days Int @default(60)
+  cancellation_hours Int @default(24)
+  confirmation String @default("AUTOMATIC") @db.VarChar(20)
+  capacity Int @default(1)
+  requires_provider Boolean @default(true)
+  requires_resource Boolean @default(false)
+  instructions String @default("") @db.VarChar(2000)
+  public_instructions String @default("") @db.VarChar(2000)
+  version Int @default(1)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  branches ServiceScheduleBranch[]
+  providers ServiceScheduleProvider[]
+  resources ServiceScheduleResource[]
+  @@unique([company_id, id])
+  @@index([company_id, enabled])
+  @@unique([company_id, product_id])
+  @@map("service_schedule_profiles")
+}
+
+model ServiceProvider {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  employee_id String? @unique @db.Uuid
+  employee Employee? @relation(fields: [company_id, employee_id], references: [company_id, id], onDelete: Restrict)
+  user_id String? @db.Uuid
+  user User? @relation("ServiceProviderUser", fields: [user_id], references: [id], onDelete: Restrict)
+  name String @db.VarChar(150)
+  active Boolean @default(true)
+  version Int @default(1)
+  created_by String @db.Uuid
+  creator User @relation("ServiceProviderCreator", fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  branches ServiceProviderBranch[]
+  profiles ServiceScheduleProvider[]
+  calendars ScheduleCalendar[]
+  sessions AppointmentSessionProvider[]
+  @@unique([company_id, id])
+  @@unique([company_id, user_id])
+  @@unique([company_id, employee_id])
+  @@index([company_id, active])
+  @@map("service_providers")
+}
+
+model ServiceProviderBranch {
+  company_id String @db.Uuid
+  provider_id String @db.Uuid
+  provider ServiceProvider @relation(fields: [company_id, provider_id], references: [company_id, id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  @@id([provider_id, branch_id])
+  @@index([company_id, branch_id])
+  @@map("service_provider_branches")
+}
+
+model ScheduleResource {
+  portable Boolean @default(false)
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  name String @db.VarChar(150)
+  type String @db.VarChar(20)
+  person_capacity Int?
+  active Boolean @default(true)
+  version Int @default(1)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  profiles ServiceScheduleResource[]
+  calendars ScheduleCalendar[]
+  sessions AppointmentSessionResource[]
+  @@unique([company_id, id])
+  @@index([company_id, branch_id, active])
+  @@map("schedule_resources")
+}
+
+model ServiceScheduleBranch {
+  company_id String @db.Uuid
+  profile_id String @db.Uuid
+  profile ServiceScheduleProfile @relation(fields: [company_id, profile_id], references: [company_id, id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  @@id([profile_id, branch_id])
+  @@index([company_id, branch_id])
+  @@map("service_schedule_branches")
+}
+
+model ServiceScheduleProvider {
+  company_id String @db.Uuid
+  profile_id String @db.Uuid
+  profile ServiceScheduleProfile @relation(fields: [company_id, profile_id], references: [company_id, id], onDelete: Restrict)
+  provider_id String @db.Uuid
+  provider ServiceProvider @relation(fields: [company_id, provider_id], references: [company_id, id], onDelete: Restrict)
+  @@id([profile_id, provider_id])
+  @@index([company_id, provider_id])
+  @@map("service_schedule_providers")
+}
+
+model ServiceScheduleResource {
+  company_id String @db.Uuid
+  profile_id String @db.Uuid
+  profile ServiceScheduleProfile @relation(fields: [company_id, profile_id], references: [company_id, id], onDelete: Restrict)
+  resource_id String @db.Uuid
+  resource ScheduleResource @relation(fields: [company_id, resource_id], references: [company_id, id], onDelete: Restrict)
+  @@id([profile_id, resource_id])
+  @@index([company_id, resource_id])
+  @@map("service_schedule_resources")
+}
+
+model ScheduleCalendar {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  owner_type String @db.VarChar(20)
+  branch_id String? @unique @db.Uuid
+  branch Branch? @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  provider_id String? @unique @db.Uuid
+  provider ServiceProvider? @relation(fields: [company_id, provider_id], references: [company_id, id], onDelete: Restrict)
+  resource_id String? @unique @db.Uuid
+  resource ScheduleResource? @relation(fields: [company_id, resource_id], references: [company_id, id], onDelete: Restrict)
+  timezone String @db.VarChar(100)
+  valid_from DateTime? @db.Date
+  valid_until DateTime? @db.Date
+  inherit_branch Boolean @default(false)
+  version Int @default(1)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  rules AvailabilityRule[]
+  exceptions AvailabilityException[]
+  @@unique([company_id, id])
+  @@map("schedule_calendars")
+}
+
+model AvailabilityRule {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  calendar_id String @db.Uuid
+  calendar ScheduleCalendar @relation(fields: [company_id, calendar_id], references: [company_id, id], onDelete: Restrict)
+  weekday Int
+  from_minute Int
+  to_minute Int
+  @@index([company_id, calendar_id, weekday])
+  @@map("availability_rules")
+}
+
+model AvailabilityException {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  calendar_id String @db.Uuid
+  calendar ScheduleCalendar @relation(fields: [company_id, calendar_id], references: [company_id, id], onDelete: Restrict)
+  local_date DateTime @db.Date
+  from_minute Int?
+  to_minute Int?
+  reason String @default("") @db.VarChar(500)
+  @@index([company_id, calendar_id, local_date])
+  @@map("availability_exceptions")
+}
+
+model AppointmentSession {
+  completion_policy String @default("MANUAL") @db.VarChar(10)
+  actual_completed_at DateTime?
+  commercial_completion_confirmed_at DateTime?
+  engagement_schedules AppointmentEngagementSchedule[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  product_id String? @db.Uuid
+  product Product? @relation(fields: [company_id, product_id], references: [company_id, id], onDelete: Restrict)
+  record_type String @default("SCHEDULED_SERVICE") @db.VarChar(20)
+  purpose String? @db.VarChar(20)
+  title String? @db.VarChar(200)
+  organizer_id String? @db.Uuid
+  organizer User? @relation("ActivityOrganizer", fields: [organizer_id], references: [id], onDelete: Restrict)
+  venue Json @default("{\"kind\":\"BRANCH\",\"name\":\"\",\"address\":\"\",\"references\":\"\",\"url\":\"\"}")
+  estimated_attendance Int?
+  outbound_minutes Int @default(0)
+  setup_minutes Int @default(0)
+  teardown_minutes Int @default(0)
+  return_minutes Int @default(0)
+  mode String @db.VarChar(20)
+  starts_at DateTime
+  ends_at DateTime
+  occupied_from DateTime
+  occupied_until DateTime
+  timezone String @db.VarChar(100)
+  capacity Int
+  status String @default("SCHEDULED") @db.VarChar(20)
+  version Int @default(1)
+  policy_snapshot Json
+  notes String @default("") @db.VarChar(2000)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  providers AppointmentSessionProvider[]
+  resources AppointmentSessionResource[]
+  bookings AppointmentBooking[]
+  waitlist AppointmentWaitlist[]
+  history AppointmentHistory[]
+  participants AppointmentParticipant[]
+  @@unique([company_id, id])
+  @@unique([company_id, branch_id, id])
+  @@unique([company_id, id, record_type], map: "appointment_session_type_key")
+  @@unique([company_id, branch_id, id, record_type], map: "appointment_session_branch_type_key")
+  @@index([company_id, organizer_id, occupied_from, occupied_until], map: "appointment_organizer_occupied_idx")
+  @@index([company_id, branch_id, starts_at])
+  @@index([company_id, occupied_from, occupied_until])
+  @@map("appointment_sessions")
+}
+
+model AppointmentParticipant {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  session_id String @db.Uuid
+  session_type String @default("ACTIVITY") @db.VarChar(20)
+  session AppointmentSession @relation(fields: [company_id, session_id, session_type], references: [company_id, id, record_type], onDelete: Restrict)
+  kind String @db.VarChar(20)
+  user_id String? @db.Uuid
+  user User? @relation("ActivityParticipantUser", fields: [user_id], references: [id], onDelete: Restrict)
+  contact_id String? @db.Uuid
+  contact Supplier? @relation(fields: [company_id, contact_id], references: [company_id, id], onDelete: Restrict)
+  name String? @db.VarChar(150)
+  @@unique([session_id, user_id])
+  @@unique([session_id, contact_id])
+  @@index([company_id, user_id, session_id])
+  @@map("appointment_participants")
+}
+
+model AppointmentSessionProvider {
+  company_id String @db.Uuid
+  session_id String @db.Uuid
+  session AppointmentSession @relation(fields: [company_id, session_id], references: [company_id, id], onDelete: Restrict)
+  provider_id String @db.Uuid
+  provider ServiceProvider @relation(fields: [company_id, provider_id], references: [company_id, id], onDelete: Restrict)
+  @@id([session_id, provider_id])
+  @@index([company_id, provider_id, session_id])
+  @@map("appointment_session_providers")
+}
+
+model AppointmentSessionResource {
+  company_id String @db.Uuid
+  session_id String @db.Uuid
+  session AppointmentSession @relation(fields: [company_id, session_id], references: [company_id, id], onDelete: Restrict)
+  resource_id String @db.Uuid
+  resource ScheduleResource @relation(fields: [company_id, resource_id], references: [company_id, id], onDelete: Restrict)
+  @@id([session_id, resource_id])
+  @@index([company_id, resource_id, session_id])
+  @@map("appointment_session_resources")
+}
+
+model AppointmentBooking {
+  engagement_schedules AppointmentEngagementSchedule[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  session_id String @db.Uuid
+  session_type String @default("SCHEDULED_SERVICE") @db.VarChar(20)
+  session AppointmentSession @relation(fields: [company_id, branch_id, session_id, session_type], references: [company_id, branch_id, id, record_type], onDelete: Restrict, map: "appointment_booking_session_type_fkey")
+  contact_id String @db.Uuid
+  contact Supplier @relation(fields: [company_id, contact_id], references: [company_id, id], onDelete: Restrict)
+  status String @db.VarChar(20)
+  expires_at DateTime?
+  quantity Decimal @db.Decimal(12, 4)
+  commercial_snapshot Json
+  policy_snapshot Json
+  notes String @default("") @db.VarChar(2000)
+  version Int @default(1)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  history AppointmentHistory[]
+  waitlist AppointmentWaitlist[]
+  @@unique([company_id, id])
+  @@index([company_id, branch_id, status, expires_at])
+  @@index([company_id, session_id, status])
+  @@index([company_id, contact_id, created_at])
+  @@unique([company_id, session_id, id], map: "booking_session_identity_key")
+  @@map("appointment_bookings")
+}
+
+model AppointmentWaitlist {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  session_id String @db.Uuid
+  session_type String @default("SCHEDULED_SERVICE") @db.VarChar(20)
+  session AppointmentSession @relation(fields: [company_id, session_id, session_type], references: [company_id, id, record_type], onDelete: Restrict, map: "appointment_waitlist_session_type_fkey")
+  contact_id String @db.Uuid
+  contact Supplier @relation(fields: [company_id, contact_id], references: [company_id, id], onDelete: Restrict)
+  status String @default("WAITING") @db.VarChar(20)
+  booking_id String? @db.Uuid
+  booking AppointmentBooking? @relation(fields: [company_id, booking_id], references: [company_id, id], onDelete: Restrict)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  @@index([company_id, session_id, status, created_at, id])
+  @@map("appointment_waitlist")
+}
+
+model AppointmentHistory {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  session_id String? @db.Uuid
+  session AppointmentSession? @relation(fields: [company_id, session_id], references: [company_id, id], onDelete: Restrict)
+  booking_id String? @db.Uuid
+  booking AppointmentBooking? @relation(fields: [company_id, booking_id], references: [company_id, id], onDelete: Restrict)
+  actor_id String? @db.Uuid
+  actor User? @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  action String @db.VarChar(50)
+  before Json?
+  after Json?
+  reason String @default("") @db.VarChar(500)
+  created_at DateTime @default(now())
+  @@index([company_id, session_id, created_at])
+  @@index([company_id, booking_id, created_at])
+  @@map("appointment_history")
+}
+
+model AppointmentRequest {
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  operation String @db.VarChar(50)
+  idempotency_key String @db.VarChar(100)
+  input_hash String @db.VarChar(64)
+  result_type String @db.VarChar(20)
+  result_id String @db.Uuid
+  created_at DateTime @default(now())
+  @@id([company_id, actor_id, operation, idempotency_key])
+  @@map("appointment_requests")
+}
+
 // ========================================
 // Multi-empresa y sucursales
 // ========================================
@@ -23,6 +389,10 @@ datasource db {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  roles Role[]
+  supplier_payments SupplierPayment[]
+  merchandise_payment_events MerchandisePaymentAuditEvent[]
+  barcode_print_preparations BarcodePrintPreparation[]
   id         String   @id @default(uuid()) @db.Uuid
   name       String   @db.VarChar(150)
   code       String   @unique @db.VarChar(20)
@@ -44,6 +414,7 @@ model Company {
   payment_terms      PaymentTerm[]
   promotions         Promotion[]
   promotion_codes    PromotionCode[]
+  promotion_coupon_assets PromotionCouponAsset[]
   system_settings    SystemSetting[]
   accounts           Account[]
   accounting_periods AccountingPeriod[]
@@ -56,6 +427,17 @@ model Company {
   employee_advances  EmployeeAdvance[]
   payroll_runs       PayrollRun[]
   company_modules    CompanyModule[]
+  service_schedule_profiles ServiceScheduleProfile[]
+  service_providers ServiceProvider[]
+  schedule_resources ScheduleResource[]
+  schedule_calendars ScheduleCalendar[]
+  appointment_sessions AppointmentSession[]
+  appointment_bookings AppointmentBooking[]
+  appointment_waitlist AppointmentWaitlist[]
+  appointment_history AppointmentHistory[]
+  appointment_requests AppointmentRequest[]
+
+  appointment_participants AppointmentParticipant[]
 
   @@map("companies")
 }
@@ -115,6 +497,9 @@ model UserCompany {
 /// Sucursal. Toda entidad transaccional lleva branch_id; la empresa se deriva
 /// de la sucursal.
 model Branch {
+  supplier_payments SupplierPayment[]
+  barcode_print_preparations BarcodePrintPreparation[]
+  appointment_engagements AppointmentEngagement[]
   id                String         @id @default(uuid()) @db.Uuid
   company_id        String         @db.Uuid
   company           Company        @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -161,9 +546,17 @@ model Branch {
   attendance               Attendance[]
   employee_advances        EmployeeAdvance[]
   payroll_runs             PayrollRun[]
+  service_schedule_branches ServiceScheduleBranch[]
+  service_provider_branches ServiceProviderBranch[]
+  schedule_resources ScheduleResource[]
+  schedule_calendars ScheduleCalendar[]
+  appointment_sessions AppointmentSession[]
+  appointment_bookings AppointmentBooking[]
+  appointment_history AppointmentHistory[]
 
   @@unique([company_id, code])
   @@index([manager_user_id])
+  @@unique([company_id, id])
   @@map("branches")
 }
 
@@ -444,6 +837,8 @@ enum ReturnSettlementKind {
 }
 
 model PaymentMethod {
+  supplier_payments SupplierPayment[]
+  customer_payment_refunds CustomerPaymentRefund[]
   id                    Int                  @id @default(autoincrement())
   name                  String               @unique @db.VarChar(50)
   /// Venta a crédito: no entra dinero al cobrar, genera cuenta por cobrar.
@@ -561,6 +956,8 @@ enum SalesChannel {
 }
 
 model Supplier {
+  supplier_payments SupplierPayment[]
+  appointment_engagements AppointmentEngagement[]
   id                     String                @id @default(uuid()) @db.Uuid
   company_id             String                @db.Uuid
   company                Company               @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -596,10 +993,15 @@ model Supplier {
   linked_sales           Sale[]                @relation("SaleCustomerContact")
   customer_payments      CustomerPayment[]
   commercial_documents   CommercialDocument[]  @relation("CommercialDocCustomer")
+  appointment_bookings AppointmentBooking[]
+  appointment_waitlist AppointmentWaitlist[]
+
+  appointment_participants AppointmentParticipant[]
 
   /// Listado de contactos: party_type + orden por nombre (reemplaza índice solo party_type)
   @@index([party_type, name], map: "idx_suppliers_party_type_name")
   @@index([company_id, party_type])
+  @@unique([company_id, id])
   @@map("suppliers")
 }
 
@@ -633,6 +1035,7 @@ model SupplierPaymentTerm {
 }
 
 model Product {
+  engagement_lines AppointmentEngagementLine[]
   id                         String                    @id @default(uuid()) @db.Uuid
   company_id                 String                    @db.Uuid
   company                    Company                   @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -683,8 +1086,11 @@ model Product {
   location_stocks            ProductStockLocation[]
   stock_movements            StockMovement[]
   transfer_lines             StockTransferLine[]
+  service_schedule_profile ServiceScheduleProfile?
+  appointment_sessions AppointmentSession[]
 
   @@unique([company_id, barcode])
+  @@unique([company_id, id])
   @@index([company_id])
   @@map("products")
 }
@@ -740,12 +1146,22 @@ model ProductBomLine {
 
 model Role {
   id          Int              @id @default(autoincrement())
-  name        String           @unique @db.VarChar(50)
+  name        String           @db.VarChar(50)
   users       User[]
   permissions RolePermission[]
   company_id  String?          @db.Uuid
   description String?          @db.VarChar(500)
   memberships UserCompany[]
+  system_key String? @unique(map: "roles_system_key_key") @db.VarChar(16)
+  legacy_role_id Int?
+  revision Int @default(0)
+  name_key String @default(dbgenerated()) @db.Text
+  company Company? @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  legacy_role Role? @relation("RoleOrigin", fields: [legacy_role_id], references: [id], onDelete: Restrict)
+  local_roles Role[] @relation("RoleOrigin")
+
+  @@unique([company_id, name_key], map: "roles_company_name_key")
+  @@unique([company_id, legacy_role_id], map: "roles_company_legacy_key")
 
   @@map("roles")
 }
@@ -773,6 +1189,15 @@ model RolePermission {
 }
 
 model User {
+  supplier_payments_registered SupplierPayment[] @relation("SupplierPaymentRegisteredBy")
+  supplier_payments_cancelled SupplierPayment[] @relation("SupplierPaymentCancelledBy")
+  merchandise_entries_cancelled IncomingMerchandisePaymentEntry[] @relation("MerchandiseEntryCancelledBy")
+  merchandise_payment_events MerchandisePaymentAuditEvent[]
+  barcode_print_preparations BarcodePrintPreparation[]
+  appointment_engagements AppointmentEngagement[]
+  payment_allocation_events PaymentAllocationEvent[]
+  customer_payment_refunds CustomerPaymentRefund[]
+  engagement_history AppointmentEngagementHistory[]
   id                                     String                            @id @default(uuid()) @db.Uuid
   name                                   String                            @db.VarChar(150)
   email                                  String                            @unique @db.VarChar(150)
@@ -831,6 +1256,17 @@ model User {
   updated_at DateTime @updatedAt
 
   refresh_tokens RefreshToken[]
+  promotion_coupon_assets PromotionCouponAsset[]
+  service_providers ServiceProvider[] @relation("ServiceProviderUser")
+  service_providers_created ServiceProvider[] @relation("ServiceProviderCreator")
+  service_profiles_created ServiceScheduleProfile[]
+  appointment_sessions_created AppointmentSession[]
+  appointment_activities_organized AppointmentSession[] @relation("ActivityOrganizer")
+  appointment_activity_participation AppointmentParticipant[] @relation("ActivityParticipantUser")
+  appointment_bookings_created AppointmentBooking[]
+  appointment_waitlist_created AppointmentWaitlist[]
+  appointment_history_authored AppointmentHistory[]
+  appointment_requests AppointmentRequest[]
   auth_version   Int @default(0)
   last_login_at  DateTime?
   password_changed_at DateTime?
@@ -894,6 +1330,13 @@ model Alert {
 }
 
 model Sale {
+  settlement_source String @default("LEGACY") @db.VarChar(30)
+  appointment_engagement AppointmentEngagement? @relation("EngagementConfirmedSale")
+  origin_engagement_id String? @unique(map: "sale_origin_engagement_key") @db.Uuid
+  origin_engagement AppointmentEngagement? @relation("EngagementSaleOrigin", fields: [branch_id, origin_engagement_id], references: [branch_id, id], onDelete: Restrict)
+  version Int @default(1)
+  confirmed_at DateTime?
+  history SaleHistory[]
   id                String          @id @default(uuid()) @db.Uuid
   branch_id         String          @db.Uuid
   branch            Branch          @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -908,8 +1351,8 @@ model Sale {
   total_returned    Decimal         @default(0) @db.Decimal(12, 2)
   adjusted_total    Decimal         @db.Decimal(12, 2)
   items             Int
-  payment_method_id Int
-  payment_method    PaymentMethod   @relation(fields: [payment_method_id], references: [id])
+  payment_method_id Int?
+  payment_method    PaymentMethod?  @relation(fields: [payment_method_id], references: [id])
   status_id         Int
   status            SaleStatus      @relation(fields: [status_id], references: [id])
   amount_received   Decimal?        @db.Decimal(12, 2)
@@ -947,6 +1390,9 @@ model Sale {
 
   @@unique([branch_id, reference])
   @@unique([branch_id, idempotency_key])
+  @@unique([branch_id, id], map: "sale_branch_identity_key")
+  @@unique([branch_id, origin_engagement_id], map: "sale_origin_branch_key")
+  @@unique([branch_id, origin_engagement_id, id], map: "sale_origin_identity_key")
   @@index([created_by])
   @@index([cash_register_session_id])
   /// Listados por estado y fecha (p. ej. resumen de cliente, ventas «Completada»)
@@ -993,6 +1439,8 @@ enum StockReservationKind {
 }
 
 model CommercialDocument {
+  quoted_engagement AppointmentEngagement? @relation("EngagementQuote")
+  ordered_engagement AppointmentEngagement? @relation("EngagementOrder")
   id                  String                   @id @default(uuid()) @db.Uuid
   branch_id           String                   @db.Uuid
   branch              Branch                   @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -1034,11 +1482,14 @@ model CommercialDocument {
 
   @@unique([branch_id, reference])
   @@index([doc_type, status, created_at(sort: Desc)], map: "idx_commercial_docs_type_status_created")
+  @@unique([branch_id, id], map: "document_branch_identity_key")
   @@index([customer_contact_id], map: "idx_commercial_docs_customer_contact")
   @@map("commercial_documents")
 }
 
 model CommercialDocumentLine {
+  service_schedule_snapshot Json?
+  engagement_lines AppointmentEngagementLine[]
   id            String             @id @default(uuid()) @db.Uuid
   document_id   String             @db.Uuid
   document      CommercialDocument @relation(fields: [document_id], references: [id], onDelete: Cascade)
@@ -1058,6 +1509,7 @@ model CommercialDocumentLine {
   reservations  StockReservation[]
 
   @@index([document_id], map: "idx_commercial_doc_lines_document")
+  @@unique([document_id, id], map: "document_line_identity_key")
   @@index([product_id], map: "idx_commercial_doc_lines_product")
   @@map("commercial_document_lines")
 }
@@ -1134,6 +1586,8 @@ model SaleDte {
   id            String    @id @default(uuid()) @db.Uuid
   sale_id       String    @db.Uuid
   sale          Sale      @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  company_id    String    @db.Uuid
+  branch_id     String    @db.Uuid
   document_type String?   @db.VarChar(50) // CFAC, CCRE, etc.
   authorization String?   @db.VarChar(100) // Número de autorización SAT
   series        String?   @db.VarChar(20)
@@ -1147,6 +1601,25 @@ model SaleDte {
 
   @@index([sale_id])
   @@map("sale_dtes")
+}
+
+model SaleHistory {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  sale_id String @db.Uuid
+  sale Sale @relation(fields:[branch_id,sale_id],references:[branch_id,id],onDelete:Restrict)
+  actor_id String @db.Uuid
+  action String @db.VarChar(40)
+  request_key String @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  before Json?
+  after Json?
+  reason String? @db.Text
+  created_at DateTime @default(now())
+  @@unique([company_id,actor_id,action,request_key],map:"sale_history_request_key")
+  @@index([sale_id,created_at])
+  @@map("sale_history")
 }
 
 model SaleItem {
@@ -1212,6 +1685,10 @@ model SupplierCategory {
 
 /// Registro de auditoría para ingresos de mercancía
 model IncomingMerchandise {
+  legacy_settled_amount Decimal @default(0) @db.Decimal(12, 2)
+  payment_revision Int @default(0)
+  payment_balance_review_required Boolean @default(false)
+  payment_audit MerchandisePaymentAuditEvent[]
   id                 String                            @id @default(uuid()) @db.Uuid
   branch_id          String                            @db.Uuid
   branch             Branch                            @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -1243,6 +1720,7 @@ model IncomingMerchandise {
   /// Cubre también filtro por supplier_id (prefijo del compuesto)
   @@index([supplier_id, date(sort: Desc)], map: "idx_incoming_merchandise_supplier_date")
   @@index([branch_id, date(sort: Desc)])
+  @@index([branch_id, due_date])
   @@map("incoming_merchandise")
 }
 
@@ -1262,6 +1740,12 @@ model IncomingMerchandiseItem {
 
 /// Abono parcial hacia el total del ingreso (historial de pagos al proveedor)
 model IncomingMerchandisePaymentEntry {
+  supplier_payment_id String? @db.Uuid
+  supplierPayment SupplierPayment? @relation(fields: [supplier_payment_id], references: [id], onDelete: Restrict)
+  cancelled_at DateTime?
+  cancelled_by String? @db.Uuid
+  cancelledBy User? @relation("MerchandiseEntryCancelledBy", fields: [cancelled_by], references: [id], onDelete: Restrict)
+  cancel_reason String? @db.VarChar(500)
   id                      String              @id @default(uuid()) @db.Uuid
   incoming_merchandise_id String              @db.Uuid
   incomingMerchandise     IncomingMerchandise @relation(fields: [incoming_merchandise_id], references: [id], onDelete: Cascade)
@@ -1273,7 +1757,63 @@ model IncomingMerchandisePaymentEntry {
   created_at              DateTime            @default(now())
 
   @@index([incoming_merchandise_id])
+  @@unique([supplier_payment_id, incoming_merchandise_id], map: "incoming_merchandise_payment_entries_supplier_payment_id_inc_ke")
   @@map("incoming_merchandise_payment_entries")
+}
+
+enum SupplierPaymentStatus {
+  POSTED
+  CANCELLED
+}
+
+model SupplierPayment {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  supplier_id String @db.Uuid
+  supplier Supplier @relation(fields: [company_id, supplier_id], references: [company_id, id], onDelete: Restrict)
+  amount Decimal @db.Decimal(12, 2)
+  currency_code String @db.VarChar(3)
+  paid_at DateTime
+  payment_method_id Int?
+  paymentMethod PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
+  reference String? @db.VarChar(255)
+  notes String? @db.Text
+  registered_by String @db.Uuid
+  registeredBy User @relation("SupplierPaymentRegisteredBy", fields: [registered_by], references: [id], onDelete: Restrict)
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  status SupplierPaymentStatus @default(POSTED)
+  created_at DateTime @default(now())
+  cancelled_at DateTime?
+  cancelled_by String? @db.Uuid
+  cancelledBy User? @relation("SupplierPaymentCancelledBy", fields: [cancelled_by], references: [id], onDelete: Restrict)
+  cancel_reason String? @db.VarChar(500)
+  applications IncomingMerchandisePaymentEntry[]
+  @@unique([company_id, registered_by, request_key])
+  @@index([company_id, supplier_id, paid_at(sort: Desc)])
+  @@index([branch_id, paid_at(sort: Desc)])
+  @@map("supplier_payments")
+}
+
+model MerchandisePaymentAuditEvent {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  incoming_merchandise_id String @db.Uuid
+  incomingMerchandise IncomingMerchandise @relation(fields: [incoming_merchandise_id], references: [id], onDelete: Restrict)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  action String @db.VarChar(50)
+  reason String? @db.VarChar(500)
+  before Json
+  after Json
+  created_at DateTime @default(now())
+  @@index([incoming_merchandise_id, created_at(sort: Desc)], map: "merchandise_payment_audit_events_incoming_merchandise_id_creat_")
+  @@index([company_id, created_at(sort: Desc)])
+  @@map("merchandise_payment_audit_events")
 }
 
 // ========================================
@@ -1285,6 +1825,9 @@ model IncomingMerchandisePaymentEntry {
 /// Espejo de IncomingMerchandisePaymentEntry, pero con un padre porque el cliente
 /// paga «a cuenta» un monto que cruza varias facturas y se le entrega un recibo.
 model CustomerPayment {
+  commitments PaymentCommitment[]
+  allocation_events PaymentAllocationEvent[]
+  refunds CustomerPaymentRefund[]
   id          String   @id @default(uuid()) @db.Uuid
   branch_id   String   @db.Uuid
   branch      Branch   @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -1319,6 +1862,7 @@ model CustomerPayment {
   @@index([cash_register_session_id])
   @@index([registered_by])
   @@map("customer_payments")
+  @@unique([branch_id, customer_id, id], map: "payment_customer_identity_key")
 }
 
 /// Aplicación de un recibo de cobro contra una venta al crédito concreta.
@@ -1420,6 +1964,7 @@ model ReturnReplacementItem {
 }
 
 model ReturnSettlement {
+  receipt_allocations PaymentAllocationEvent[]
   id                       String               @id @default(uuid()) @db.Uuid
   return_id                String               @db.Uuid
   return                   Return               @relation(fields: [return_id], references: [id], onDelete: Cascade)
@@ -1472,6 +2017,7 @@ enum CashRegisterSessionStatus {
 
 /// Apertura de caja: una sesión OPEN por caja (índice único parcial en migración SQL).
 model CashRegisterSession {
+  customer_payment_refunds CustomerPaymentRefund[]
   id               String       @id @default(uuid()) @db.Uuid
   cash_register_id String       @db.Uuid
   cashRegister     CashRegister @relation(fields: [cash_register_id], references: [id], onDelete: Restrict)
@@ -1640,6 +2186,8 @@ model Promotion {
   company     Company       @relation(fields: [company_id], references: [id], onDelete: Restrict)
   name        String        @db.VarChar(150)
   description String?       @db.Text
+  coupon_design Json?
+  coupon_assets PromotionCouponAsset[]
   type_id     Int
   type        PromotionType @relation(fields: [type_id], references: [id])
 
@@ -1687,6 +2235,32 @@ model Promotion {
 }
 
 // Códigos de promoción (permite múltiples códigos por promoción)
+enum CouponAssetStatus {
+  UPLOADING
+  READY
+  DELETING
+}
+
+model PromotionCouponAsset {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  created_by String? @db.Uuid
+  author User? @relation(fields: [created_by], references: [id], onDelete: SetNull)
+  draft_id String @db.Uuid
+  promotion_id String? @db.Uuid
+  promotion Promotion? @relation(fields: [promotion_id], references: [id], onDelete: SetNull)
+  storage_path String @unique @db.VarChar(200)
+  status CouponAssetStatus @default(UPLOADING)
+  width Int
+  height Int
+  created_at DateTime @default(now())
+  expires_at DateTime?
+  @@index([company_id, promotion_id])
+  @@index([status, expires_at])
+  @@map("promotion_coupon_assets")
+}
+
 model PromotionCode {
   id           Int       @id @default(autoincrement())
   /// Denormalizado desde la promoción para unicidad del código por empresa
@@ -1852,6 +2426,23 @@ model SystemSetting {
   @@map("system_settings")
 }
 
+model BarcodePrintPreparation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  actor_id String @db.Uuid
+  branch_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  snapshot Json
+  created_at DateTime @default(now())
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  actor User @relation(fields:[actor_id],references:[id],onDelete:Restrict)
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  @@unique([company_id,actor_id,request_key])
+  @@index([company_id,created_at])
+  @@map("barcode_print_preparations")
+}
+
 // ========================================
 // Contabilidad (partida doble)
 // ========================================
@@ -1892,6 +2483,9 @@ enum JournalSourceType {
   /// circuito de la venta al crédito, que ya debitaba Clientes.
   /// Igual que arriba: al final, porque ADD VALUE los agrega ahí.
   SALE_PAYMENT
+  CUSTOMER_ADVANCE
+  CUSTOMER_ADVANCE_APPLIED
+  CUSTOMER_PAYMENT_REFUND
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.
@@ -2071,9 +2665,11 @@ model Employee {
   payslips   Payslip[]
   documents  EmployeeDocument[]
   history    EmployeeHistory[]
+  service_provider ServiceProvider?
 
   @@unique([company_id, code])
   @@unique([company_id, creation_request_id])
+  @@unique([company_id, id])
   @@index([branch_id])
   @@index([status])
   @@map("employees")
@@ -2319,4 +2915,192 @@ model PayslipLine {
   @@index([payslip_id])
   @@index([advance_id])
   @@map("payslip_lines")
+}
+
+model AppointmentEngagement {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  customer_id String @db.Uuid
+  customer Supplier @relation(fields: [company_id, customer_id], references: [company_id, id], onDelete: Restrict)
+  source String @db.VarChar(10)
+  quote_id String? @unique @db.Uuid
+  quote CommercialDocument? @relation("EngagementQuote", fields: [branch_id, quote_id], references: [branch_id, id], onDelete: Restrict)
+  order_id String? @unique @db.Uuid
+  order CommercialDocument? @relation("EngagementOrder", fields: [branch_id, order_id], references: [branch_id, id], onDelete: Restrict)
+  sale_id String? @unique @db.Uuid
+  sale Sale? @relation("EngagementConfirmedSale", fields: [branch_id, id, sale_id], references: [branch_id, origin_engagement_id, id], onDelete: Restrict)
+  origin_sale Sale? @relation("EngagementSaleOrigin")
+  currency_code String @db.VarChar(3)
+  agreed_total Decimal @db.Decimal(12, 2)
+  commercial_snapshot Json
+  resolution_pending Boolean @default(false)
+  version Int @default(1)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  lines AppointmentEngagementLine[] @relation("EngagementLines")
+  source_lines AppointmentEngagementLine[] @relation("EngagementSourceLines")
+  commitments PaymentCommitment[]
+  allocation_events PaymentAllocationEvent[]
+  refunds CustomerPaymentRefund[]
+  history AppointmentEngagementHistory[]
+  @@unique([company_id, branch_id, id], map: "engagement_branch_identity_key")
+  @@unique([branch_id,id],map:"engagement_branch_id_key")
+  @@unique([branch_id,id,sale_id],map:"engagement_confirmed_origin_identity_key")
+  @@unique([branch_id, quote_id], map: "engagement_quote_branch_key")
+  @@unique([branch_id, order_id], map: "engagement_order_branch_key")
+  @@unique([branch_id, sale_id], map: "engagement_sale_branch_key")
+  @@unique([company_id, branch_id, customer_id, id], map: "engagement_customer_identity_key")
+  @@unique([company_id, branch_id, id, quote_id], map: "engagement_quote_identity_key")
+  @@index([company_id, branch_id, created_at])
+  @@map("appointment_engagements")
+}
+
+model AppointmentEngagementLine {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  engagement_id String @db.Uuid
+  engagement AppointmentEngagement @relation("EngagementLines", fields: [company_id, branch_id, engagement_id], references: [company_id, branch_id, id], onDelete: Restrict)
+  source_document_id String? @db.Uuid
+  source_line_id String? @db.Uuid
+  source_line CommercialDocumentLine? @relation(fields: [source_document_id, source_line_id], references: [document_id, id], onDelete: Restrict)
+  source_engagement AppointmentEngagement? @relation("EngagementSourceLines", fields: [company_id, branch_id, engagement_id, source_document_id], references: [company_id, branch_id, id, quote_id], onDelete: Restrict, map: "engagement_line_quote_fkey")
+  product_id String @db.Uuid
+  product Product @relation(fields: [company_id, product_id], references: [company_id, id], onDelete: Restrict)
+  item_kind ProductKind
+  item_name String @db.VarChar(150)
+  unit_label String @db.VarChar(50)
+  quantity_decimals Int @default(0)
+  qty Decimal @db.Decimal(12, 4)
+  unit_price Decimal @db.Decimal(12, 2)
+  line_total Decimal @db.Decimal(12, 2)
+  service_schedule_snapshot Json?
+  sort_order Int @default(0)
+  schedules AppointmentEngagementSchedule[]
+  @@unique([company_id, branch_id, engagement_id, id], map: "engagement_line_identity_key")
+  @@unique([engagement_id, source_line_id])
+  @@map("appointment_engagement_lines")
+}
+
+model AppointmentEngagementSchedule {
+  /// PostgreSQL partial unique index engagement_exclusive_session_key protects ACTIVITY/SESSION, not shared BOOKING rows.
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  engagement_id String @db.Uuid
+  line_id String @db.Uuid
+  line AppointmentEngagementLine @relation(fields: [company_id, branch_id, engagement_id, line_id], references: [company_id, branch_id, engagement_id, id], onDelete: Restrict)
+  session_id String @db.Uuid
+  session_type String @db.VarChar(20)
+  session AppointmentSession @relation(fields: [company_id, branch_id, session_id, session_type], references: [company_id, branch_id, id, record_type], onDelete: Restrict)
+  booking_id String? @unique @db.Uuid
+  booking AppointmentBooking? @relation(fields: [company_id, session_id, booking_id], references: [company_id, session_id, id], onDelete: Restrict)
+  kind String @db.VarChar(10)
+  quantity Decimal @db.Decimal(12, 4)
+  state String @default("COMMITTED") @db.VarChar(15)
+  conditions_hash String @db.VarChar(64)
+  created_at DateTime @default(now())
+  @@unique([line_id, session_id])
+  @@index([company_id, engagement_id, state])
+  @@map("appointment_engagement_schedules")
+}
+
+model PaymentCommitment {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  engagement_id String @db.Uuid
+  engagement AppointmentEngagement @relation(fields: [company_id, branch_id, customer_id, engagement_id], references: [company_id, branch_id, customer_id, id], onDelete: Restrict)
+  payment_id String @db.Uuid
+  payment CustomerPayment @relation(fields: [branch_id, customer_id, payment_id], references: [branch_id, customer_id, id], onDelete: Restrict)
+  amount Decimal @db.Decimal(12, 2)
+  state String @default("COMMITTED") @db.VarChar(15)
+  version Int @default(1)
+  created_at DateTime @default(now())
+  events PaymentAllocationEvent[]
+  @@unique([engagement_id, payment_id])
+  @@unique([company_id, branch_id, customer_id, engagement_id, payment_id, id], map: "commitment_identity_key")
+  @@index([payment_id, state])
+  @@map("payment_commitments")
+}
+
+model PaymentAllocationEvent {
+  return_settlement_id String? @db.Uuid
+  returnSettlement ReturnSettlement? @relation(fields:[return_settlement_id],references:[id],onDelete:Restrict)
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  engagement_id String @db.Uuid
+  engagement AppointmentEngagement @relation(fields: [company_id, branch_id, customer_id, engagement_id], references: [company_id, branch_id, customer_id, id], onDelete: Restrict)
+  payment_id String @db.Uuid
+  payment CustomerPayment @relation(fields: [branch_id, customer_id, payment_id], references: [branch_id, customer_id, id], onDelete: Restrict)
+  commitment_id String? @db.Uuid
+  commitment PaymentCommitment? @relation(fields: [company_id, branch_id, customer_id, engagement_id, payment_id, commitment_id], references: [company_id, branch_id, customer_id, engagement_id, payment_id, id], onDelete: Restrict, map: "allocation_commitment_fkey")
+  action String @db.VarChar(20)
+  amount Decimal @db.Decimal(12, 2)
+  request_key String @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  reason String @default("") @db.VarChar(500)
+  created_at DateTime @default(now())
+  @@unique([company_id, payment_id, request_key, action], map: "allocation_attempt_key")
+  @@index([payment_id, created_at])
+  @@map("payment_allocation_events")
+}
+
+model CustomerPaymentRefund {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  engagement_id String @db.Uuid
+  engagement AppointmentEngagement @relation(fields: [company_id, branch_id, customer_id, engagement_id], references: [company_id, branch_id, customer_id, id], onDelete: Restrict)
+  payment_id String @db.Uuid
+  payment CustomerPayment @relation(fields: [branch_id, customer_id, payment_id], references: [branch_id, customer_id, id], onDelete: Restrict)
+  amount Decimal @db.Decimal(12, 2)
+  status String @default("REQUESTED") @db.VarChar(15)
+  payment_method_id Int?
+  payment_method PaymentMethod? @relation(fields:[payment_method_id],references:[id],onDelete:Restrict)
+  cash_register_session_id String? @db.Uuid
+  cashRegisterSession CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
+  reference String @default("") @db.VarChar(255)
+  reason String @db.VarChar(500)
+  request_key String @db.VarChar(64)
+  confirmed_key String? @unique @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  registered_by String @db.Uuid
+  registeredBy User @relation(fields: [registered_by], references: [id], onDelete: Restrict)
+  confirmed_at DateTime?
+  created_at DateTime @default(now())
+  @@unique([company_id, request_key])
+  @@index([payment_id, status])
+  @@map("customer_payment_refunds")
+}
+
+model AppointmentEngagementHistory {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  engagement_id String @db.Uuid
+  engagement AppointmentEngagement @relation(fields: [company_id, branch_id, customer_id, engagement_id], references: [company_id, branch_id, customer_id, id], onDelete: Restrict)
+  actor_id String? @db.Uuid
+  actor User? @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  action String @db.VarChar(30)
+  reason String @default("") @db.VarChar(500)
+  before Json?
+  after Json?
+  request_key String @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  created_at DateTime @default(now())
+  @@unique([engagement_id, request_key, action], map: "engagement_history_attempt_key")
+  @@index([company_id, engagement_id, created_at])
+  @@map("appointment_engagement_history")
 }

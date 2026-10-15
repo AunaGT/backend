@@ -8,15 +8,12 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
-const { prisma } = require('../../models/prisma')
+const { prisma, prismaTransaction } = require('../../models/prisma')
+const { payableScope, entryWhere, cancelLegacyEntry } = require('./payables')
+const { shapePaymentBalance, addIndividualPayment, changePaymentConditions } = require('./payables/compatibility')
 const { DateTime } = require('luxon')
 const PDFDocument = require('pdfkit')
-const { getBrandingForPdf } = require('../../utils/pdfBranding')
-
-const ROUND_EPS = 0.005
-
-/** Prisma interactive tx default timeout is 5s; abonos hacen varias lecturas + sync. */
-const PAYMENT_TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 }
+const { getBrandingForPdf, PDF_COLORS, setupReportPdf, ensureReportSpace, drawReportTable, finishReportPdf } = require('../../utils/pdfBranding')
 
 function computeMerchandiseTotal (items) {
   if (!items || !items.length) return 0
@@ -34,7 +31,8 @@ const incomingDetailInclude = {
       name: true,
       contact: true,
       email: true,
-      phone: true
+      phone: true,
+      supplier_payment_terms: { select: { payment_term: { select: { id: true, name: true, net_days: true } } }, orderBy: { sort_order: 'asc' } }
     }
   },
   registeredBy: {
@@ -80,6 +78,7 @@ const incomingDetailInclude = {
       }
     }
   },
+  payment_audit: { orderBy: { created_at: 'desc' }, take: 100, include: { actor: { select: { id: true, name: true } } } },
   paymentEntries: {
     include: {
       registeredBy: {
@@ -98,6 +97,9 @@ function shapePaymentEntries (entries) {
   return (entries || []).map((e) => ({
     id: e.id,
     amount: roundMoney(Number(e.amount)),
+    supplier_payment_id: e.supplier_payment_id || null,
+    cancelled_at: e.cancelled_at || null,
+    cancel_reason: e.cancel_reason || null,
     paid_at: e.paid_at,
     reference: e.reference,
     registered_by: e.registeredBy
@@ -111,13 +113,14 @@ function shapePaymentEntries (entries) {
 }
 
 function shapeIncomingDetail (record) {
-  const totalValue = computeMerchandiseTotal(record.items)
+  const balance = shapePaymentBalance(record)
   const entries = record.paymentEntries || []
-  const amountPaidTotal = roundMoney(entries.reduce((s, e) => s + Number(e.amount), 0))
-  const amountPending = Math.max(0, roundMoney(totalValue - amountPaidTotal))
+  const { supplier_payment_terms: termLinks = [], ...supplier } = record.supplier || {}
   return {
     id: record.id,
-    supplier: record.supplier,
+    source: record.source,
+    supplier,
+    payment_terms: termLinks.map(link => link.payment_term),
     registeredBy: record.registeredBy,
     date: record.date,
     notes: record.notes,
@@ -142,9 +145,8 @@ function shapeIncomingDetail (record) {
         }
       : null,
     payment_entries: shapePaymentEntries(entries),
-    amount_paid_total: amountPaidTotal,
-    amount_pending: amountPending,
-    totalValue,
+    ...balance,
+    payment_audit: record.payment_audit || [],
     items: record.items.map(item => ({
       id: item.id,
       product: item.product,
@@ -155,144 +157,22 @@ function shapeIncomingDetail (record) {
   }
 }
 
-/**
- * Recalcula estado PAID / PARTIAL / PENDING según suma de abonos vs total del ingreso.
- */
-async function syncMerchandisePaymentStatus (incomingMerchandiseId, editorUserId, db = prisma) {
-  const record = await db.incomingMerchandise.findUnique({
-    where: { id: incomingMerchandiseId },
-    include: { items: true, paymentEntries: true }
-  })
-  if (!record) return
-  const total = computeMerchandiseTotal(record.items)
-  const sumPaid = (record.paymentEntries || []).reduce((s, e) => s + Number(e.amount), 0)
-  let status = 'PENDING'
-  let paidAt = null
-  if (sumPaid >= total - ROUND_EPS) {
-    status = 'PAID'
-    const sorted = [...(record.paymentEntries || [])].sort(
-      (a, b) => new Date(b.paid_at) - new Date(a.paid_at)
-    )
-    paidAt = sorted[0]?.paid_at || new Date()
-  } else if (sumPaid > ROUND_EPS) {
-    status = 'PARTIAL'
-  }
-  await db.incomingMerchandise.update({
-    where: { id: incomingMerchandiseId },
-    data: {
-      payment_status: status,
-      paid_at: paidAt,
-      payment_updated_by: editorUserId,
-      payment_updated_at: new Date()
-    }
-  })
+/** Los dos accesos de pago usan el mismo libro y las mismas transacciones. */
+function paymentError(e,res,next) {
+  if(e.status) return res.status(e.status).json({message:e.message,code:e.code,data:e.data})
+  next(e)
 }
-
-/**
- * Registrar abono parcial
- * POST /api/incoming-merchandise/:id/payments
- */
-exports.addPaymentEntry = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const body = req.body || {}
-    const amount = Number(body.amount)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({ message: 'amount debe ser un número mayor a 0' })
-    }
-    let paidAt = new Date()
-    if (body.paid_at != null && body.paid_at !== '') {
-      const p = new Date(body.paid_at)
-      if (Number.isNaN(p.getTime())) {
-        return res.status(400).json({ message: 'paid_at inválido' })
-      }
-      paidAt = p
-    }
-    let reference = body.reference != null ? String(body.reference).trim() : ''
-    if (reference.length > 255) reference = reference.slice(0, 255)
-    reference = reference || null
-
-    const uid = req.user?.sub
-    if (!uid) {
-      return res.status(401).json({ message: 'Usuario no autenticado' })
-    }
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const existing = await tx.incomingMerchandise.findUnique({
-        where: { id },
-        include: { items: true, paymentEntries: true }
-      })
-      if (!existing) {
-        return null
-      }
-      const total = computeMerchandiseTotal(existing.items)
-      const sumExisting = (existing.paymentEntries || []).reduce((s, e) => s + Number(e.amount), 0)
-      if (sumExisting + amount > total + ROUND_EPS) {
-        throw new Error('EXCEEDS')
-      }
-
-      await tx.incomingMerchandisePaymentEntry.create({
-        data: {
-          incoming_merchandise_id: id,
-          amount,
-          paid_at: paidAt,
-          reference,
-          registered_by: uid
-        }
-      })
-      await syncMerchandisePaymentStatus(id, uid, tx)
-      return tx.incomingMerchandise.findUnique({
-        where: { id },
-        include: incomingDetailInclude
-      })
-    }, PAYMENT_TX_OPTIONS)
-
-    if (!updated) {
-      return res.status(404).json({ message: 'Registro de mercancía no encontrado' })
-    }
-    res.json(shapeIncomingDetail(updated))
-  } catch (e) {
-    if (e.message === 'EXCEEDS') {
-      return res.status(400).json({ message: 'El abono excede el saldo pendiente del ingreso' })
-    }
-    next(e)
-  }
+async function sendPaymentDetail(req,res) {
+  const record=await prisma.incomingMerchandise.findFirst({where:{id:req.params.id,...entryWhere(payableScope(req))},include:incomingDetailInclude})
+  res.json(shapeIncomingDetail(record))
 }
-
-/**
- * Eliminar un abono (corrección)
- * DELETE /api/incoming-merchandise/:id/payments/:entryId
- */
-exports.deletePaymentEntry = async (req, res, next) => {
-  try {
-    const { id, entryId } = req.params
-    const uid = req.user?.sub
-    if (!uid) {
-      return res.status(401).json({ message: 'Usuario no autenticado' })
-    }
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const entry = await tx.incomingMerchandisePaymentEntry.findFirst({
-        where: { id: entryId, incoming_merchandise_id: id }
-      })
-      if (!entry) {
-        return null
-      }
-      await tx.incomingMerchandisePaymentEntry.delete({ where: { id: entryId } })
-      await syncMerchandisePaymentStatus(id, uid, tx)
-      return tx.incomingMerchandise.findUnique({
-        where: { id },
-        include: incomingDetailInclude
-      })
-    }, PAYMENT_TX_OPTIONS)
-
-    if (!updated) {
-      return res.status(404).json({ message: 'Abono no encontrado' })
-    }
-    res.json(shapeIncomingDetail(updated))
-  } catch (e) {
-    next(e)
-  }
+exports.addPaymentEntry=async(req,res,next)=>{
+  try { await addIndividualPayment(prismaTransaction,payableScope(req),req.params.id,req.body||{},req.get?.('Idempotency-Key'));await sendPaymentDetail(req,res) }
+  catch(e){paymentError(e,res,next)}
+}
+exports.deletePaymentEntry=async(req,res,next)=>{
+  try { await cancelLegacyEntry(prismaTransaction,payableScope(req),req.params.id,req.params.entryId,req.body||{});await sendPaymentDetail(req,res) }
+  catch(e){paymentError(e,res,next)}
 }
 
 /**
@@ -461,7 +341,7 @@ exports.getById = async (req, res, next) => {
     const { id } = req.params
 
     const record = await prisma.incomingMerchandise.findFirst({
-      where: { id, branch: { company_id: req.companyId } },
+      where: { id, ...entryWhere(payableScope(req)) },
       include: incomingDetailInclude
     })
 
@@ -479,150 +359,9 @@ exports.getById = async (req, res, next) => {
  * Actualizar solo datos de pago (sin tocar stock ni ítems)
  * PATCH /api/incoming-merchandise/:id/payment
  */
-exports.updatePayment = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const body = req.body || {}
-
-    const existing = await prisma.incomingMerchandise.findFirst({
-      where: { id, branch: { company_id: req.companyId } },
-      include: {
-        supplier: {
-          include: {
-            supplier_payment_terms: true
-          }
-        },
-        items: true,
-        paymentEntries: true
-      }
-    })
-
-    if (!existing) {
-      return res.status(404).json({ message: 'Registro de mercancía no encontrado' })
-    }
-
-    const merchandiseTotal = computeMerchandiseTotal(existing.items)
-    const sumPaidExisting = (existing.paymentEntries || []).reduce(
-      (s, e) => s + Number(e.amount),
-      0
-    )
-
-    const hasKeys =
-      body.payment_status !== undefined ||
-      body.payment_term_id !== undefined ||
-      body.paid_at !== undefined ||
-      body.payment_reference !== undefined ||
-      body.due_date !== undefined
-
-    if (!hasKeys) {
-      return res.status(400).json({ message: 'No hay campos para actualizar' })
-    }
-
-    if (body.payment_status !== undefined && (existing.paymentEntries || []).length > 0) {
-      if (body.payment_status === 'PENDING' && sumPaidExisting > ROUND_EPS) {
-        return res.status(400).json({
-          message: 'Hay abonos registrados; elimínalos antes de volver a pendiente de pago'
-        })
-      }
-      if (body.payment_status === 'PAID' && sumPaidExisting < merchandiseTotal - ROUND_EPS) {
-        return res.status(400).json({
-          message:
-            'Los abonos aún no cubren el total del ingreso; registra abonos hasta completar el saldo o revisa los montos'
-        })
-      }
-    }
-
-    const data = {}
-    const allowedTerms = new Set(
-      (existing.supplier.supplier_payment_terms || []).map((l) => l.payment_term_id)
-    )
-
-    if (body.payment_status !== undefined) {
-      if (!['PENDING', 'PARTIAL', 'PAID'].includes(body.payment_status)) {
-        return res.status(400).json({ message: 'payment_status inválido' })
-      }
-      data.payment_status = body.payment_status
-    }
-
-    if (body.payment_term_id !== undefined) {
-      if (body.payment_term_id === null || body.payment_term_id === '') {
-        if (allowedTerms.size > 0) {
-          return res.status(400).json({ message: 'Este proveedor requiere un término de pago' })
-        }
-        data.payment_term_id = null
-      } else {
-        const pid = Number(body.payment_term_id)
-        if (!Number.isFinite(pid)) {
-          return res.status(400).json({ message: 'payment_term_id inválido' })
-        }
-        if (allowedTerms.size > 0 && !allowedTerms.has(pid)) {
-          return res.status(400).json({ message: 'El término no está asignado a este proveedor' })
-        }
-        if (allowedTerms.size === 0) {
-          return res.status(400).json({ message: 'Este proveedor no tiene términos de pago en catálogo' })
-        }
-        data.payment_term_id = pid
-      }
-    }
-
-    if (body.payment_reference !== undefined) {
-      let ref = String(body.payment_reference || '').trim()
-      if (ref.length > 255) ref = ref.slice(0, 255)
-      data.payment_reference = ref || null
-    }
-
-    if (body.due_date !== undefined) {
-      if (body.due_date === null || body.due_date === '') {
-        data.due_date = null
-      } else {
-        const d = new Date(body.due_date)
-        if (Number.isNaN(d.getTime())) {
-          return res.status(400).json({ message: 'due_date inválida' })
-        }
-        data.due_date = d
-      }
-    }
-
-    if (body.paid_at !== undefined) {
-      if (body.paid_at === null || body.paid_at === '') {
-        data.paid_at = null
-      } else {
-        const p = new Date(body.paid_at)
-        if (Number.isNaN(p.getTime())) {
-          return res.status(400).json({ message: 'paid_at inválido' })
-        }
-        data.paid_at = p
-      }
-    }
-
-    const nextStatus = data.payment_status !== undefined ? data.payment_status : existing.payment_status
-
-    if (nextStatus === 'PENDING' || nextStatus === 'PARTIAL') {
-      data.paid_at = null
-    } else if (nextStatus === 'PAID') {
-      const resolvedPaid = data.paid_at !== undefined ? data.paid_at : existing.paid_at
-      if (!resolvedPaid) {
-        data.paid_at = new Date()
-      }
-    }
-
-    const uid = req.user?.sub
-    if (!uid) {
-      return res.status(401).json({ message: 'Usuario no autenticado' })
-    }
-    data.payment_updated_by = uid
-    data.payment_updated_at = new Date()
-
-    const updated = await prisma.incomingMerchandise.update({
-      where: { id },
-      data,
-      include: incomingDetailInclude
-    })
-
-    res.json(shapeIncomingDetail(updated))
-  } catch (e) {
-    next(e)
-  }
+exports.updatePayment=async(req,res,next)=>{
+  try { await changePaymentConditions(prismaTransaction,payableScope(req),req.params.id,req.body||{},req.get?.('Idempotency-Key'));await sendPaymentDetail(req,res) }
+  catch(e){paymentError(e,res,next)}
 }
 
 /**
@@ -696,142 +435,50 @@ exports.generateReport = async (req, res, next) => {
       orderBy: { date: 'desc' }
     })
 
-    // Generate PDF
-    const doc = new PDFDocument({ margin: 50 })
+    const branding = await getBrandingForPdf(prisma, req.companyId)
+    const doc = new PDFDocument({ margin: 50, bufferPages: true })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', 'attachment; filename="reporte-mercancia.pdf"')
     doc.pipe(res)
-
-    const branding = await getBrandingForPdf(prisma, req.companyId)
-    const companyName = branding.company_name
-    if (branding.logoBuffer) {
-      try {
-        const pageWidth = doc.page.width
-        doc.image(branding.logoBuffer, pageWidth / 2 - 22, doc.y, { fit: [44, 26] })
-        doc.moveDown(2)
-      } catch {
-        /* sin logo */
-      }
-    }
-    doc.fontSize(12).text(companyName, { align: 'center' })
-    doc.moveDown(0.3)
-    doc.fontSize(20).text('Reporte de Ingresos de Mercancía', { align: 'center' })
-    doc.moveDown()
-    
-    if (start_date || end_date) {
-      doc.fontSize(12).text(
-        `Período: ${start_date ? new Date(start_date).toLocaleDateString('es-GT') : 'Inicio'} - ${end_date ? new Date(end_date).toLocaleDateString('es-GT') : 'Fin'}`,
-        { align: 'center' }
-      )
-      doc.moveDown()
-    }
-
-    if (payment_status === 'PENDING' || payment_status === 'PAID' || payment_status === 'PARTIAL') {
-      const payPdf =
-        payment_status === 'PAID' ? 'Pagado' : payment_status === 'PARTIAL' ? 'Pago parcial' : 'Pendiente'
-      doc.fontSize(11).text(`Estado de pago: ${payPdf}`, { align: 'center' })
-      doc.moveDown(0.5)
-    }
-
-    doc.fontSize(10)
-
-    let yPosition = doc.y
+    const metadata = []
+    if (start_date || end_date) metadata.push(`Período: ${start_date ? new Date(start_date).toLocaleDateString('es-GT') : 'Inicio'} - ${end_date ? new Date(end_date).toLocaleDateString('es-GT') : 'Fin'}`)
+    if (['PENDING', 'PAID', 'PARTIAL'].includes(payment_status)) metadata.push(`Estado de pago: ${payment_status === 'PAID' ? 'Pagado' : payment_status === 'PARTIAL' ? 'Pago parcial' : 'Pendiente'}`)
+    setupReportPdf(doc, { branding, title: 'Reporte de Ingresos de Mercancía', metadata })
     let totalGeneral = 0
-
-    records.forEach((record, index) => {
-      // Check if we need a new page
-      if (yPosition > 700) {
-        doc.addPage()
-        yPosition = 50
-      }
-
-      const recordTotal = record.items.reduce((sum, item) => {
-        return sum + (Number(item.quantity) * Number(item.unit_cost))
-      }, 0)
+    for (const [index, record] of records.entries()) {
+      const recordTotal = record.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unit_cost), 0)
       totalGeneral += recordTotal
-
-      // Record header
-      doc.fontSize(12).font('Helvetica-Bold')
-        .text(`Registro #${index + 1}`, 50, yPosition)
-      yPosition += 20
-
-      doc.fontSize(10).font('Helvetica')
-        .text(`Fecha: ${new Date(record.date).toLocaleDateString('es-GT')}`, 50, yPosition)
-      yPosition += 15
-
-      doc.text(`Proveedor: ${record.supplier.name}`, 50, yPosition)
-      yPosition += 15
-
-      doc.text(`Registrado por: ${record.registeredBy.name}`, 50, yPosition)
-      yPosition += 15
-
-      const termName = record.paymentTerm?.name || '—'
-      doc.text(`Término de pago: ${termName}`, 50, yPosition)
-      yPosition += 15
-
-      const payLabel =
-        record.payment_status === 'PAID'
-          ? 'Pagado'
-          : record.payment_status === 'PARTIAL'
-            ? 'Pago parcial'
-            : 'Pendiente de pago'
-      doc.text(`Estado: ${payLabel}`, 50, yPosition)
-      yPosition += 15
-
-      if (record.paid_at) {
-        doc.text(
-          `Fecha de pago: ${new Date(record.paid_at).toLocaleString('es-GT')}`,
-          50,
-          yPosition
-        )
-        yPosition += 15
+      ensureReportSpace(doc, 110)
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_COLORS.navy).text(`Registro #${index + 1}`)
+      const details = [
+        `Fecha: ${new Date(record.date).toLocaleDateString('es-GT')}`,
+        `Proveedor: ${record.supplier.name}`,
+        `Registrado por: ${record.registeredBy.name}`,
+        `Término de pago: ${record.paymentTerm?.name || '—'}`,
+        `Estado: ${record.payment_status === 'PAID' ? 'Pagado' : record.payment_status === 'PARTIAL' ? 'Pago parcial' : 'Pendiente de pago'}`,
+        ...(record.paid_at ? [`Fecha de pago: ${new Date(record.paid_at).toLocaleString('es-GT')}`] : []),
+        ...(record.due_date ? [`Vencimiento: ${new Date(record.due_date).toLocaleDateString('es-GT')}`] : []),
+        ...(record.payment_reference ? [`Referencia: ${record.payment_reference}`] : []),
+        ...(record.notes ? [`Notas: ${record.notes}`] : []),
+      ]
+      doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.muted)
+      for (const detail of details) {
+        ensureReportSpace(doc, doc.heightOfString(detail, { width: doc.page.width - 100 }) + 5)
+        doc.text(detail, doc.page.margins.left, doc.y, { width: doc.page.width - 100 })
+        doc.y += 3
       }
-      if (record.due_date) {
-        doc.text(
-          `Vencimiento: ${new Date(record.due_date).toLocaleDateString('es-GT')}`,
-          50,
-          yPosition
-        )
-        yPosition += 15
-      }
-      if (record.payment_reference) {
-        doc.text(`Referencia: ${record.payment_reference}`, 50, yPosition)
-        yPosition += 15
-      }
-
-      if (record.notes) {
-        doc.text(`Notas: ${record.notes}`, 50, yPosition)
-        yPosition += 15
-      }
-
-      // Items table
-      doc.font('Helvetica-Bold')
-        .text('Productos:', 50, yPosition)
-      yPosition += 20
-
-      doc.font('Helvetica')
-      record.items.forEach(item => {
-        const productName = `${item.product.name} ${item.product.brand || ''} ${item.product.size || ''}`.trim()
-        const subtotal = Number(item.quantity) * Number(item.unit_cost)
-        doc.text(
-          `  • ${productName}: ${item.quantity} x Q${Number(item.unit_cost).toFixed(2)} = Q${subtotal.toFixed(2)}`,
-          50,
-          yPosition
-        )
-        yPosition += 15
-      })
-
-      doc.font('Helvetica-Bold')
-        .text(`Total del registro: Q${recordTotal.toFixed(2)}`, 50, yPosition)
-      yPosition += 25
-
-      doc.moveTo(50, yPosition).lineTo(550, yPosition).stroke()
-      yPosition += 15
-    })
-
-    // Total general
-    doc.fontSize(14).font('Helvetica-Bold')
-      .text(`Total General: Q${totalGeneral.toFixed(2)}`, 50, yPosition, { align: 'right' })
+      doc.y += 5
+      drawReportTable(doc, ['Productos', 'Cantidad', 'Costo unitario', 'Subtotal'], record.items.map(item => [
+        `${item.product.name} ${item.product.brand || ''} ${item.product.size || ''}`.trim(),
+        String(item.quantity), `Q${Number(item.unit_cost).toFixed(2)}`, `Q${(Number(item.quantity) * Number(item.unit_cost)).toFixed(2)}`,
+      ]), { widths: [260, 65, 90, 90], align: ['left', 'right', 'right', 'right'] })
+      ensureReportSpace(doc, 35)
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(PDF_COLORS.navy).text(`Total del registro: Q${recordTotal.toFixed(2)}`, { align: 'right' })
+      doc.y += 15
+    }
+    ensureReportSpace(doc, 35)
+    doc.font('Helvetica-Bold').fontSize(14).fillColor(PDF_COLORS.navy).text(`Total General: Q${totalGeneral.toFixed(2)}`, { align: 'right' })
+    finishReportPdf(doc)
 
     doc.end()
   } catch (e) {

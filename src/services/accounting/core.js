@@ -25,7 +25,7 @@ const DEFAULT_ACCOUNT_KEYS = [
 
 // Opcionales: no deben volver obligatoria su configuración para operaciones
 // que no los utilizan.
-const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort', 'badDebt']
+const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort', 'badDebt','customerAdvances']
 
 /**
  * Cuentas que necesita el posteo de nómina. Deliberadamente separadas de
@@ -89,10 +89,13 @@ async function assertPeriodOpen(tx, date, companyId) {
 }
 
 /** Número secuencial A-000001 por empresa (lock transaccional para evitar duplicados). */
+async function lockAccountingCompany(tx,companyId){
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ENTRY_LOCK_KEY}::int, hashtext(${companyId})::int)`
+}
 async function nextEntryNumber(tx, companyId) {
   // Los casts son obligatorios: la forma de dos argumentos es (int, int) y
   // Prisma manda el número como bigint y el hash como integer.
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ENTRY_LOCK_KEY}::int, hashtext(${companyId})::int)`
+  await lockAccountingCompany(tx,companyId)
   const last = await tx.journalEntry.findFirst({
     where: { company_id: companyId, entry_number: { startsWith: 'A-' } },
     orderBy: { entry_number: 'desc' },
@@ -267,7 +270,23 @@ async function getCashClosureAccounts(tx, companyId) {
   return result
 }
 
+async function getEngagementAccounts(tx,companyId){
+  const keys=['cash','bank','receivables','customerAdvances']
+  const setting=await tx.systemSetting.findFirst({where:{key:SETTING_KEY,company_id:companyId}})
+  let map={}
+  try{map=JSON.parse(setting?.value||'{}')}catch{/* Invalid settings are reported as missing accounts. */}
+  if(!map||typeof map!=='object'||Array.isArray(map))map={}
+  const rows=await tx.account.findMany({where:{company_id:companyId,code:{in:keys.map(key=>map[key]).filter(Boolean)},active:true,is_group:false}})
+  const result={}
+  for(const key of keys){
+    const account=rows.find(a=>a.code===map[key])
+    if(!account||account.type!==(key==='customerAdvances'?'LIABILITY':'ASSET'))throw Object.assign(new AccountingError(`Configura una cuenta ${key==='customerAdvances'?'de pasivo':'de activo'} activa para «${key}» antes de gestionar anticipos`),{code:'ACCOUNTING_SETUP_REQUIRED'})
+    result[key]=account.id
+  }
+  return result
+}
 module.exports = {
+  lockAccountingCompany,getEngagementAccounts,
   AccountingError,
   GT_ZONE,
   SETTING_KEY,

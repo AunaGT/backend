@@ -1,0 +1,31 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto')
+const {devDbEnabled,withSalesDevFixture,snapshotSaleEffects}=require('./helpers/salesDevFixture.cjs')
+test('closed period and currency errors preserve the draft; accounting posts confirmation once',{skip:!devDbEnabled},()=>withSalesDevFixture(async({db,scope,fixtures:f})=>{
+  await db.$transaction(async tx=>{
+    await tx.companyModule.update({where:{company_id_module_code:{company_id:scope.companyId,module_code:'accounting'}},data:{status:'ACTIVE'}})
+    const definitions=[['cash','1101','ASSET'],['bank','1102','ASSET'],['receivables','1103','ASSET'],['customerAdvances','2103','LIABILITY']]
+    for(const key of require('../src/services/accounting/core').DEFAULT_ACCOUNT_KEYS)if(!definitions.some(d=>d[0]===key))definitions.push([key,String(3000+definitions.length),key==='sales'?'INCOME':['cogs','pequenoTaxExpense','salesReturns'].includes(key)?'EXPENSE':['ivaDebit','pequenoTax','payables'].includes(key)?'LIABILITY':'ASSET'])
+    const accounts={};for(const [key,code,type]of definitions){await tx.account.create({data:{company_id:scope.companyId,code,name:key,type}});accounts[key]=code}
+    await tx.systemSetting.create({data:{company_id:scope.companyId,key:'accounting.defaultAccounts',type:'json',value:JSON.stringify(accounts)}})
+  },{timeout:60000})
+  const e=await f.paidEngagement('40.00'),api=require('../src/modules/appointments/engagementSales')
+  const draft=await db.$transaction(async tx=>require('../src/modules/sales').ensureEngagementDraft(tx,scope,{source:await require('../src/modules/appointments/commercialQueries').loadEngagement(tx,scope,e.id)}))
+  const before=await snapshotSaleEffects(db,scope,e.id),input={...f.saleTerms,confirmGoodsDispatch:true,expectedVersion:e.version,idempotencyKey:crypto.randomUUID()}
+  await db.systemSetting.update({where:{company_id_key:{company_id:scope.companyId,key:'currency_code'}},data:{value:'USD'}})
+  await assert.rejects(()=>api.issueEngagementSale(db,scope,e.id,input),{code:'CURRENCY_MISMATCH'})
+  assert.deepEqual(await snapshotSaleEffects(db,scope,e.id),before)
+  await db.systemSetting.update({where:{company_id_key:{company_id:scope.companyId,key:'currency_code'}},data:{value:'GTQ'}})
+  await db.accountingPeriod.updateMany({where:{company_id:scope.companyId},data:{status:'CLOSED'}})
+  await assert.rejects(()=>api.issueEngagementSale(db,scope,e.id,input),/cerrado/)
+  assert.equal((await db.sale.findUnique({where:{id:draft.saleId},include:{status:true}})).status.name,'Borrador')
+  assert.deepEqual(await snapshotSaleEffects(db,scope,e.id),before)
+  await db.accountingPeriod.updateMany({where:{company_id:scope.companyId},data:{status:'OPEN'}})
+  const result=await api.issueEngagementSale(db,scope,e.id,input)
+  assert.equal(result.saleId,draft.saleId)
+  const entries=await db.journalEntry.findMany({where:{company_id:scope.companyId,source_type:'SALE',source_id:result.saleId},include:{lines:true}})
+  assert.equal(entries.length,1)
+  const debit=entries[0].lines.reduce((sum,l)=>sum+Number(l.debit),0),credit=entries[0].lines.reduce((sum,l)=>sum+Number(l.credit),0)
+  assert.equal(debit,credit);assert.ok(debit>0)
+  assert.equal((await api.issueEngagementSale(db,scope,e.id,input)).saleId,draft.saleId)
+  assert.equal(await db.journalEntry.count({where:{company_id:scope.companyId,source_type:'SALE',source_id:result.saleId}}),1)
+}))

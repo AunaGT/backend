@@ -13,6 +13,7 @@ const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const IncomingMerchandise = require('./controller')
 
 const router = Router()
+router.use('/payables', require('./payables/routes'))
 
 /**
  * GET /api/incoming-merchandise

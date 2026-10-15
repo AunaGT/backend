@@ -35,7 +35,7 @@ function selectLines(lines, raw, invoice = false) {
     : lines, raw)
 }
 
-async function lockedOrder(tx, req) {
+async function lockedOrder(tx, req, {separateOnly=true}={}) {
   // Both mutations serialize on the same row; load quantities only after locking.
   const rows = await tx.$queryRaw`
     SELECT d.id FROM commercial_documents d JOIN branches b ON b.id = d.branch_id
@@ -43,8 +43,8 @@ async function lockedOrder(tx, req) {
       AND d.doc_type = 'ORDER' AND b.company_id = ${req.companyId}::uuid
       AND d.branch_id = ${req.branchId}::uuid FOR UPDATE OF d`
   if (!rows.length) fail('Pedido no encontrado en la sucursal activa', 404)
-  const order = await tx.commercialDocument.findUnique({ where: { id: rows[0].id }, include: { lines: true } })
-  if (order.fulfillment_mode !== 'SEPARATE') fail('Este pedido conserva el flujo anterior', 409)
+  const order = await tx.commercialDocument.findUnique({ where: { id: rows[0].id }, include: { lines: {orderBy:{sort_order:'asc'}} } })
+  if (separateOnly && order.fulfillment_mode !== 'SEPARATE') fail('Este pedido conserva el flujo anterior', 409)
   return order
 }
 
@@ -82,9 +82,12 @@ async function deliver(tx, req) {
   return { orderId: order.id, delivery }
 }
 
-async function invoice(tx, req, requireCashSession) {
+async function invoice(tx, req, requireCashSession, settlement=null) {
   const key = requestKey(req.body?.request_key)
   const order = await lockedOrder(tx, req)
+  const engagement=await tx.appointmentEngagement.findFirst({where:{order_id:order.id,company_id:req.companyId},select:{id:true,commercial_snapshot:true}})
+  const previouslyInvoiced=engagement?.commercial_snapshot?.orders?.some(source=>source.id===order.id&&source.documentSales?.length)
+  if(engagement&&!previouslyInvoiced&&settlement?.engagementId!==engagement.id)throw Object.assign(new Error('Genera la venta desde la contratación vinculada de Agenda'),{status:409,code:'ENGAGEMENT_OWNS_SOURCE'})
   const previous = await tx.sale.findFirst({ where: {
     branch_id: order.branch_id, idempotency_key: key,
   }, include: { orderLink: true } })
@@ -102,12 +105,14 @@ async function invoice(tx, req, requireCashSession) {
   const totalDecimal=netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0))
   if (totalDecimal.gte('10000000000')) fail('Total de factura fuera de rango')
   const total=totalDecimal.toNumber()
-  const initialAmount = initialPaymentAmount(req.body, total, method.is_credit)
+  const initialAmount = settlement?0:initialPaymentAmount(req.body, total, method.is_credit)
   const now = new Date()
-  let dueDate = null
+  let dueDate = settlement?.dueDate||null
   let sessionId = null
   let received = null
-  if (method.is_credit) {
+  if(settlement){
+    if(settlement.kind!=='EXISTING_RECEIPTS')fail('Liquidación interna inválida')
+  } else if (method.is_credit) {
     const blocked = await getCompanyModuleBlock(req.companyId, 'receivables', companyId => readCompanyModules(companyId, tx, { useCache: false }))
     if (blocked) fail('Cartera no está disponible para esta empresa', 403)
     const setting = await tx.systemSetting.findUnique({ where: { company_id_key: { company_id: req.companyId, key: 'sales_allow_credit' } } })
@@ -150,12 +155,28 @@ async function invoice(tx, req, requireCashSession) {
   }
   const physicalUnits=lines.filter(({line})=>line.item_kind!=='SERVICE').reduce((sum,{qty})=>sum+qty.toNumber(),0)
   if (physicalUnits>2147483647) fail('Cantidad física total fuera de rango')
-  const sale = await tx.sale.create({ data: {
+  let sale
+  if(settlement?.draftSaleId){
+    await tx.$queryRaw`SELECT id FROM sales WHERE id=${settlement.draftSaleId}::uuid AND branch_id=${order.branch_id}::uuid FOR UPDATE`
+    const draft=await tx.sale.findFirst({where:{id:settlement.draftSaleId,branch_id:order.branch_id,origin_engagement_id:settlement.engagementId,branch:{company_id:req.companyId}},include:{status:true,sale_items:{orderBy:{id:'asc'}}}})
+    if(!draft||draft.status.name!=='Borrador'||!draft.total.eq(totalDecimal)||draft.sale_items.length!==lines.length)fail('El borrador no coincide con el pedido contratado',409)
+    for(const [i,{line,qty}]of lines.entries()){
+      const item=draft.sale_items[i]
+      if(item.product_id!==line.product_id||item.item_kind!==line.item_kind||item.item_name!==line.item_name||item.unit_label!==line.unit_label||item.quantity_decimals!==line.quantity_decimals||!item.qty.eq(qty)||!item.price.eq(line.unit_price)||!item.net_total?.eq(netLineTotals[i]))fail('Las partidas del borrador cambiaron',409)
+    }
+    sale=await tx.sale.update({where:{id:draft.id,version:draft.version},data:{status_id:status.id,version:{increment:1},date:settlement.issuedAt,sold_at:settlement.issuedAt,confirmed_at:settlement.issuedAt,
+      payment_method_id:method.id,payment_status:total===0?'PAID':'PENDING',due_date:dueDate,idempotency_key:key}})
+    for(const [i,{line,line_id}]of lines.entries())await tx.saleItem.update({where:{id:draft.sale_items[i].id},data:{unit_cost:line.item_kind==='SERVICE'?0:costs.get(line_id)??null}})
+    await tx.commercialDocumentSale.create({data:{document_id:order.id,sale_id:sale.id}})
+    await tx.saleHistory.create({data:{company_id:req.companyId,branch_id:order.branch_id,sale_id:sale.id,actor_id:req.user.sub,action:'SALE_CONFIRMED',request_key:key,
+      input_hash:require('node:crypto').createHash('sha256').update(`${settlement.engagementId}:${draft.version}`).digest('hex'),before:{state:'DRAFT'},after:{state:'CONFIRMED',orderId:order.id,engagementId:settlement.engagementId}}})
+  }else sale = await tx.sale.create({ data: {
     branch_id: order.branch_id, reference: await nextDocumentReference(tx, 'V', branch),
     customer: order.customer, customer_nit: order.customer_nit, is_final_consumer: order.is_final_consumer,
     customer_contact_id: order.customer_contact_id, sales_channel: order.sales_channel,
-    date: now, sold_at: now, created_by: req.user.sub, status_id: status.id,
+    date: now, sold_at: now,confirmed_at:now, created_by: req.user.sub, status_id: status.id,
     payment_method_id: method.id, payment_status: method.is_credit ? 'PENDING' : 'PAID', due_date: dueDate,
+    ...(settlement?{settlement_source:'ENGAGEMENT_RECEIPTS',payment_status:total===0?'PAID':'PENDING'}:{}),
     amount_received: received, change: received == null ? null : round(received - total),
     cash_register_session_id: sessionId, idempotency_key: key,
     items: physicalUnits, subtotal: total, discount_total: 0,
@@ -203,4 +224,4 @@ async function reverseDelivery(tx, req) {
   return { orderId: order.id }
 }
 
-module.exports = { deliver, invoice, reverseDelivery, selectLines, requestKey }
+module.exports = { deliver, invoice, reverseDelivery, selectLines, requestKey,lockedOrder }

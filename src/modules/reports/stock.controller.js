@@ -73,7 +73,7 @@ async function emit(req, res, report, branding) {
   }
 
   const doc = newDoc(res, report.title)
-  header(doc, report.title, report.periodLabel, branding.company_name, branding.logoBuffer, scope.label)
+  header(doc, report.title, report.periodLabel, branding.company_name, branding.logoBuffer, scope.label, branding)
   if (report.summary.length) {
     sectionTitle(doc, 'Resumen')
     drawSummaryCards(doc, report.summary)

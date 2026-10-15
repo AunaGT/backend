@@ -1,0 +1,20 @@
+const test = require('node:test'), assert = require('node:assert/strict')
+const crypto = require('node:crypto')
+const { withAppointmentsTestDb } = require('./helpers/appointmentsTestDb.cjs')
+const { saveResource, saveProvider } = require('../src/modules/appointments/directory')
+const { saveCalendar, getCalendar } = require('../src/modules/appointments/calendars')
+test('directorio y horario reales conservan relaciones y revierten reemplazo con versión vieja', async () =>
+  withAppointmentsTestDb(async ({ db, scope, fixtures }) => {
+    const projector = await db.$transaction(tx => saveResource(tx, scope, null, { name: 'Proyector', type: 'EQUIPMENT', personCapacity: null, active: true }))
+    assert.equal(projector.personCapacity, null)
+    const independent = await db.$transaction(tx => saveProvider(tx, scope, null, { name: 'Invitado', employeeId: null, userId: null, branchIds: [scope.branchId], active: true }))
+    assert.equal(independent.employeeId, null)
+    const value = { timezone: 'America/Guatemala', expectedVersion: 0, weekly: [{ weekday: 1, from: '09:00', to: '12:00' }], exceptions: [] }
+    const saved = await db.$transaction(tx => saveCalendar(tx, scope, 'branch', scope.branchId, value))
+    assert.equal(saved.version, 1)
+    await assert.rejects(() => db.$transaction(tx => saveCalendar(tx, scope, 'branch', scope.branchId, { ...value, weekly: [], expectedVersion: 0 })), { status: 409 })
+    assert.deepEqual((await getCalendar(db, scope, 'branch', scope.branchId)).weekly, value.weekly)
+    await db.companyModule.create({ data: { company_id: scope.companyId, module_code: 'hr', status: 'DISABLED' } })
+    await assert.rejects(() => db.$transaction(tx => saveProvider(tx, scope, independent.id, { name: 'Vincular', employeeId: crypto.randomUUID(), branchIds: [scope.branchId], active: true, expectedVersion: 1 })), { status: 403 })
+    assert.equal((await db.serviceProvider.findUnique({ where: { id: fixtures.providerId } })).active, true)
+  }))

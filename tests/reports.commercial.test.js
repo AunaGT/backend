@@ -35,7 +35,11 @@ test('branch financial calculation never queries company-only PurchaseLog; unbou
   let purchasesRead = 0
   const prisma = { saleStatus: { findFirst: async () => ({ id: 1 }) },
     sale: { findMany: async ({ where }) => { assert.deepEqual(where.date, {}); return [] } },
-    saleItem: { findMany: async ({ where }) => { assert.deepEqual(where.sale.date, {}); return [] } },
+    saleItem: { findMany: async ({ where }) => {
+      assert.deepEqual((where.sale.AND?where.sale.AND[1]:where.sale).date,{})
+      assert.deepEqual(where.sale.AND?where.sale.AND[0].status:where.sale.status,{name:'Completada'})
+      return []
+    } },
     product: { findMany: async () => [] }, purchaseLog: { findMany: async () => { purchasesRead++; return [] } } }
   await withMocks({ [require.resolve('../src/models/prisma')]: { prisma },
     [require.resolve('../src/services/inTransit')]: { inTransitTotals: async () => ({ units: 0, value: 0 }) },
@@ -49,7 +53,7 @@ test('branch financial calculation never queries company-only PurchaseLog; unbou
 })
 test('sales JSON normalizes all-history before querying and preserves an adjusted total of zero', async () => {
   const prisma = { branch: { findMany: async () => [{ id: 'b', name: 'Centro' }] }, saleStatus: { findFirst: async () => ({ id: 1 }) },
-    saleItem: { findMany: async ({ where }) => { assert.deepEqual(where.sale.date, {}); return [] } },
+    saleItem: { findMany: async ({ where }) => { assert.deepEqual(where.sale.AND[1].date, {});assert.deepEqual(where.sale.AND[0],{status:{name:'Completada'}}); return [] } },
     sale: { findMany: async ({ where }) => {
       assert.deepEqual(where.date, {})
       assert.equal(where.branch_id, 'b')

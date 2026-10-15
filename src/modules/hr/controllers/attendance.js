@@ -14,7 +14,8 @@
  * extra del período, que la corrida usa como valor sugerido y editable.
  */
 
-const { prisma } = require('../../../models/prisma')
+const { prisma, prismaTransaction } = require('../../../models/prisma')
+const { withEmployeeAgendaLock } = require('../../appointments/application')
 const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../../../middlewares/tenant')
 const { fail, toDate, trim, toEnum } = require('../domain/validation')
 
@@ -114,12 +115,12 @@ exports.upsert = async (req, res, next) => {
     // Defaults solo para una marca nueva; una corrección parcial no los aplica.
     const defaults = { overtime_hours: 0, status: 'PRESENTE' }
 
-    const saved = await prisma.attendance.upsert({
+    const saved = await withEmployeeAgendaLock(prisma, prismaTransaction, companyId, [employee.id], tx => tx.attendance.upsert({
       where: { employee_id_work_date: { employee_id: employee.id, work_date: workDate } },
       update: supplied,
       create: { company_id: companyId, branch_id: branchId, employee_id: employee.id, work_date: workDate, ...defaults, ...supplied },
       include: { employee: { select: { id: true, code: true, first_name: true, last_name: true } } },
-    })
+    }))
     res.status(201).json(saved)
   } catch (e) { next(e) }
 }
@@ -154,9 +155,10 @@ exports.bulk = async (req, res, next) => {
     if (b.overtime_hours !== undefined) supplied.overtime_hours = toHours(b.overtime_hours, 'Las horas extra') ?? 0
     if (b.notes !== undefined) supplied.notes = trim(b.notes, 1000)
 
-    let saved = 0
-    for (const employee of employees) {
-      await prisma.attendance.upsert({
+    const saved = await withEmployeeAgendaLock(prisma, prismaTransaction, companyId, ids, async tx => {
+      let count = 0
+      for (const employee of employees) {
+        await tx.attendance.upsert({
         where: { employee_id_work_date: { employee_id: employee.id, work_date: workDate } },
         update: { status, ...supplied },
         create: {
@@ -170,8 +172,10 @@ exports.bulk = async (req, res, next) => {
           ...supplied,
         },
       })
-      saved += 1
-    }
+        count += 1
+      }
+      return count
+    })
     res.status(201).json({ saved })
   } catch (e) { next(e) }
 }
@@ -187,7 +191,7 @@ exports.remove = async (req, res, next) => {
       where: { id: req.params.id, company_id: companyId, branch_id: requireBranch(req) },
     })
     if (!current) fail(404, 'Marca de asistencia no encontrada')
-    await prisma.attendance.delete({ where: { id: current.id } })
+    await withEmployeeAgendaLock(prisma, prismaTransaction, companyId, [current.employee_id], tx => tx.attendance.delete({ where: { id: current.id } }))
     res.json({ ok: true })
   } catch (e) { next(e) }
 }

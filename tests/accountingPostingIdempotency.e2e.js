@@ -85,7 +85,7 @@ async function main() {
         status_id: saleStatus.id, created_by: user.id,
       },
     })
-    await tx.saleItem.create({ data: { sale_id: sale.id, product_id: ron.id, price: 100, unit_cost: 25, qty: 2 } })
+    await tx.saleItem.create({ data: { sale_id: sale.id, product_id: ron.id, ...require('../src/services/catalogItemRules').lineSnapshot(ron), price: 100, unit_cost: 25, qty: 2 } })
   })
 
   const im = await prisma.incomingMerchandise.create({

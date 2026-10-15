@@ -159,7 +159,7 @@ test('desasigna el excedente y deja la venta con estado coherente', async () => 
       delete: async ({ where }) => entries.splice(entries.findIndex((row) => row.id === where.id), 1),
     },
     sale: {
-      findUnique: async () => ({ adjusted_total: 70, paymentEntries: entries }),
+      findUnique: async () => ({status:{name:'Completada'}, adjusted_total: 70, paymentEntries: entries }),
       update: async ({ data }) => { paymentStatus = data.payment_status },
     },
   }

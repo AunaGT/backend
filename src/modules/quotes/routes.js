@@ -11,6 +11,7 @@ const router = Router()
 
 router.get('/', Auth, hasPermission('quotes.view'), Quotes.list)
 router.post('/', Auth, hasPermission('quotes.create'), Quotes.create)
+router.post('/service-conditions',Auth,hasPermission('quotes.create'),Quotes.previewServiceConditions)
 router.get('/:id/share-link', Auth, hasPermission('quotes.view'), Quotes.getShareLink)
 router.get('/:id', Auth, hasPermission('quotes.view'), Quotes.getById)
 router.put('/:id', Auth, hasPermission('quotes.create'), Quotes.update)

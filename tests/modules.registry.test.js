@@ -73,10 +73,11 @@ test('cada manifiesto carga routers físicos desde su propia carpeta', () => {
   }
 })
 
-test('la compatibilidad activa módulos cuando aún no existe una fila', () => {
+test('la compatibilidad conserva módulos previos sin activar Agenda opt-in', () => {
   const modules = resolveEffectiveModules([])
   assert.equal(modules.length, MODULE_DEFINITIONS.length)
-  assert.equal(modules.every((module) => module.effectiveEnabled), true)
+  assert.equal(modules.filter((module) => module.code !== 'appointments').every((module) => module.effectiveEnabled), true)
+  assert.equal(modules.find((module) => module.code === 'appointments').effectiveEnabled, false)
   assert.equal(modules.every((module) => module.persisted === false), true)
 })
 

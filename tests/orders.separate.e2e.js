@@ -39,7 +39,7 @@ async function main() {
   const firstKey = randomUUID()
   const deliver = (qty, key = randomUUID()) => call(orders.deliver, req(order.id, { request_key: key, lines: [{ line_id: line.id, qty }] }))
   const first = await deliver(4, firstKey)
-  assert.equal(first.order.lines[0].qty_fulfilled, 4)
+  assert.equal(Number(first.order.lines[0].qty_fulfilled), 4)
   await deliver(4, firstKey)
   assert.equal(await prisma.orderDelivery.count({ where: { document_id: order.id } }), 1)
   assert.equal(await prisma.sale.count({ where: { branch_id: branch.id } }), 0)

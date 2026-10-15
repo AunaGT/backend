@@ -11,6 +11,7 @@
 // Acepta el `.env` estándar y el archivo local heredado llamado `env`.
 require('../src/config/loadEnv')
 const { PrismaClient } = require('@prisma/client')
+const { ensureSystemAdmin } = require('../src/modules/users/roles/seed')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 const { seedCompanyModules } = require('../src/modules/platform/service')
 const prisma = new PrismaClient()
@@ -44,10 +45,7 @@ async function main() {
   // ========================================
   console.log('Creando roles...')
   const roles = ['admin']
-  await prisma.role.createMany({ 
-    data: roles.map(name => ({ name })), 
-    skipDuplicates: true 
-  })
+  await ensureSystemAdmin(prisma)
   console.log('Roles creados')
 
   // ========================================
@@ -191,6 +189,7 @@ async function main() {
     { code: 'sales.view_invoice', name: 'Ver factura', description: 'Puede consultar la factura de una venta' },
     { code: 'sales.create', name: 'Crear ventas', description: 'Puede registrar nuevas ventas' },
     { code: 'sales.cancel', name: 'Anular / actualizar ventas', description: 'Puede anular o actualizar ventas' },
+    { code: 'sales.fiscal.register', name: 'Solicitar facturación electrónica', description: 'Solicitar la factura de una venta confirmada; no concede cobros ni certificación manual' },
 
     // Cotizaciones
     { code: 'quotes.view', name: 'Ver cotizaciones', description: 'Puede ver cotizaciones comerciales' },
@@ -310,7 +309,7 @@ async function main() {
   const permissionsMap = new Map(allPermissions.map(p => [p.code, p.id]))
 
   // Obtener roles
-  const adminRole = await prisma.role.findFirst({ where: { name: { equals: 'admin', mode: 'insensitive' } } })
+  const adminRole = await prisma.role.findUnique({ where: { system_key: 'ADMIN' } })
 
   if (adminRole) {
     // Admin tiene TODOS los permisos
@@ -386,6 +385,7 @@ async function main() {
     { key: 'cash_closure_denominations', value: defaultDenominations, type: 'json', description: 'Denominaciones para conteo de cierre de caja' },
     // Datos fiscales (preparación FEL)
     { key: 'company_nit', value: '', type: 'string', description: 'NIT del emisor' },
+    { key: 'fel_enabled', value: 'false', type: 'string', description: 'El negocio emitirá facturas electrónicas mediante un certificador' },
     { key: 'company_address', value: '', type: 'string', description: 'Dirección fiscal' },
     { key: 'company_municipality', value: '', type: 'string', description: 'Municipio' },
     { key: 'company_department', value: '', type: 'string', description: 'Departamento' },

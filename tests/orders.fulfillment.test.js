@@ -25,6 +25,7 @@ function fixture() {
   const order = { id: 'order-1', fulfillment_mode: 'SEPARATE', status: 'FULFILLED', branch_id: 'branch-1', lines }
   let existing = null
   const tx = {
+    appointmentEngagement:{findFirst:async()=>null},
     $queryRaw: async (strings, ...values) => { events.push(['lock', values]); return [{ id: order.id }] },
     commercialDocument: { findUnique: async () => { events.push(['load']); return order } },
     sale: {

@@ -7,7 +7,6 @@
  * 
  * For licensing inquiries: GitHub @dpatzan2
  */
-
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const PDFDocument = require('pdfkit')
 // Luxon DateTime (single import; removed duplicate that caused startup SyntaxError)
@@ -17,6 +16,9 @@ const { createClient } = require('@supabase/supabase-js')
 // Reuse shared stock alert service
 const { ensureStockAlert } = require('../../services/stockAlerts')
 const { requireBranch, branchWhere } = require('../../middlewares/tenant')
+const { requestScope } = require('../appointments/access')
+const { saveServiceProfile } = require('../appointments/profiles')
+const { withAgendaTransaction } = require('../appointments/application')
 const { parseCatalogKind, assertServiceFields, assertServicesEnabled, assertPhysicalItem } = require('../../services/catalogItemRules')
 const { validMoney, checkText } = require('../../utils/importValidation')
 const { ensureBranchStockRows } = require('../../services/stockAvailability')
@@ -209,7 +211,7 @@ async function overlayScopedStock(items, scope) {
   })
 }
 const { getTimezone } = require('../../utils/getTimezone')
-const { getBrandingForPdf } = require('../../utils/pdfBranding')
+const { getBrandingForPdf, setupReportPdf, ensureReportSpace, drawReportTable, finishReportPdf, reportLines } = require('../../utils/pdfBranding')
 
 // Bulk import service
 const { parseExcel, validateBulkData, bulkCreateProducts, generateTemplateWithCatalogs } = require('../../services/bulkImport')
@@ -288,6 +290,7 @@ exports.create = async (req, res, next) => {
   try {
     const payload = req.body || {}
     const kind = parseCatalogKind(payload.kind)
+    if (payload.schedule_profile !== undefined && kind !== 'SERVICE') throw Object.assign(new Error('Solo los servicios admiten configuración de agenda'), { status: 400 })
     if (kind === 'SERVICE') {
       await assertServicesEnabled(prisma,req.companyId)
       assertServiceFields(payload)
@@ -306,7 +309,13 @@ exports.create = async (req, res, next) => {
         data[key] = payload[key]
       }
       if (payload.promotion_valid_until) {const date=new Date(payload.promotion_valid_until);if(Number.isNaN(date.getTime()))throw Object.assign(new Error('Fecha inválida'),{status:400});data.promotion_valid_until=date}
-      const product = await prismaTransaction.$transaction(tx => tx.product.create({data}))
+      const scope = payload.schedule_profile === undefined ? null : requestScope(req)
+      const save = async tx => {
+        const product = await tx.product.create({data})
+        if (scope) await saveServiceProfile(tx, scope, product.id, payload.schedule_profile)
+        return product
+      }
+      const product = scope ? await withAgendaTransaction(prismaTransaction, scope.companyId, save) : await prismaTransaction.$transaction(save)
       return res.status(201).json({product,purchaseLog:null})
     }
     const stock = Number(payload.stock || 0)
@@ -597,6 +606,7 @@ exports.update = async (req, res, next) => {
     if (!current || current.deleted) {
       return res.status(404).json({ message: 'Producto no encontrado' })
     }
+    if (payload.schedule_profile !== undefined && current.kind !== 'SERVICE') throw Object.assign(new Error('Solo los servicios admiten configuración de agenda'), { status: 400 })
     if (payload.kind !== undefined && (parseCatalogKind(payload.kind) === 'SERVICE') !== (current.kind === 'SERVICE')) throw Object.assign(new Error('No se puede convertir el tipo físico a servicio ni viceversa'),{status:400})
     if (current.kind === 'SERVICE') {
       await assertServicesEnabled(prisma,req.companyId)
@@ -613,6 +623,15 @@ exports.update = async (req, res, next) => {
       if (data.available_for_sale !== undefined) data.available_for_sale=data.available_for_sale===true||data.available_for_sale==='true'
       for (const key of ['price_wholesale','price_promotion']) if(data[key]==='')data[key]=null
       if (data.promotion_valid_until !== undefined) {data.promotion_valid_until=data.promotion_valid_until?new Date(data.promotion_valid_until):null;if(data.promotion_valid_until&&Number.isNaN(data.promotion_valid_until.getTime()))throw Object.assign(new Error('Fecha inválida'),{status:400})}
+      if (payload.schedule_profile !== undefined) {
+        const scope = requestScope(req)
+        const product = await withAgendaTransaction(prismaTransaction, scope.companyId, async tx => {
+          const product = await tx.product.update({where:{id},data})
+          await saveServiceProfile(tx, scope, id, payload.schedule_profile)
+          return product
+        })
+        return res.json(product)
+      }
       return res.json(await prisma.product.update({where:{id},data}))
     }
     const branchId = requireBranch(req)
@@ -909,7 +928,7 @@ exports.commercialHistory = async (req,res,next) => {
   try {
     const product = await prisma.product.findFirst({where:{id:req.params.id,company_id:req.companyId},select:{id:true}})
     if (!product) return res.status(404).json({message:'Artículo no encontrado'})
-    const where = {product_id:product.id,sale:{branch:{company_id:req.companyId},...branchWhere(req)}}
+    const where = {product_id:product.id,sale:require('../sales/commercialState').confirmedSaleWhere({branch:{company_id:req.companyId},...branchWhere(req)})}
     const pageSize = 10
     const totalItems = await prisma.saleItem.count({where})
     const totalPages = Math.max(1,Math.ceil(totalItems/pageSize))
@@ -924,7 +943,6 @@ exports.reportPdf = async (req, res, next) => {
     const serviceCatalog = req.query.catalog_type === 'services'
     if (serviceCatalog || req.query.catalog_type === 'all') await assertServicesEnabled(prisma,req.companyId)
     const branding = await getBrandingForPdf(prisma, req.companyId)
-    const companyName = branding.company_name
     const currencyCode = (branding.currency_code && branding.currency_code.trim()) || 'GTQ'
     const money = (v) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: currencyCode }).format(Number(v || 0))
     // Se exporta LO QUE SE ESTÁ VIENDO: mismo filtro y mismo alcance que el
@@ -1031,56 +1049,39 @@ exports.reportPdf = async (req, res, next) => {
       return
     }
 
-    const doc = new PDFDocument({ size: 'A4', margin: 50 })
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true })
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', 'inline; filename="productos_reporte.pdf"')
     doc.pipe(res)
 
-    // Header block
-    if (branding.logoBuffer) {
-      try {
-        doc.image(branding.logoBuffer, doc.page.margins.left, doc.y, { fit: [48, 28] })
-        doc.moveDown(2)
-      } catch {
-        /* sin logo */
-      }
-    }
-    doc.fillColor('#0b1220').fontSize(22).font('Helvetica-Bold').text(`${companyName} - Informe de Productos`, { align: 'left' })
-    doc.moveDown(0.25)
-    doc.fontSize(10).font('Helvetica').fillColor('#475569').text(`Generado: ${new Date().toLocaleString('es-GT')}`)
-    // Sin esto, dos PDF de sucursales distintas son indistinguibles.
-    doc.fontSize(10).fillColor('#475569').text(`Alcance: ${await scopeLabel(req, scope)}`)
-    if (fields && fields.length > 0) {
-      doc.fontSize(9).fillColor('#64748b').text(`Columnas: ${fields.map((f) => headers[f] || f).join(', ')}`)
-    }
-    doc.moveDown(0.6)
-
-    // Decorative divider
+    setupReportPdf(doc, { branding, title: 'Informe de Productos', metadata: [
+      `Generado: ${new Date().toLocaleString('es-GT')}`,
+      `Alcance: ${await scopeLabel(req, scope)}`,
+      ...(fields?.length ? [`Columnas: ${fields.map(f => headers[f] || f).join(', ')}`] : []),
+    ] })
     const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right
-    doc.save().moveTo(doc.x, doc.y).lineTo(doc.x + pageWidth, doc.y).lineWidth(1).stroke('#e6eef6')
-    doc.moveDown(0.8)
 
     let gridTop
     if (includeSummary) {
       // Summary cards
       const totalProductos = products.length
-      const totalUnidades = products.reduce((s, p) => s + Number(p.stock || 0), 0)
-      const valorInventario = products.reduce((s, p) => s + Number(p.stock || 0) * Number(p.cost || 0), 0)
+      const totalUnidades = products.filter(p => p.kind !== 'SERVICE').reduce((s, p) => s + Number(p.stock || 0), 0)
+      const valorInventario = products.filter(p => p.kind !== 'SERVICE').reduce((s, p) => s + Number(p.stock || 0) * Number(p.cost || 0), 0)
 
       const cardW = (pageWidth - 24) / 3
       const cardH = 56
       const startX = doc.x
       const startY = doc.y
 
-      const drawSummary = (x, y, title, value, color = '#0b1220') => {
-        doc.roundedRect(x, y, cardW, cardH, 8).fill('#ffffff').stroke('#e6eef6')
-        doc.fillColor('#0b1220').font('Helvetica').fontSize(9).text(title, x + 10, y + 8, { width: cardW - 20 })
+      const drawSummary = (x, y, title, value, color = '#0c203a') => {
+        doc.roundedRect(x, y, cardW, cardH, 5).fillAndStroke('#f7f9fc', '#d8e1eb')
+        doc.fillColor('#63758b').font('Helvetica').fontSize(8).text(title, x + 10, y + 8, { width: cardW - 20 })
         doc.fillColor(color).font('Helvetica-Bold').fontSize(14).text(value, x + 10, y + 26, { width: cardW - 20 })
       }
 
-      drawSummary(startX, startY, serviceCatalog ? 'Servicios registrados' : 'Productos registrados', String(totalProductos), '#0b1220')
-      drawSummary(startX + cardW + 12, startY, serviceCatalog ? 'Disponibles para venta' : 'Unidades en inventario', String(serviceCatalog ? products.filter(p=>p.available_for_sale).length : totalUnidades), '#0b1220')
-      drawSummary(startX + (cardW + 12) * 2, startY, serviceCatalog ? 'Con cantidades fraccionadas' : `Valor del inventario (${currencyCode})`, serviceCatalog ? String(products.filter(p=>p.quantity_decimals>0).length) : money(valorInventario), '#0b1220')
+      drawSummary(startX, startY, serviceCatalog ? 'Servicios registrados' : 'Productos registrados', String(totalProductos))
+      drawSummary(startX + cardW + 12, startY, serviceCatalog ? 'Disponibles para venta' : 'Unidades en inventario', String(serviceCatalog ? products.filter(p=>p.available_for_sale).length : totalUnidades))
+      drawSummary(startX + (cardW + 12) * 2, startY, serviceCatalog ? 'Con cantidades fraccionadas' : `Valor del inventario (${currencyCode})`, serviceCatalog ? String(products.filter(p=>p.quantity_decimals>0).length) : money(valorInventario))
 
       gridTop = startY + cardH + 24
     } else {
@@ -1088,200 +1089,71 @@ exports.reportPdf = async (req, res, next) => {
     }
 
     if (fields && fields.length > 0) {
-      const colCount = fields.length
-      const fontSize = 8
-      const cellPadding = 8
-      const minRowHeight = 16
-      const colWidth = (pageWidth - 2) / colCount
-      const headerHeight = 22
-      const headerOrange = '#d97706'
-      const headerTextWhite = '#ffffff'
-      const borderColor = '#e2e8f0'
-      const rowBgEven = '#f8fafc'
-      const rowBgOdd = '#ffffff'
-      doc.fontSize(fontSize).font('Helvetica')
-
-      const getCellTextHeight = (text, w) => {
-        if (!text) return minRowHeight - 4
-        const h = doc.heightOfString(String(text), { width: Math.max(20, w - cellPadding * 2) })
-        return Math.max(minRowHeight - 4, h)
-      }
-
-      let tableY = gridTop
-
-      // Header con color naranja de la plataforma
-      doc.rect(doc.page.margins.left, tableY, pageWidth, headerHeight).fill(headerOrange).stroke(borderColor)
-      doc.fillColor(headerTextWhite).font('Helvetica-Bold')
-      let headerX = doc.page.margins.left
-      for (let i = 0; i < fields.length; i++) {
-        const label = headers[fields[i]] || fields[i]
-        doc.text(String(label).slice(0, 25), headerX + cellPadding, tableY + 6, { width: colWidth - cellPadding * 2 })
-        headerX += colWidth
-      }
-      tableY += headerHeight
-
-      for (let rowIndex = 0; rowIndex < products.length; rowIndex++) {
-        const p = products[rowIndex]
-        const values = fields.map((f) => getCellValue(p, f))
-        const cellHeights = values.map((v, i) => getCellTextHeight(v, colWidth))
-        const rowHeight = Math.max(minRowHeight, ...cellHeights) + 10
-
-        if (tableY + rowHeight > doc.page.height - doc.page.margins.bottom - 25) {
-          doc.addPage()
-          tableY = doc.page.margins.top
-          doc.rect(doc.page.margins.left, tableY, pageWidth, headerHeight).fill(headerOrange).stroke(borderColor)
-          doc.fillColor(headerTextWhite).font('Helvetica-Bold')
-          headerX = doc.page.margins.left
-          for (let i = 0; i < fields.length; i++) {
-            doc.text(String(headers[fields[i]] || fields[i]).slice(0, 25), headerX + cellPadding, tableY + 6, { width: colWidth - cellPadding * 2 })
-            headerX += colWidth
-          }
-          tableY += headerHeight
-        }
-
-        const rowBg = rowIndex % 2 === 0 ? rowBgEven : rowBgOdd
-        doc.rect(doc.page.margins.left, tableY, pageWidth, rowHeight).fill(rowBg).stroke(borderColor)
-        doc.fillColor('#374151').font('Helvetica')
-        let cellX = doc.page.margins.left
-        const rightAlignKeys = ['price', 'cost', 'price_wholesale', 'stock', 'min_stock']
-        for (let c = 0; c < values.length; c++) {
-          const cellW = colWidth - cellPadding * 2
-          const val = String(values[c] ?? '-')
-          const align = rightAlignKeys.includes(fields[c]) ? 'right' : 'left'
-          doc.text(val, cellX + cellPadding, tableY + 4, { width: cellW, height: rowHeight - 8, align, ellipsis: true })
-          if (c < values.length - 1) {
-            doc.strokeColor(borderColor).lineWidth(0.3).moveTo(cellX + colWidth, tableY).lineTo(cellX + colWidth, tableY + rowHeight).stroke()
-          }
-          cellX += colWidth
-        }
-        tableY += rowHeight
-      }
+      doc.y = gridTop
+      const numericFields = ['price', 'price_wholesale', 'price_promotion', 'cost', 'stock', 'min_stock', 'quantity_decimals']
+      drawReportTable(doc, fields.map(f => headers[f] || f), products.map(p => fields.map(f => f === 'description' ? String(p.description || '') : getCellValue(p, f))), {
+        widths: fields.map(f => ['name', 'description', 'supplier', 'status', 'price_promotion'].includes(f) ? 2 : 1),
+        align: fields.map(f => numericFields.includes(f) ? 'right' : 'left'),
+      })
     } else {
-    // Product cards grid (2 columns)
-    const cols = 2
-    const gap = 12
-    const cardWidth = (pageWidth - gap) / cols
-    const cardHeight = 148
-
-    // start x at left page margin
-    let x = doc.page.margins.left
-    // start y at a fixed position right below the summary cards to avoid overlapping
-    let y = gridTop
-
-    for (const p of products) {
-      // wrap to next row when exceeding right boundary
-      if (x + cardWidth > doc.page.width - doc.page.margins.right) {
-        x = doc.page.margins.left
-        y += cardHeight + gap
-      }
-      if (y + cardHeight > doc.page.height - doc.page.margins.bottom) {
-        doc.addPage()
-        x = doc.page.margins.left
-        y = doc.y
-      }
-
-      // card drawing in isolated graphics state
-      doc.save()
-      // Card background
-      doc.roundedRect(x, y, cardWidth, cardHeight, 8).fill('#ffffff').stroke('#e6eef6')
-
-      // layout measurements
-      const priceBoxW = 100
-      const contentX = x + 12
-      const contentWidth = cardWidth - priceBoxW - 36 // leave room for price box + paddings
-
-      // use a local cursor (cy) to place lines vertically and avoid overlaps
-      let cy = y + 10
-
-      // Product title
-      doc.fillColor('#0b1220').font('Helvetica-Bold').fontSize(12)
-      const title = p.name || '-'
-      const titleHeight = doc.heightOfString(title, { width: contentWidth })
-      doc.text(title, contentX, cy, { width: contentWidth, ellipsis: true })
-      cy += titleHeight + 6
-
-      // Category
-      const categoryText = p.category?.name || 'Sin categoría'
-      doc.fillColor('#64748b').font('Helvetica').fontSize(9)
-      const catH = doc.heightOfString(categoryText, { width: contentWidth })
-      doc.text(categoryText, contentX, cy, { width: contentWidth })
-      cy += catH + 8
-
-      // Price box (right) - draw and center price vertically
-      const priceX = x + cardWidth - priceBoxW - 12
-      const priceY = y + 10
-      doc.roundedRect(priceX, priceY, priceBoxW, 28, 6).fill('#0ea5a4').stroke('#0ea5a4')
-      // center price text inside the box
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11)
-      const priceText = money(p.price)
-      const priceTextWidth = doc.widthOfString(priceText)
-      const priceTextX = priceX + (priceBoxW - priceTextWidth) / 2
-      const priceTextY = priceY + (28 - 11) / 2 - 1
-      doc.text(priceText, priceTextX, priceTextY)
-
-      // Cost small under price box
-      doc.fillColor('#94a3b8').font('Helvetica').fontSize(9).text(`Costo: ${money(p.cost)}`, priceX + 8, priceY + 34, { width: priceBoxW - 16 })
-
-      let lineY = priceY + 50
-      const wholesale = p.price_wholesale != null ? Number(p.price_wholesale) : NaN
-      if (Number.isFinite(wholesale) && wholesale > 0) {
-        doc.fillColor('#64748b').font('Helvetica').fontSize(8).text(`Mayoreo: ${money(wholesale)}`, priceX + 6, lineY, { width: priceBoxW - 12 })
-        lineY += 11
-      }
-      const promo = p.price_promotion != null ? Number(p.price_promotion) : NaN
-      if (Number.isFinite(promo) && promo > 0) {
-        let promoText = `Promo: ${money(promo)}`
-        if (p.promotion_valid_until) {
-          const d = new Date(p.promotion_valid_until)
-          if (!Number.isNaN(d.getTime())) {
-            const ds = d.toLocaleDateString('es-GT', { day: '2-digit', month: 'short', year: 'numeric' })
-            promoText += d < new Date() ? ` · vencida (${ds})` : ` · hasta ${ds}`
-          }
+      const gap = 12, cardWidth = (pageWidth - gap) / 2, contentWidth = cardWidth - 20
+      const cards = products.map(p => {
+        const details = [
+          `Costo: ${money(p.cost)}`,
+          ...(Number(p.price_wholesale) > 0 ? [`Mayoreo: ${money(p.price_wholesale)}`] : []),
+          ...(Number(p.price_promotion) > 0 ? [`Promo: ${getCellValue(p, 'price_promotion')}`] : []),
+          `Stock: ${Number(p.stock || 0)}`, `Proveedor: ${p.supplier?.name || '-'}`, `Estado: ${p.status?.name || '-'}`,
+          ...(p.description ? [String(p.description)] : []),
+        ]
+        const lines = []
+        const append = (value, size, color, bold = false) => {
+          doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size)
+          lines.push(...reportLines(doc, value, contentWidth).map(text => ({ text, size, color, bold, height: size + 3 })))
+          lines.push({ text: '', height: 5 })
         }
-        doc.fillColor('#64748b').font('Helvetica').fontSize(8).text(promoText, priceX + 6, lineY, { width: priceBoxW - 12, lineGap: 1 })
-      }
-
-      // Stock
-      const stockText = `Stock: ${Number(p.stock || 0)}`
-      doc.fillColor('#0b1220').font('Helvetica-Bold').fontSize(10)
-      const stockH = doc.heightOfString(stockText, { width: contentWidth })
-      doc.text(stockText, contentX, cy)
-      cy += stockH + 6
-
-      // Supplier and status
-      const supplierText = p.supplier?.name || '-'
-      const statusText = p.status?.name || '-'
-      doc.fillColor('#374151').font('Helvetica').fontSize(9)
-      const supH = doc.heightOfString(`Proveedor: ${supplierText}`, { width: contentWidth })
-      doc.text(`Proveedor: ${supplierText}`, contentX, cy, { width: contentWidth })
-      cy += supH + 4
-      const statH = doc.heightOfString(`Estado: ${statusText}`, { width: contentWidth })
-      doc.text(`Estado: ${statusText}`, contentX, cy, { width: contentWidth })
-      cy += statH + 6
-
-      // Description - only render if there's room inside the card
-      const desc = (p.description || '').toString()
-      if (desc) {
-        doc.fillColor('#475569').font('Helvetica').fontSize(9)
-        const remainingSpace = y + cardHeight - 10 - cy
-        if (remainingSpace > 12) {
-          const maxLinesHeight = Math.max(0, remainingSpace)
-          // measure and truncate if necessary
-          const short = desc.length > 300 ? desc.slice(0, 297) + '...' : desc
-          doc.text(short, contentX, cy, { width: contentWidth, height: maxLinesHeight })
+        append(p.name || '-', 11, '#0c203a', true)
+        append(p.category?.name || 'Sin categoría', 8, '#63758b')
+        lines.push({ text: money(p.price), size: 11, color: '#ffffff', bold: true, price: true, height: 30 })
+        for (const value of details) append(value, 8, '#0c203a')
+        return lines
+      })
+      doc.y = gridTop
+      for (let offset = 0; offset < cards.length; offset += 2) {
+        const pair = cards.slice(offset, offset + 2), positions = pair.map(() => 0)
+        const totalHeight = Math.max(...pair.map(lines => lines.reduce((sum, line) => sum + line.height, 0))) + 20
+        const bottom = doc.page.height - doc.page.margins.bottom - 20
+        if (totalHeight < bottom - doc.page.margins.top - 150 && doc.y + totalHeight > bottom) doc.addPage()
+        while (pair.some((lines, i) => positions[i] < lines.length)) {
+          ensureReportSpace(doc, 55)
+          const top = doc.y, available = bottom - top - 20
+          const fragments = pair.map((lines, index) => {
+            let height = 0, end = positions[index]
+            while (end < lines.length && height + lines[end].height <= available) height += lines[end++].height
+            const fragment = { lines: lines.slice(positions[index], end), height }
+            positions[index] = end
+            return fragment
+          })
+          const height = Math.max(...fragments.map(fragment => fragment.height)) + 20
+          fragments.forEach((fragment, index) => {
+            if (!fragment.lines.length) return
+            const x = doc.page.margins.left + index * (cardWidth + gap)
+            doc.roundedRect(x, top, cardWidth, height, 5).fillAndStroke('#f7f9fc', '#d8e1eb')
+            let y = top + 10
+            for (const line of fragment.lines) {
+              if (line.price) doc.rect(x + 10, y, contentWidth, 23).fill('#ff6f00')
+              if (line.text) doc.font(line.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(line.size).fillColor(line.color)
+                .text(line.text, x + (line.price ? 16 : 10), y + (line.price ? 5 : 0), { width: contentWidth - (line.price ? 12 : 0), lineBreak: false })
+              y += line.height
+            }
+          })
+          doc.y = top + height + gap
+          doc.x = doc.page.margins.left
+          if (pair.some((lines, i) => positions[i] < lines.length)) doc.addPage()
         }
       }
-
-      doc.restore()
-
-      x += cardWidth + gap
-    }
     }
 
-    // Footer
-    doc.addPage ? null : null
-    doc.moveDown(2)
-    doc.fontSize(9).fillColor('#64748b').text(`Reporte generado por ${companyName}`, { align: 'right' })
+    finishReportPdf(doc)
     doc.end()
   } catch (e) { next(e) }
 }
@@ -1802,8 +1674,8 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           notes: notes || null,
           source: merchandiseSource,
           payment_term_id,
-          payment_status,
-          paid_at,
+          payment_status: merchandiseSource === 'PURCHASE' ? 'PENDING' : payment_status,
+          paid_at: merchandiseSource === 'PURCHASE' ? null : paid_at,
           payment_reference: payment_reference || null,
           due_date,
           payment_updated_by: registered_by,
@@ -1914,6 +1786,16 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
 
         totalPurchaseValue += quantity * unitCost
       }
+
+      const settledPurchase = await require('../merchandise/payables/compatibility').settleNewPurchase(
+        tx, require('../merchandise/payables/access').payableScope(req), incomingMerchandise,
+        { payment_status, paid_at, payment_reference }
+      )
+      if (settledPurchase) Object.assign(incomingMerchandise, {
+        payment_status: settledPurchase.payment_status,
+        paid_at: settledPurchase.paid_at,
+        payment_revision: settledPurchase.payment_revision,
+      })
 
       // Update supplier: total_purchases (solo compras reales, no apertura) and last_order
       await tx.supplier.update({

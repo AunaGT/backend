@@ -24,7 +24,7 @@ test('vencimiento conserva el día local completo, admite cero días y rechaza f
 })
 
 test('abono parcial se aplica a esta venta, no a una deuda anterior, y sincroniza su estado', async () => {
-  const sale = { id: 'new-sale', customer_contact_id: 'customer-a', branch_id: 'branch-a', date: new Date(), reference: 'V-NEW', adjusted_total: 100, paymentEntries: [] }
+  const sale = { id: 'new-sale',status:{name:'Completada'}, customer_contact_id: 'customer-a', branch_id: 'branch-a', date: new Date(), reference: 'V-NEW', adjusted_total: 100, paymentEntries: [] }
   let paymentData
   let status
   const tx = {

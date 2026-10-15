@@ -103,6 +103,40 @@ function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequen
   return lines
 }
 
+function buildSalePosting(sale,{defaults,splitVat,ivaRate,costBase,pequenoTaxOf}) {
+  const total=round2(sale.total)
+  const { base, iva } = splitIva(total, ivaRate)
+  // El costo congelado en la venta; las ventas viejas (sin él) caen al costo
+  // del producto, que es lo que se usaba antes de guardarlo por línea.
+  const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
+  const chargeAccount = sale.settlement_source==='ENGAGEMENT_RECEIPTS'?defaults.receivables:cashOrBank(defaults, sale.payment_method)
+  const lines = splitVat
+    ? [
+        { account_id: chargeAccount.id, debit: total, credit: 0 },
+        { account_id: defaults.sales.id, debit: 0, credit: base },
+        { account_id: defaults.ivaDebit.id, debit: 0, credit: iva },
+      ]
+    : [
+        { account_id: chargeAccount.id, debit: total, credit: 0 },
+        { account_id: defaults.sales.id, debit: 0, credit: total },
+      ]
+  // Ventas al crédito: la línea de Clientes identifica al contacto que debe.
+  if (chargeAccount.id === defaults.receivables.id) {
+    const customerName = sale.customerContact?.name || sale.customer
+    if (customerName) lines[0].description = `Cliente: ${customerName}`
+  }
+  const saleTax = pequenoTaxOf(total)
+  if (saleTax > 0) {
+    lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: saleTax, credit: 0 })
+    lines.push({ account_id: defaults.pequenoTax.id, debit: 0, credit: saleTax })
+  }
+  if (cost > 0) {
+    lines.push({ account_id: defaults.cogs.id, debit: cost, credit: 0 })
+    lines.push({ account_id: defaults.inventory.id, debit: 0, credit: cost })
+  }
+  return lines
+}
+
 /** Postea una operación en su propia transacción; devuelve null si ok, o razón si se omite. */
 async function tryPost(prisma, build) {
   try {
@@ -148,6 +182,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     where: { id: { in: pendingSales } },
     select: {
       id: true, reference: true, date: true, total: true, customer: true, branch_id: true,
+      settlement_source:true,
       customerContact: { select: { name: true } },
       payment_method: { select: { name: true, is_credit: true } },
       sale_items: { select: { qty: true,item_kind:true, unit_cost: true, product: { select: { cost: true,kind:true } } } },
@@ -158,35 +193,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     const label = `Venta ${sale.reference || sale.id.slice(0, 8)}`
     const total = round2(sale.total)
     if (total <= 0) { track(label, 'total 0'); continue }
-    const { base, iva } = splitIva(total, ivaRate)
-    // El costo congelado en la venta; las ventas viejas (sin él) caen al costo
-    // del producto, que es lo que se usaba antes de guardarlo por línea.
-    const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
-    const chargeAccount = cashOrBank(defaults, sale.payment_method)
-    const lines = splitVat
-      ? [
-          { account_id: chargeAccount.id, debit: total, credit: 0 },
-          { account_id: defaults.sales.id, debit: 0, credit: base },
-          { account_id: defaults.ivaDebit.id, debit: 0, credit: iva },
-        ]
-      : [
-          { account_id: chargeAccount.id, debit: total, credit: 0 },
-          { account_id: defaults.sales.id, debit: 0, credit: total },
-        ]
-    // Ventas al crédito: la línea de Clientes identifica al contacto que debe.
-    if (chargeAccount.id === defaults.receivables.id) {
-      const customerName = sale.customerContact?.name || sale.customer
-      if (customerName) lines[0].description = `Cliente: ${customerName}`
-    }
-    const saleTax = pequenoTaxOf(total)
-    if (saleTax > 0) {
-      lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: saleTax, credit: 0 })
-      lines.push({ account_id: defaults.pequenoTax.id, debit: 0, credit: saleTax })
-    }
-    if (cost > 0) {
-      lines.push({ account_id: defaults.cogs.id, debit: cost, credit: 0 })
-      lines.push({ account_id: defaults.inventory.id, debit: 0, credit: cost })
-    }
+    const lines=buildSalePosting(sale,{defaults,splitVat,ivaRate,costBase,pequenoTaxOf})
     const reason = await tryPost(prisma, () => ({
       company_id: companyId,
       branch_id: sale.branch_id,
@@ -212,10 +219,10 @@ async function postPendingOperations(prisma, userId, companyId) {
   const returns = await prisma.return.findMany({
     where: { id: { in: pendingReturns } },
     select: {
-      id: true, return_date: true, total_refund: true, type: true,
+      id: true, return_date: true,processed_at:true, total_refund: true, type: true,
       sale: {
         select: {
-          reference: true, customer: true, branch_id: true,
+          reference: true, customer: true, branch_id: true,settlement_source:true,
           customerContact: { select: { name: true } },
           payment_method: { select: { name: true, is_credit: true } },
         },
@@ -253,7 +260,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     const reason = await tryPost(prisma, () => ({
       company_id: companyId,
       branch_id: ret.sale?.branch_id ?? null,
-      date: ret.return_date,
+      date:ret.sale?.settlement_source==='ENGAGEMENT_RECEIPTS'?(ret.processed_at||ret.return_date):ret.return_date,
       description: label,
       source_type: 'RETURN',
       source_id: ret.id,
@@ -366,6 +373,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     LEFT JOIN returns r ON r.reference = cp.reference
     WHERE b.company_id = ${companyId}::uuid
       AND NOT (cp.kind = 'CREDIT_NOTE' AND r.id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM payment_commitments pc WHERE pc.payment_id=cp.id)
   `)
   const collections = await prisma.customerPayment.findMany({
     where: { id: { in: pendingCollections } },
@@ -590,7 +598,34 @@ async function postPendingOperations(prisma, userId, companyId) {
     pendingClosures,
   ].some((a) => a.length >= BATCH)
 
-  return { posted, skipped, hasMore }
+  const engagementPosting=await require('./engagementPosting').postPendingEngagementMovements(prisma,userId,companyId)
+  return { posted:posted+engagementPosting.posted, skipped:[...skipped,...engagementPosting.skipped], hasMore:hasMore||engagementPosting.hasMore }
 }
 
-module.exports = { buildReturnPosting, postPendingOperations }
+async function postSaleInTransaction(tx,scope,saleId){
+  const modules=require('../../modules/platform/registry').resolveEffectiveModules(await tx.companyModule.findMany({where:{company_id:scope.companyId}}))
+  if(!modules.find(m=>m.code==='accounting')?.effectiveEnabled)return null
+  const sale=await tx.sale.findFirst({where:{id:saleId,branch_id:scope.branchId,branch:{company_id:scope.companyId},status:{name:'Completada'}},include:{sale_items:{include:{product:{select:{kind:true,cost:true}}}},payment_method:true,customerContact:{select:{name:true}}}})
+  if(!sale)throw new AccountingError('Venta no encontrada en la sucursal activa')
+  if(sale.total.eq(0))return null
+  await require('./core').lockAccountingCompany(tx,scope.companyId)
+  const previous=await tx.journalEntry.findFirst({where:{company_id:scope.companyId,source_type:'SALE',source_id:sale.id}})
+  if(previous)return previous
+  const defaults=await getDefaultAccounts(tx,scope.companyId),{regime,ivaRate,pequenoRate}=await getTaxConfig(tx,scope.companyId),splitVat=regime==='GENERAL'
+  const lines=buildSalePosting(sale,{defaults,splitVat,ivaRate,costBase:c=>splitVat?round2(c/(1+ivaRate)):c,pequenoTaxOf:amount=>splitVat?0:round2(amount*pequenoRate)})
+  return createEntry(tx,{company_id:scope.companyId,branch_id:sale.branch_id,date:sale.date,source_type:'SALE',source_id:sale.id,created_by:scope.userId,description:`Venta ${sale.reference||sale.id.slice(0,8)}`,lines})
+}
+async function postReturnInTransaction(tx,scope,returnId){
+  const modules=require('../../modules/platform/registry').resolveEffectiveModules(await tx.companyModule.findMany({where:{company_id:scope.companyId}}))
+  if(!modules.find(m=>m.code==='accounting')?.effectiveEnabled)return null
+  const ret=await tx.return.findFirst({where:{id:returnId,sale:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},status:{name:'Completada'}},include:{sale:{include:{payment_method:true}},return_items:{include:{sale_item:{select:{unit_cost:true,item_kind:true}},product:{select:{cost:true,kind:true}}}},settlements:{include:{payment_method:true}}}})
+  if(!ret)throw new AccountingError('Devolución no encontrada en la sucursal activa')
+  if(ret.total_refund.eq(0))return null
+  await require('./core').lockAccountingCompany(tx,scope.companyId)
+  const previous=await tx.journalEntry.findFirst({where:{company_id:scope.companyId,source_type:'RETURN',source_id:returnId}})
+  if(previous)return previous
+  const defaults=await getDefaultAccounts(tx,scope.companyId),{regime,ivaRate,pequenoRate}=await getTaxConfig(tx,scope.companyId),splitVat=regime==='GENERAL'
+  const lines=buildReturnPosting(ret,{defaults,splitVat,ivaRate,costBase:c=>splitVat?round2(c/(1+ivaRate)):c,pequenoTaxOf:amount=>splitVat?0:round2(amount*pequenoRate)})
+  return createEntry(tx,{company_id:scope.companyId,branch_id:scope.branchId,date:ret.processed_at||ret.return_date,source_type:'RETURN',source_id:returnId,created_by:scope.userId,description:`Devolución ${ret.reference||returnId.slice(0,8)}`,lines})
+}
+module.exports = { buildReturnPosting,buildSalePosting,postSaleInTransaction,postReturnInTransaction, postPendingOperations }

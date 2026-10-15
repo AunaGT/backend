@@ -28,6 +28,7 @@ assert.deepStrictEqual(expandPermissions(dos).sort(), dos.sort())
 // 5. Todo lo que se arrastra existe como permiso real (nada de códigos muertos).
 const seed = require('fs').readFileSync(require('path').join(__dirname, '../prisma/seed.js'), 'utf8')
 const reales = new Set([...seed.matchAll(/code: '([^']+)'/g)].map((m) => m[1]))
+for (const permission of require('../scripts/register-appointments-permissions').permissions) reales.add(permission.code)
 for (const [code, deps] of Object.entries(IMPLIES)) {
   assert.ok(reales.has(code), `${code} no existe en el seed`)
   for (const dep of deps) assert.ok(reales.has(dep), `${code} arrastra ${dep}, que no existe`)

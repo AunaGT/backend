@@ -46,8 +46,8 @@ async function seedCompanyModules(client, companyId) {
     data: MODULE_DEFINITIONS.map((module) => ({
       company_id: companyId,
       module_code: module.code,
-      status: 'ACTIVE',
-      activated_at: new Date(),
+      status: module.defaultEnabled ? 'ACTIVE' : 'DISABLED',
+      activated_at: module.defaultEnabled ? new Date() : null,
     })),
     skipDuplicates: true,
   })
@@ -122,10 +122,10 @@ async function updateCompanyModule(companyId, code, input) {
     create: {
       company_id: companyId,
       module_code: definition.code,
-      status: status || 'ACTIVE',
+      status: status || (definition.defaultEnabled ? 'ACTIVE' : 'DISABLED'),
       config: input?.config || {},
       trial_ends_at: trialEndsAt || null,
-      activated_at: !status || ACTIVE_STATUSES.has(status) ? new Date() : null,
+      activated_at: ACTIVE_STATUSES.has(status || (definition.defaultEnabled ? 'ACTIVE' : 'DISABLED')) ? new Date() : null,
       suspended_at: status === 'SUSPENDED' ? new Date() : null,
     },
   })

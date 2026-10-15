@@ -29,11 +29,12 @@ const {
 } = require('../../services/saleSearch')
 const { expandLinesToStockMap, deductStockMap, restoreStockMap, getAvailabilityBatchWithKits } = require('../../services/bomStock')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
-const { requireBranch, branchWhere, hasPerm } = require('../../middlewares/tenant')
+const { requireBranch, requireCompany, branchWhere, hasPerm } = require('../../middlewares/tenant')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const { createSaleRecordAndStock } = require('./application')
 const { contactImageDtos } = require('../contacts/imageStorage')
 const { commercialQuantity,lineSnapshot,assertServicesEnabled } = require('../../services/catalogItemRules')
+const {confirmedSaleWhere,CONFIRMED_SALE_STATUS,saleCommercialView}=require('./commercialState')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -59,6 +60,7 @@ const SALE_LIST_INCLUDE = {
   _count:{select:{sale_items:true}},
   payment_method: { select: { id: true, name: true, is_credit: true } },
   status: { select: { id: true, name: true } },
+  sale_dtes:{select:{document_type:true,authorization:true,series:true,number:true,emission_date:true,status:true,provider:true}},
   createdBy: { select: { id: true, name: true, email: true } },
 }
 
@@ -111,7 +113,16 @@ const SALE_DETAIL_INCLUDE = {
   }
 }
 
-async function saleDetailDto(sale, companyId, user) {
+function commercialDto(sale,user,branchId,fiscalEnabled){
+  const commercial=saleCommercialView(sale,{fiscalEnabled}),selected=!!branchId&&branchId===sale.branch_id
+  return {commercial,capabilities:{
+    confirm:selected&&commercial.state==='DRAFT'&&!!commercial.originEngagementId&&['appointments.view','appointments.issue_sale','sales.create','receivables.view'].every(p=>hasPerm(user,p)),
+    requestInvoice:selected&&commercial.state==='CONFIRMED'&&commercial.fiscalState==='UNRECORDED'&&fiscalEnabled===true&&hasPerm(user,'sales.fiscal.register'),
+    collect:selected&&commercial.state==='CONFIRMED'&&sale.payment_status!=='PAID'&&hasPerm(user,'receivables.manage'),
+    reason:!selected?'Selecciona la sucursal de la venta para realizar acciones':'',
+  }}
+}
+async function saleDetailDto(sale, companyId, user,branchId) {
   if (!sale) return sale
   const { customerContact, ...rest } = sale
   let contact = null
@@ -120,7 +131,8 @@ async function saleDetailDto(sale, companyId, user) {
     const { company_id, party_type, deleted, ...safe } = imageContact
     contact = safe
   }
-  return { ...rest, line_count:sale.sale_items?.length ?? sale._count?.sale_items ?? 0, customerContact: contact }
+  const enabled=await require('./fiscalRequests').fiscalEnabled(prisma,companyId)
+  return { ...rest,...commercialDto(sale,user,branchId,enabled), line_count:sale.sale_items?.length ?? sale._count?.sale_items ?? 0, customerContact: contact }
 }
 
 exports.list = async (req, res, next) => {
@@ -132,7 +144,7 @@ exports.list = async (req, res, next) => {
     const searchTerm = String(search || '').trim()
     const paymentName = String(payment || '').trim()
     let summary = String(includeSummary) === 'true'
-      ? { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—' }
+      ? { totalSales: 0, transactionCount: 0, averageTicket: 0, preferredPaymentMethod: '—', draftCount:0,draftTotal:0 }
       : null
 
     let startDate
@@ -226,6 +238,7 @@ exports.list = async (req, res, next) => {
       const contact = await prisma.supplier.findFirst({
         where: {
           id: String(customerContactId),
+          company_id:req.companyId,
           deleted: false,
           party_type: 'CUSTOMER',
         },
@@ -270,13 +283,16 @@ exports.list = async (req, res, next) => {
     }
 
     if (summary) {
-      const [totals, paymentCounts] = await Promise.all([
-        prisma.sale.aggregate({ where, _sum: { adjusted_total: true }, _count: { _all: true } }),
-        prisma.sale.groupBy({ by: ['payment_method_id'], where, _count: { _all: true } }),
+      const {status:commercialFilter,...summaryScope}=where
+      const confirmedWhere=confirmedSaleWhere(summaryScope)
+      const [totals, paymentCounts, drafts] = await Promise.all([
+        prisma.sale.aggregate({ where:confirmedWhere, _sum: { adjusted_total: true }, _count: { _all: true } }),
+        prisma.sale.groupBy({ by: ['payment_method_id'], where:confirmedWhere, _count: { _all: true } }),
+        prisma.sale.aggregate({where:{...summaryScope,status:{name:'Borrador'}},_sum:{adjusted_total:true},_count:{_all:true}}),
       ])
       const methods = paymentCounts.length
         ? await prisma.paymentMethod.findMany({
-          where: { id: { in: paymentCounts.map(row => row.payment_method_id) } },
+          where: { id: { in: paymentCounts.map(row => row.payment_method_id).filter(Number.isInteger) } },
           select: { id: true, name: true },
         })
         : []
@@ -292,6 +308,8 @@ exports.list = async (req, res, next) => {
         transactionCount,
         averageTicket: transactionCount ? totalSales / transactionCount : 0,
         preferredPaymentMethod: names.get(paymentCounts[0]?.payment_method_id) || '—',
+        draftCount:drafts._count._all,
+        draftTotal:Number(drafts._sum.adjusted_total??0),
       }
     }
 
@@ -336,8 +354,9 @@ exports.list = async (req, res, next) => {
       : (safePage < totalPages ? safePage + 1 : null)
     const prevPage = safePage > 1 ? safePage - 1 : null
 
+    const enabled=await require('./fiscalRequests').fiscalEnabled(prisma,req.companyId)
     res.json({
-      items:items.map(item=>({...item,line_count:item._count?.sale_items ?? 0})),
+      items:items.map(item=>({...item,...commercialDto(item,req.user,req.branchId,enabled),line_count:item._count?.sale_items ?? 0})),
       page: safePage,
       pageSize,
       totalPages,
@@ -380,7 +399,7 @@ exports.getById = async (req, res, next) => {
       return res.status(404).json({ message: 'Venta no encontrada' })
     }
 
-    res.json(await saleDetailDto(sale, req.companyId, req.user))
+    res.json(await saleDetailDto(sale, req.companyId, req.user,req.branchId))
   } catch (e) {
     next(e)
   }
@@ -388,6 +407,7 @@ exports.getById = async (req, res, next) => {
 
 exports.create = async (req, res, next) => {
   try {
+    if(['settlement_source','settlement','engagement_id'].some(key=>Object.hasOwn(req.body||{},key)))return res.status(400).json({code:'INVALID_SETTLEMENT',message:'La liquidación de una contratación solo se genera desde Agenda'})
     const user = req.user
     if (!user || !user.sub) {
       return res.status(401).json({ message: 'Usuario no autenticado' })
@@ -432,7 +452,7 @@ exports.create = async (req, res, next) => {
         where: { branch_id: branchId, idempotency_key: idempotencyKey },
         include: SALE_DETAIL_INCLUDE,
       })
-      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user))
+      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user,req.branchId))
     }
 
     const created = await prismaTransaction.$transaction(async (tx) => {
@@ -709,7 +729,7 @@ exports.create = async (req, res, next) => {
             const priorUses = await tx.salePromotion.count({
               where: {
                 promotion_id: promo.id,
-                sale: { is: { customer_contact_id: customerContactId, status: { is: { name: { not: 'Cancelada' } } } } },
+                sale: { is: { customer_contact_id: customerContactId, status: { is: { name: CONFIRMED_SALE_STATUS } } } },
               },
             })
             const limitError = customerLimitError(promo.max_uses_per_customer, customerContactId, priorUses)
@@ -902,6 +922,7 @@ exports.create = async (req, res, next) => {
         }
       }
 
+      await require('./fiscalRequests').preparePosFiscalRequest(tx,{companyId:req.companyId,branchId,userId:user.sub},sale)
       return sale
     }, {
       timeout: 20000,
@@ -913,7 +934,7 @@ exports.create = async (req, res, next) => {
       include: SALE_DETAIL_INCLUDE
     })
 
-    res.status(201).json(await saleDetailDto(fullSale || created, req.companyId, req.user))
+    res.status(201).json(await saleDetailDto(fullSale || created, req.companyId, req.user,req.branchId))
   } catch (e) {
     // Dos envíos a la vez con la misma clave: uno gana el índice único y el
     // otro devuelve la venta que quedó, no un error al cajero.
@@ -926,7 +947,7 @@ exports.create = async (req, res, next) => {
             include: SALE_DETAIL_INCLUDE,
           })
         : null
-      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user))
+      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user,req.branchId))
     }
     if (e && e.message === 'CASH_SESSION_REQUIRED') {
       return res.status(403).json({
@@ -948,6 +969,19 @@ exports.create = async (req, res, next) => {
     }
     next(e)
   }
+}
+
+function fiscalRequestScope(req){
+  return {companyId:requireCompany(req),branchId:requireBranch(req),userId:req.user.sub,permissions:req.user.permissions||[],isAdmin:hasPerm({...req.user,permissions:[]},'sales.fiscal.register')}
+}
+exports.registerExternalInvoice=async(req,res,next)=>{
+  res.status(410).json({code:'EXTERNAL_ENTRY_RETIRED',message:'La captura manual fue retirada. Solicita la factura mediante Generar factura; el certificador completará sus datos.'})
+}
+exports.correctExternalInvoice=async(req,res,next)=>{
+  res.status(410).json({code:'EXTERNAL_ENTRY_RETIRED',message:'La captura manual fue retirada. El historial fiscal existente se conserva.'})
+}
+exports.requestFiscalInvoice=async(req,res,next)=>{
+  try{res.status(202).json(await require('./fiscalRequests').requestFiscalInvoice(prismaTransaction,fiscalRequestScope(req),req.params.id,req.body))}catch(error){next(error)}
 }
 
 // PATCH /sales/:id/status  { status_name?: string, status_id?: number }
@@ -1015,6 +1049,7 @@ exports.updateStatus = async (req, res, next) => {
         const newStatus = await tx.saleStatus.findUnique({ where: { id: targetStatusId } })
         if (!newStatus) throw new Error('Estado destino inválido')
         const newStatusName = newStatus.name
+        require('./commercialState').assertGenericSaleStatusChange(current,newStatusName)
 
         const wasCompleted = prevStatusName === 'Completada'
         const willBeCompleted = newStatusName === 'Completada'

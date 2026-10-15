@@ -1,0 +1,23 @@
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto')
+const {withCommercialAgendaTestDb}=require('./helpers/commercialAgendaFixture.cjs')
+const {createEngagement,programEngagement,getEngagement}=require('../src/modules/appointments/engagements')
+test('concurrent quote requests with different keys return the same engagement',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const results=await Promise.all([1,2].map(()=>createEngagement(db,scope,{quoteId:f.quoteId,idempotencyKey:crypto.randomUUID()})))
+  assert.equal(results[0].id,results[1].id);assert.equal(await db.appointmentEngagement.count(),1)
+}))
+test('concurrent commercial appointments share the existing provider lock and completed quantities stay covered',async()=>withCommercialAgendaTestDb(async({db,scope,fixtures:f})=>{
+  const engagements=[]
+  for(let i=0;i<2;i++)engagements.push(await createEngagement(db,scope,{contactId:f.contactId,lines:[{productId:f.productId,quantity:'0.5'}],idempotencyKey:crypto.randomUUID()}))
+  const input=e=>({expectedVersion:e.version,partial:false,idempotencyKey:crypto.randomUUID(),programs:[{lineId:e.lines[0].id,quantity:'0.5',startsAt:f.individualInput.startsAt,timezone:'America/Guatemala',providerIds:[f.providerId],acknowledgedConditionsVersion:e.lines[0].conditionsVersion}]})
+  const results=await Promise.allSettled(engagements.map(e=>programEngagement(db,scope,e.id,input(e))))
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1)
+  assert.equal(await db.appointmentEngagementSchedule.count(),1)
+  const scheduled=await db.appointmentEngagementSchedule.findFirst({include:{booking:true}})
+  assert.equal(scheduled.booking.commercial_snapshot.unitPrice,'150.00')
+  assert.equal(scheduled.booking.commercial_snapshot.total,'75.00')
+  await db.appointmentBooking.update({where:{id:scheduled.booking_id},data:{status:'COMPLETED'}})
+  await db.appointmentSession.update({where:{id:scheduled.session_id},data:{status:'COMPLETED'}})
+  const current=await getEngagement(db,scope,scheduled.engagement_id)
+  assert.equal(current.operationalState,'COMPLETED');assert.equal(current.lines[0].remainingQuantity,'0.00')
+  await assert.rejects(()=>programEngagement(db,scope,current.id,input(current)),{code:'OVERBOOKED_QUANTITY'})
+}))

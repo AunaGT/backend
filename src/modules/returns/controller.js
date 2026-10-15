@@ -15,7 +15,7 @@ const { DateTime } = require('luxon')
 const {
   getAvailabilityBatchWithKits,
 } = require('../../services/bomStock')
-const { branchWhere } = require('../../middlewares/tenant')
+const { branchWhere,hasPerm } = require('../../middlewares/tenant')
 const { getReturnPolicy } = require('../../services/returnPolicy')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
 const {
@@ -30,7 +30,7 @@ const {
   normalizeReturnLines,
   returnFiscalStatus,
 } = require('./domain')
-const { approveReturn, completeReturn } = require('./application')
+const { approveReturn, completeReturn,assertReceiptReturnResolution } = require('./application')
 const { presentReturnDetail } = require('./presentation')
 const { resolvePricedSaleItems } = require('../sales/application')
 
@@ -144,7 +144,7 @@ exports.eligibleSales = async (req, res, next) => {
     const resolvedSaleId = requestedSaleId ? await resolveSaleId(requestedSaleId, branchWhere(req)) : null
     const where = {
       ...branchWhere(req),
-      ...(!requestedSaleId && { status: { name: 'Completada' } }),
+      status: { name: 'Completada' },
       ...(requestedSaleId && { id: resolvedSaleId || '__not_found__' }),
       ...(search && {
         OR: [
@@ -364,6 +364,7 @@ exports.create = async (req, res, next) => {
         err.status = 404
         throw err
       }
+      assertReceiptReturnResolution(sale,requestedResolution)
 
       if (sale.status.name !== 'Completada') {
         const err = new Error(`Solo se pueden procesar devoluciones de ventas completadas. Estado actual: ${sale.status.name}`)
@@ -640,6 +641,7 @@ exports.updateStatus = async (req, res, next) => {
         scope: branchWhere(req),
         userId: req.user?.sub,
         companyId: req.companyId,
+        isAdmin:hasPerm({...req.user,permissions:[]},'returns.manage'),
         payload: req.body,
       })
       return res.json(result)
@@ -759,6 +761,7 @@ exports.complete = async (req, res, next) => {
       scope: branchWhere(req),
       userId: req.user?.sub,
       companyId: req.companyId,
+      isAdmin:hasPerm({...req.user,permissions:[]},'returns.manage'),
       payload: req.body,
     })
     res.json(result)

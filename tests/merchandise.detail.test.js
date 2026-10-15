@@ -16,7 +16,7 @@ test('detalle de mercancía entrega imágenes reales sin alterar costos ni saldo
   try {
     delete require.cache[controllerPath]
     let data
-    await require(controllerPath).getById({ params: { id: 'receipt' }, companyId: 'company-a' }, { json: value => { data = value } }, error => { throw error })
+    await require(controllerPath).getById({ params: { id: 'receipt' }, companyId: 'company-a', branchId:'branch-a', branchIds:['branch-a'],user:{sub:'user'} }, { json: value => { data = value } }, error => { throw error })
     assert.equal(data.items[0].product.image_url, '/product.png')
     assert.equal(data.totalValue, 30)
     assert.equal(data.amount_pending, 25)

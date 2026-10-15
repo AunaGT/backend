@@ -20,6 +20,7 @@ const {
 const { nextDocumentReference } = require('../../services/referenceGenerator')
 const { targetBranch, branchWhere } = require('../../middlewares/tenant')
 const { getCompanyModuleBlock } = require('./access')
+const {publicProfileSelect,publicConditionsFromRow,publicServiceConditions,quoteAgendaContext}=require('../appointments')
 
 async function loadBranch(tx, branchId) {
   return tx.branch.findUnique({ where: { id: branchId }, select: { id: true, code: true, seq: true } })
@@ -206,6 +207,7 @@ exports.getPublicByToken = async (req, res, next) => {
       lines: quote.lines.map((l) => ({
         product_name: l.item_name ?? l.product?.name,
         item_kind: l.item_kind, unit_label: l.unit_label, quantity_decimals: l.quantity_decimals,
+        service_schedule_snapshot: l.item_kind==='SERVICE'?publicServiceConditions(l.service_schedule_snapshot):null,
         barcode: l.product?.barcode,
         image_url: l.product?.image_url,
         qty: l.qty,
@@ -260,6 +262,15 @@ exports.getShareLink = async (req, res, next) => {
   }
 }
 
+exports.previewServiceConditions=async(req,res,next)=>{
+  try{
+    const ids=req.body?.productIds
+    if(!Array.isArray(ids)||ids.length>100||ids.some(id=>typeof id!=='string'||! /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id))) return res.status(400).json({message:'Selecciona hasta 100 artículos válidos'})
+    const rows=await prisma.product.findMany({where:{id:{in:ids},company_id:req.companyId,deleted:false,kind:'SERVICE'},select:{id:true,service_schedule_profile:{select:publicProfileSelect}}})
+    res.json({conditions:Object.fromEntries(rows.map(row=>[row.id,publicConditionsFromRow(row.service_schedule_profile)]))})
+  }catch(e){next(e)}
+}
+
 async function validateCustomerContact(tx, customerContactId) {
   if (!customerContactId) return
   const cust = await tx.supplier.findFirst({
@@ -304,6 +315,7 @@ async function resolveQuoteLines(tx, items, ctx) {
       price_promotion: true,
       promotion_valid_until: true,
       available_for_sale: true,
+      service_schedule_profile: { select: publicProfileSelect },
     },
   })
   const prodMap = new Map(products.map((p) => [String(p.id), p]))
@@ -360,6 +372,7 @@ async function resolveQuoteLines(tx, items, ctx) {
       line_total: new Prisma.Decimal(lineTotal),
       sort_order: sortOrder++,
       ...lineSnapshot(p),
+      service_schedule_snapshot: p.kind==='SERVICE'?(publicConditionsFromRow(p.service_schedule_profile)??Prisma.DbNull):Prisma.DbNull,
     })
   }
 
@@ -463,7 +476,7 @@ exports.getById = async (req, res, next) => {
       include: QUOTE_DETAIL_INCLUDE,
     })
     if (!doc) return res.status(404).json({ message: 'Cotización no encontrada' })
-    res.json(doc)
+    res.json({...doc,...await quoteAgendaContext(prisma,req,doc)})
   } catch (e) {
     next(e)
   }
@@ -715,7 +728,7 @@ exports.convertToOrder = async (req, res, next) => {
     if (!user?.sub) return res.status(401).json({ message: 'Usuario no autenticado' })
 
     const where = { ...quoteWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
-    const quote = await prisma.commercialDocument.findFirst({
+    let quote = await prisma.commercialDocument.findFirst({
       where,
       include: { lines: { orderBy: { sort_order: 'asc' } } },
     })
@@ -739,6 +752,9 @@ exports.convertToOrder = async (req, res, next) => {
     }
 
     const order = await prismaTransaction.$transaction(async (tx) => {
+      quote=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:quote.branch_id},quote.id)
+      if(quote.status!=='ACCEPTED') throw Object.assign(new Error('La cotización ya no está aceptada'),{status:409})
+      if(quote.convertedChildren.length||quote.quoted_engagement) throw Object.assign(new Error('La cotización ya tiene un pedido o contratación vinculada'),{status:409,code:'QUOTE_ALREADY_LINKED'})
       if (quote.lines.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
       await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
       // El pedido hereda la sucursal de la cotización
@@ -751,6 +767,7 @@ exports.convertToOrder = async (req, res, next) => {
         line_total: l.line_total,
         sort_order: idx,
         ...lineSnapshot(l),
+        service_schedule_snapshot:l.service_schedule_snapshot??Prisma.DbNull,
       }))
 
       return tx.commercialDocument.create({

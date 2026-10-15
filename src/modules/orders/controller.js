@@ -387,7 +387,8 @@ exports.getById = async (req, res, next) => {
       include: ORDER_DETAIL_INCLUDE,
     })
     if (!doc) return res.status(404).json({ message: 'Pedido no encontrado' })
-    res.json(doc)
+    const origin=await require('../appointments').linkedEngagementOrigins(prisma,req,{orderId:doc.id})
+    res.json({...doc,engagementId:origin.orderEngagementId})
   } catch (e) {
     next(e)
   }

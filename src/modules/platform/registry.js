@@ -19,7 +19,7 @@ const MODULE_DEFINITIONS = Object.freeze([
   { code: 'inventory-count', name: 'Inventariado', dependencies: ['inventory'] },
   { code: 'returns', name: 'Devoluciones', dependencies: ['sales', 'inventory'] },
   { code: 'cash-closure', name: 'Cierre de caja', dependencies: ['sales'] },
-  { code: 'receivables', name: 'Cartera', dependencies: ['sales', 'contacts'] },
+  { code: 'receivables', name: 'Cartera', dependencies: ['contacts'] },
   { code: 'merchandise', name: 'Mercancía', dependencies: ['inventory', 'contacts'] },
   { code: 'analytics', name: 'Análisis', dependencies: ['sales'] },
   { code: 'accounting', name: 'Contabilidad', dependencies: [] },
@@ -29,10 +29,11 @@ const MODULE_DEFINITIONS = Object.freeze([
   { code: 'transfers', name: 'Traslados', dependencies: ['inventory', 'branches'] },
   { code: 'hr', name: 'RRHH', dependencies: ['branches'] },
   { code: 'payroll', name: 'Nómina', dependencies: ['hr'] },
+  { code: 'appointments', name: 'Agenda', dependencies: ['branches'], defaultEnabled: false },
 ].map((definition) => Object.freeze({
   ...definition,
   dependencies: Object.freeze([...definition.dependencies]),
-  defaultEnabled: true,
+  defaultEnabled: definition.defaultEnabled ?? true,
 })))
 
 const MODULE_BY_CODE = new Map(MODULE_DEFINITIONS.map((module) => [module.code, module]))

@@ -96,8 +96,9 @@ test('commercial history is scoped, paginated and remains readable with services
   await withMocks({[model]:{prisma}},target,async controller=>{
     const res=jsonResponse()
     await controller.commercialHistory({companyId:'A',branchId:'B',params:{id:'s'},query:{page:'1'}},res,error=>{throw error})
-    assert.equal(lookup.where.sale.branch.company_id,'A')
-    assert.equal(lookup.where.sale.branch_id,'B')
+    assert.deepEqual(lookup.where.sale.AND[0],{status:{name:'Completada'}})
+    assert.equal(lookup.where.sale.AND[1].branch.company_id,'A')
+    assert.equal(lookup.where.sale.AND[1].branch_id,'B')
     assert.equal(lookup.take,10)
     assert.equal(res.body.items[0].unit_label,'Hora')
     assert.equal(res.body.totalItems,1)

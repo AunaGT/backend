@@ -22,6 +22,20 @@ const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 // Mutaciones: solo quien gestiona promociones.
 router.use(Auth)
 const canManage = hasPermission('promotions.manage')
+const multer = require('multer')
+const couponAssets = require('./couponAssets.controller')
+const couponUpload = multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024,files:1,fields:0,parts:2}})
+function checkedCouponUpload(req,res,next){
+    couponUpload.single('file')(req,res,error=>{
+        if(!error)return next()
+        error.status=error.code==='LIMIT_FILE_SIZE'?413:400
+        error.message=error.status===413?'La imagen admite hasta 5 MB':'Selecciona una sola imagen sin campos adicionales'
+        next(error)
+    })
+}
+router.post('/coupon-assets',canManage,checkedCouponUpload,couponAssets.upload)
+router.post('/coupon-assets/resolve',hasPermission('promotions.view'),couponAssets.resolve)
+router.delete('/coupon-assets/:assetId',canManage,couponAssets.remove)
 
 /**
  * @swagger
@@ -163,4 +177,3 @@ router.post('/:id/codes', canManage, controller.addCodes)
 router.delete('/:id/codes/:codeId', canManage, controller.deleteCode)
 
 module.exports = router
-

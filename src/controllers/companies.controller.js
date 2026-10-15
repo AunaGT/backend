@@ -8,7 +8,9 @@
  * For licensing inquiries: GitHub @dpatzan2
  */
 
-const { prisma } = require('../models/prisma')
+const { prisma, prismaTransaction } = require('../models/prisma')
+const { isSystemAdmin } = require('../modules/users/roles/policy')
+const { lockRoleCompany, resolveAssignableRole } = require('../modules/users/roles/service')
 const { seedCompanySettings } = require('../services/companySettings')
 const { seedChartOfAccounts } = require('../services/accounting/seedChartOfAccounts')
 const { invalidateSystemConfigCache } = require('../utils/getTimezone')
@@ -23,7 +25,7 @@ const COMPANY_SELECT = {
 // GET /api/companies — empresas a las que pertenece el usuario
 exports.list = async (req, res, next) => {
   try {
-    const all = req.query?.all === '1' && (req.user.role?.name?.toLowerCase() === 'admin' || req.user.permissions?.includes('companies.manage'))
+    const all = req.query?.all === '1' && (isSystemAdmin(req.user.role) || req.user.permissions?.includes('companies.manage'))
     const rows = await prisma.userCompany.findMany({
       where: { user_id: req.user.sub, status: 'ACTIVE', ...(all ? {} : { company: { active: true } }) },
       select: { experience_profile: true, company: { select: all ? {
@@ -67,7 +69,7 @@ exports.create = async (req, res, next) => {
       // completo. Luego un administrador comercial puede suspender módulos.
       await seedCompanyModules(tx, company.id)
       return { ...company, branches: [branch] }
-    })
+    }, { timeout: 30000, maxWait: 10000 }) // Inicializar cuentas también requiere varios viajes a la base remota.
     res.status(201).json(result)
   } catch (e) {
     if (e.code === 'P2002') {
@@ -142,11 +144,15 @@ exports.addUser = async (req, res, next) => {
     }
     if (!user.user_companies.some(m => m.company_id === id)) assertGrant(req.user, user.role)
 
-    await prisma.userCompany.upsert({
+    await (prismaTransaction || prisma).$transaction(async tx => {
+      await lockRoleCompany(tx, id)
+      const role = await resolveAssignableRole(tx, { ...req, companyId: id }, user.role.id)
+      await tx.userCompany.upsert({
       where: { user_id_company_id: { user_id: userId, company_id: id } },
       update: {},
-      create: { user_id: userId, company_id: id },
-    })
+      create: { user_id: userId, company_id: id, role_id: role.id },
+      })
+    }, { timeout: 30000, maxWait: 5000 })
     res.json({ ok: true })
   } catch (e) { next(e) }
 }
@@ -190,11 +196,11 @@ exports.removeUser = async (req, res, next) => {
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM companies WHERE id = ${id}::uuid FOR UPDATE`
       const target = await tx.userCompany.findUnique({ where: { user_id_company_id: { user_id: userId, company_id: id } }, select: {
-        status: true, role: { select: { name: true } }, user: { select: { role: { select: { name: true } } } },
+        status: true, role: { select: { name: true, company_id: true, system_key: true } }, user: { select: { role: { select: { name: true, company_id: true, system_key: true } } } },
       } })
       if (!target) { const err = new Error('Usuario no encontrado'); err.status = 404; throw err }
-      if (target.status === 'ACTIVE' && (target.role?.name || target.user.role?.name)?.toLowerCase() === 'admin') {
-        const others = await tx.userCompany.count({ where: { company_id: id, status: 'ACTIVE', user_id: { not: userId }, OR: [{ role: { name: 'admin' } }, { role_id: null, user: { role: { name: 'admin' } } }] } })
+      if (target.status === 'ACTIVE' && isSystemAdmin(target.role || target.user.role)) {
+        const others = await tx.userCompany.count({ where: { company_id: id, status: 'ACTIVE', user_id: { not: userId }, OR: [{ role: { system_key: 'ADMIN' } }, { role_id: null, user: { role: { system_key: 'ADMIN' } } }] } })
         if (!others) { const err = new Error('Debe permanecer un administrador activo'); err.status = 409; throw err }
       }
       await tx.userBranch.deleteMany({
@@ -231,7 +237,7 @@ exports.assignUsers = async (req, res, next) => {
     await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM companies WHERE id = ${id}::uuid FOR UPDATE`
       const members = await tx.userCompany.findMany({ where: { company_id: id }, select: {
-        user_id: true, status: true, role: { select: { name: true } }, user: { select: { role: { select: { name: true } } } },
+        user_id: true, status: true, role: { select: { name: true, company_id: true, system_key: true } }, user: { select: { role: { select: { name: true, company_id: true, system_key: true } } } },
       } })
       if (!members.some(m => m.user_id === req.user.sub && m.status === 'ACTIVE')) {
         const err = new Error('Sin acceso a esa empresa'); err.status = 403; throw err
@@ -240,7 +246,7 @@ exports.assignUsers = async (req, res, next) => {
       if (ids.some(uid => !members.some(m => m.user_id === uid))) {
         const err = new Error('Usuario no encontrado'); err.status = 404; throw err
       }
-      if (!members.some(m => ids.includes(m.user_id) && m.status === 'ACTIVE' && (m.role?.name || m.user.role?.name)?.toLowerCase() === 'admin')) {
+      if (!members.some(m => ids.includes(m.user_id) && m.status === 'ACTIVE' && isSystemAdmin(m.role || m.user.role))) {
         const err = new Error('Debe permanecer un administrador activo'); err.status = 409; throw err
       }
       const removed = members.filter(m => !ids.includes(m.user_id)).map(m => m.user_id)

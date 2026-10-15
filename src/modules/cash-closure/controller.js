@@ -272,9 +272,11 @@ exports.calculateTheoretical = async (req, res, next) => {
     // Obtener ventas completadas en el período (opcionalmente filtradas por cajero)
     const { branchWhere } = require('../../middlewares/tenant')
     Object.assign(salesWhere, branchWhere(req))
+    salesWhere.status={name:require('../sales/commercialState').CONFIRMED_SALE_STATUS}
     // La venta al crédito no entra al arqueo: no hubo dinero que contar. Lo que
     // sí entra es el cobro posterior, más abajo.
     salesWhere.payment_method = { is_credit: false }
+    salesWhere.settlement_source = 'LEGACY'
     const saleRows = await prisma.sale.findMany({
       where: salesWhere,
       include: {
@@ -396,6 +398,11 @@ exports.calculateTheoretical = async (req, res, next) => {
     theoreticalReturns = settlementTotals.refunds
     theoreticalCollections += settlementTotals.collections
 
+    const advanceRefundWhere={status:'CONFIRMED',...branchWhere(req),...(isOwn&&cashRegisterSessionId?{cash_register_session_id:cashRegisterSessionId}:{confirmed_at:{gte:start,lte:end},...(cashierId?{registered_by:String(cashierId)}:{})})}
+    const advanceRefunds=await prisma.customerPaymentRefund.findMany({where:advanceRefundWhere,include:{payment_method:true},orderBy:{confirmed_at:'asc'}})
+    const advanceTotals=applyReturnSettlements(paymentMethodsMap,advanceRefunds.map(refund=>({...refund,kind:'REFUND'})))
+    theoreticalReturns+=advanceTotals.refunds
+
     let theoreticalTotal = theoreticalSales - theoreticalReturns + theoreticalCollections
 
     const cashDetail = await applyOpeningFloatToCashBreakdown(paymentMethodsMap, sessionOpeningFloat)
@@ -445,6 +452,7 @@ exports.calculateTheoretical = async (req, res, next) => {
         payment_method: settlement.payment_method?.name || null,
         created_at: settlement.created_at,
       })),
+      advance_refunds:advanceRefunds.map(refund=>({id:refund.id,engagement_id:refund.engagement_id,payment_id:refund.payment_id,amount:number(refund.amount),payment_method:refund.payment_method?.name||null,confirmed_at:refund.confirmed_at})),
       cash_session: cashDetail.openingFloat > 0
         ? {
             opening_float: Number(cashDetail.openingFloat.toFixed(2)),

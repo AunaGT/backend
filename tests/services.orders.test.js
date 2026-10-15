@@ -23,7 +23,7 @@ test('a confirmed service order invoices delivered fractions with historical uni
   const {invoice}=require('../src/modules/orders/fulfillment')
   let stored=null,writes=0
   const order={id:'o',branch_id:'B',fulfillment_mode:'SEPARATE',status:'PARTIALLY_FULFILLED',lines:[{...line,qty:'1',qty_fulfilled:'1',qty_invoiced:'0.5',unit_price:'19.99',line_total:'19.99'}]}
-  const tx={$queryRaw:async()=>[{id:'o'}],$executeRaw:async()=>1,commercialDocument:{findUnique:async()=>order},
+  const tx={appointmentEngagement:{findFirst:async()=>null},$queryRaw:async()=>[{id:'o'}],$executeRaw:async()=>1,commercialDocument:{findUnique:async()=>order},
     sale:{findFirst:async()=>stored,create:async({data})=>{writes++;stored={id:'v',...data,orderLink:{document_id:'o'}};return stored}},
     paymentMethod:{findUnique:async()=>({id:1,is_credit:false})},saleStatus:{findFirst:async()=>({id:1})},branch:{findUnique:async()=>({id:'B',code:'QA',seq:1})},
     orderDeliveryLine:{findMany:async()=>[{id:'d',document_line_id:'l',qty:'1',qty_invoiced:'0.5',unit_cost:0}],update:async()=>({})},commercialDocumentLine:{update:async()=>({})},systemSetting:{findUnique:async()=>({value:'false'})}}
