@@ -14,7 +14,9 @@ async function withRolesDevFixture(run) {
    await db.$transaction(async tx=>{
     await tx.user.create({data:{id:actorId,name:marker,email:`${actorId}@example.invalid`,password:'not-a-real-login',role_id:admin.id}})
     await tx.userCompany.createMany({data:companies.map(company_id=>({user_id:actorId,company_id,role_id:admin.id}))})
-    const roleA=await tx.role.create({data:{name:marker,company_id:companies[0]}}),roleB=await tx.role.create({data:{name:marker,company_id:companies[1]}})
+    const legacy=await tx.role.findFirst({where:{id:20,company_id:null}})
+    if(!legacy)throw Error('Existing unused legacy alias fixture changed')
+    const roleA=await tx.role.create({data:{name:marker,company_id:companies[0],legacy_role_id:legacy.id}}),roleB=await tx.role.create({data:{name:marker,company_id:companies[1]}})
     ledger.roleIds.push(roleA.id,roleB.id);write()
     await tx.user.create({data:{id:targetId,name:marker,email:`${targetId}@example.invalid`,password:'not-a-real-login',role_id:roleB.id}})
     await tx.userCompany.create({data:{user_id:targetId,company_id:companies[0],role_id:admin.id}})
