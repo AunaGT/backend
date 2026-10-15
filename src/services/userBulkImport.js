@@ -16,7 +16,7 @@ const bcrypt = require('bcryptjs')
 const { prisma, prismaTransaction } = require('../models/prisma')
 const { assertGrant, fail } = require('./userAccess')
 const { visibleRolesWhere } = require('../modules/users/roles/policy')
-const { lockRoleCompany, resolveAssignableRole } = require('../modules/users/roles/service')
+const { lockRoleCompany, resolveAssignableRole, freshActor } = require('../modules/users/roles/service')
 const { ImportCancelledError } = require('../utils/importStream')
 const { nameMatcher, checkSimilarity, checkText, cell, nameCandidates } = require('../utils/importValidation')
 
@@ -305,6 +305,7 @@ async function bulkCreateUsers(validRows, context, onProgress = () => {}, isCanc
 
             await (prismaTransaction || prisma).$transaction(async tx => {
               await lockRoleCompany(tx, context.companyId)
+              await freshActor(tx, { companyId: context.companyId, user: context.user }, ['users.import'])
               await resolveAssignableRole(tx, { companyId: context.companyId, user: context.user }, d.role_id)
               await tx.user.create({
                 data: {

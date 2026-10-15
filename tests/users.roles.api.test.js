@@ -15,3 +15,24 @@ test('active role HTTP handlers use revisions and return persisted DTOs',async t
  const foreign=await send('GET','/roles/102');assert.equal(foreign.status,404)
  const created=await send('POST','/roles',{name:'Nuevo',permissions:[]});assert.equal(created.status,201)
 })
+test('mounted role routes preserve authentication, read-only access and module gates',async t=>{
+ const f=roleServiceFixture(),model=require.resolve('../src/models/prisma'),oldM=require.cache[model]
+ const paths=['../src/modules/users/routes','../src/modules/users/adminController','../src/modules/platform/service','../src/modules/platform/middleware'].map(require.resolve),previous=paths.map(p=>require.cache[p])
+ let disabled=false
+ f.db.companyModule={findMany:async()=>[{company_id:'a',module_code:'users',status:disabled?'DISABLED':'ACTIVE'}]}
+ require.cache[model]={exports:{prisma:f.db,prismaTransaction:f.db}};paths.forEach(p=>delete require.cache[p])
+ t.after(()=>{if(oldM)require.cache[model]=oldM;else delete require.cache[model];paths.forEach((p,i)=>{if(previous[i])require.cache[p]=previous[i];else delete require.cache[p]})})
+ const router=require(paths[0]),{invalidateCompanyModules}=require(paths[2]),{crearToken}=require('../src/services/jwt')
+ const app=express();app.use(express.json());app.use((req,res,next)=>{
+  req.companyId='a';invalidateCompanyModules('a')
+  const role=req.headers['x-qa-reader']?{id:101,name:'Lector',company_id:'a',permissions:[{permission:{code:'roles.view'}}]}:{id:73,name:'admin',company_id:null,system_key:'ADMIN',permissions:[]}
+  req.sessionUser={id:'actor',role,user_companies:[{company_id:'a',status:'ACTIVE',role}]};next()
+ });app.use('/api/auth',router);app.use(require('../src/middlewares/errorHandler').errorHandler)
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>server.close())
+ const token=crearToken({id:'actor'}),send=(method,reader=false,auth=true)=>fetch(`http://127.0.0.1:${server.address().port}/api/auth/roles`,{method,headers:{'content-type':'application/json',...(auth?{authorization:`Bearer ${token}`}:{ }),...(reader?{'x-qa-reader':'1'}:{})},...(method==='POST'?{body:JSON.stringify({name:'Nuevo HTTP',permissions:[]})}:{})})
+ assert.equal((await send('GET',false,false)).status,401)
+ assert.equal((await send('GET',true)).status,200)
+ assert.equal((await send('POST',true)).status,403)
+ disabled=true;assert.equal((await send('POST')).status,403)
+ disabled=false;assert.equal((await send('POST')).status,201)
+})

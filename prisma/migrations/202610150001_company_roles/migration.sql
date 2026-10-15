@@ -1,3 +1,4 @@
+BEGIN;
 ALTER TABLE roles ADD COLUMN system_key VARCHAR(16),
  ADD COLUMN legacy_role_id INTEGER,
  ADD COLUMN revision INTEGER NOT NULL DEFAULT 0,
@@ -15,3 +16,4 @@ ALTER TABLE roles ADD CONSTRAINT roles_revision_check CHECK(revision>=0),
   REFERENCES companies(id) ON DELETE RESTRICT,
  ADD CONSTRAINT roles_legacy_role_id_fkey FOREIGN KEY(legacy_role_id)
   REFERENCES roles(id) ON DELETE RESTRICT;
+COMMIT;

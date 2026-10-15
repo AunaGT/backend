@@ -7,7 +7,7 @@ function planRoleNormalization(snapshot) {
  const admins=snapshot.roles.filter(legacyAdmin).sort((a,b)=>(b.name==='admin')-(a.name==='admin')||a.id-b.id)
  const canonical=admins.find(r=>r.system_key==='ADMIN')||admins[0]
  const plan={canonicalAdminId:canonical?.id??null,adminAliasIds:admins.filter(r=>r.id!==canonical?.id).map(r=>r.id).sort((a,b)=>a-b),copies:[],membershipChanges:[],unresolved:[],conflicts:[]}
- const localNames=new Map(),origins=new Map(),used=new Set(),copyKeys=new Set()
+ const localNames=new Map(),origins=new Map(),used=new Set(snapshot.roles.filter(r=>r.company_id&&r.legacy_role_id!=null).map(r=>r.legacy_role_id)),copyKeys=new Set()
  for(const r of snapshot.roles) {
   if(['admin','administrador'].includes(normalizeName(r.name))&&!legacyAdmin(r))plan.conflicts.push({roleId:r.id,reason:'Nombre reservado ambiguo'})
   if(r.company_id) {

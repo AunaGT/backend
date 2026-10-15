@@ -97,6 +97,7 @@ exports.register = handle(async (req, res) => {
   const password = await bcrypt.hash(req.body.password, 10)
   const user = await (prismaTransaction || prisma).$transaction(async tx => {
     await roleService.lockRoleCompany(tx, companyId)
+    await roleService.freshActor(tx, req, ['users.create'])
     const role = await assignableRole(tx, req, req.body.role_id)
     const created = await tx.user.create({ data: { ...data, password, role_id: role.id,
       user_companies: { create: { company_id: companyId, role_id: role.id, status } },
@@ -113,6 +114,7 @@ exports.update = handle(async (req, res) => {
   const body = req.body || {}, data = identity(body)
   const updated = await (prismaTransaction || prisma).$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM companies WHERE id = ${requireCompany(req)}::uuid FOR UPDATE`
+    await roleService.freshActor(tx, req, ['users.edit'])
     const user = await target(tx, req)
     if (user._count.user_companies > 1 && req.user.sub !== user.id && ((body.name !== undefined && body.name !== user.name) || (body.email !== undefined && body.email !== user.email) || body.password)) fail(403, 'La identidad de una cuenta compartida solo puede editarla su titular')
     if (body.password) { data.password = await bcrypt.hash(body.password, 10); data.auth_version = { increment: 1 }; data.password_changed_at = null }

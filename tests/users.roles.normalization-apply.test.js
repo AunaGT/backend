@@ -5,7 +5,7 @@ test('normalizer preserves access across companies, is repeatable, aliases are r
  assert.equal(typeof api.applyRoleNormalization,'function')
  const before=roleNormalizationFixture({shared:true,adminAlias:true}),f=normalizationStore(before)
  await f.db.$transaction(tx=>api.applyRoleNormalization(tx,before))
- const after=f.snapshot();assert.equal(api.verifyRoleNormalization(before,after).ok,true)
+ const after=f.snapshot();assert.equal(api.verifyRoleNormalization(before,after).ok,true);assert.deepEqual(api.planRoleNormalization(after).unresolved,[])
  assert.equal(after.roles.filter(r=>r.legacy_role_id===61).length,2)
  await f.db.$transaction(tx=>api.applyRoleNormalization(tx,after));assert.deepEqual(f.snapshot(),after)
  assert.equal((await resolveVisibleRole(f.db,'company-a',61)).company_id,'company-a')
