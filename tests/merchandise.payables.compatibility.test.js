@@ -9,19 +9,96 @@ const {
   settleNewPurchase,
 } = require("../src/modules/merchandise/payables/compatibility");
 const { cancelLegacyEntry } = require("../src/modules/merchandise/payables");
-test('public merchandise handlers share balances and return a grouped-payment conflict without deleting history',async()=>{
- const f=makePayablesFixture(),dbPath=require.resolve('../src/models/prisma'),controllerPath=require.resolve('../src/modules/merchandise/controller'),previous=require.cache[dbPath]
- require.cache[dbPath]={id:dbPath,filename:dbPath,loaded:true,exports:{prisma:f.db,prismaTransaction:f.db}}
- delete require.cache[controllerPath]
- try{
-  const controller=require(controllerPath),row=f.stored.entries[0],req={params:{id:row.id},companyId:f.scope.companyId,branchId:f.scope.branchId,branchIds:f.scope.branchIds,user:{sub:f.scope.userId,permissions:f.scope.permissions},body:{amount:'25.00',paid_at:'2026-10-14T12:00:00Z',expected_revision:0},get:()=>crypto.randomUUID()}
-  let payload,status=200;const res={status:n=>{status=n;return res},json:data=>{payload=data}},next=e=>{throw e}
-  await controller.addPaymentEntry(req,res,next);assert.equal(payload.amount_pending,75);assert.equal(payload.amount_paid_total,25);assert.ok(payload.payment_entries[0].supplier_payment_id)
-  req.params.entryId=payload.payment_entries[0].id;req.body={reason:'Corrección QA'};await controller.deletePaymentEntry(req,res,next)
-  assert.equal(status,409);assert.equal(payload.code,'GROUPED_PAYMENT');assert.equal(f.stored.entries[0].paymentEntries.length,1)
-  await controller.getById(req,res,next);assert.equal(payload.amount_pending,75)
- }finally{delete require.cache[controllerPath];if(previous)require.cache[dbPath]=previous;else delete require.cache[dbPath]}
-})
+test("condition audit preserves the prior and new due date, term and reference", async () => {
+  const f = makePayablesFixture(),
+    row = f.stored.entries[0];
+  Object.assign(row, {
+    due_date: new Date("2026-10-01T00:00:00Z"),
+    payment_term_id: 1,
+    payment_reference: "Anterior",
+  });
+  f.db.supplier.findFirst = async () => ({
+    id: row.supplier_id,
+    supplier_payment_terms: [{ payment_term_id: 1 }, { payment_term_id: 2 }],
+  });
+  await changePaymentConditions(f.db, f.scope, row.id, {
+    due_date: "2026-11-01T00:00:00Z",
+    payment_term_id: 2,
+    payment_reference: "Nuevo",
+  });
+  const event = f.stored.events.find((e) => e.action === "CONDITIONS_UPDATED");
+  assert.deepEqual(event.before.conditions, {
+    due_date: "2026-10-01T00:00:00.000Z",
+    payment_term_id: 1,
+    payment_reference: "Anterior",
+  });
+  assert.deepEqual(event.after.conditions, {
+    due_date: "2026-11-01T00:00:00.000Z",
+    payment_term_id: 2,
+    payment_reference: "Nuevo",
+  });
+  assert.equal(f.stored.payments.length, 0);
+});
+test("public merchandise handlers share balances and return a grouped-payment conflict without deleting history", async () => {
+  const f = makePayablesFixture(),
+    dbPath = require.resolve("../src/models/prisma"),
+    controllerPath = require.resolve("../src/modules/merchandise/controller"),
+    previous = require.cache[dbPath];
+  require.cache[dbPath] = {
+    id: dbPath,
+    filename: dbPath,
+    loaded: true,
+    exports: { prisma: f.db, prismaTransaction: f.db },
+  };
+  delete require.cache[controllerPath];
+  try {
+    const controller = require(controllerPath),
+      row = f.stored.entries[0],
+      req = {
+        params: { id: row.id },
+        companyId: f.scope.companyId,
+        branchId: f.scope.branchId,
+        branchIds: f.scope.branchIds,
+        user: { sub: f.scope.userId, permissions: f.scope.permissions },
+        body: {
+          amount: "25.00",
+          paid_at: "2026-10-14T12:00:00Z",
+          expected_revision: 0,
+        },
+        get: () => crypto.randomUUID(),
+      };
+    let payload,
+      status = 200;
+    const res = {
+        status: (n) => {
+          status = n;
+          return res;
+        },
+        json: (data) => {
+          payload = data;
+        },
+      },
+      next = (e) => {
+        throw e;
+      };
+    await controller.addPaymentEntry(req, res, next);
+    assert.equal(payload.amount_pending, 75);
+    assert.equal(payload.amount_paid_total, 25);
+    assert.ok(payload.payment_entries[0].supplier_payment_id);
+    req.params.entryId = payload.payment_entries[0].id;
+    req.body = { reason: "Corrección QA" };
+    await controller.deletePaymentEntry(req, res, next);
+    assert.equal(status, 409);
+    assert.equal(payload.code, "GROUPED_PAYMENT");
+    assert.equal(f.stored.entries[0].paymentEntries.length, 1);
+    await controller.getById(req, res, next);
+    assert.equal(payload.amount_pending, 75);
+  } finally {
+    delete require.cache[controllerPath];
+    if (previous) require.cache[dbPath] = previous;
+    else delete require.cache[dbPath];
+  }
+});
 test("individual payment creates a durable receipt; cancelled history does not reduce balance", async () => {
   const f = makePayablesFixture(),
     id = f.stored.entries[0].id,
@@ -109,7 +186,7 @@ test("new paid PURCHASE records money, while INITIAL never creates a disbursemen
     paid_at: "2026-10-14T12:00:00Z",
   });
   assert.equal(f.stored.payments.length, 1);
-  assert.equal(settled.payment_status, 'PAID');
+  assert.equal(settled.payment_status, "PAID");
   assert.equal(f.stored.entries[0].legacy_settled_amount, "0.00");
   await settleNewPurchase(
     f.db,

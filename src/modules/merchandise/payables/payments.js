@@ -93,6 +93,11 @@ async function loadEntries(tx, scope, ids, supplierId) {
     );
   return rows;
 }
+const conditionSnapshot = (row) => ({
+  due_date: iso(row.due_date),
+  payment_term_id: row.payment_term_id ?? null,
+  payment_reference: row.payment_reference ?? null,
+});
 async function syncEntry(tx, scope, id, before, action, reason = null) {
   const row = await tx.incomingMerchandise.findFirst({
     where: { ...entryWhere(scope), id },
@@ -114,6 +119,8 @@ async function syncEntry(tx, scope, id, before, action, reason = null) {
     },
   });
   after.revision++;
+  if (action === "CONDITIONS_UPDATED")
+    after.conditions = conditionSnapshot(row);
   await tx.merchandisePaymentAuditEvent.create({
     data: {
       id: crypto.randomUUID(),

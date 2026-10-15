@@ -51,6 +51,42 @@ test(
         method = await db.paymentMethod.findFirst({
           where: { is_credit: false },
         });
+      const historical = await create(100);
+      const legacy = await db.incomingMerchandisePaymentEntry.create({
+        data: {
+          incoming_merchandise_id: historical.id,
+          amount: 25,
+          registered_by: f.userId,
+          reference: "QA abono sin comprobante",
+          paid_at: new Date(Date.now() + 10000),
+        },
+      });
+      const legacyStatement = await api.supplierStatement(
+        db,
+        scope,
+        f.supplierId,
+        { state: "ALL", pageSize: 100 },
+      );
+      const oldPayment = legacyStatement.payments.items.find(
+        (p) => p.id === legacy.id,
+      );
+      assert.ok(
+        oldPayment,
+        "centralized history must retain original unparented payments",
+      );
+      assert.equal(oldPayment.kind, "LEGACY");
+      assert.equal(oldPayment.incomingId, historical.id);
+      assert.equal(oldPayment.amount, "25.00");
+      await api.cancelLegacyEntry(db, scope, historical.id, legacy.id, {
+        reason: "QA corrección de abono anterior",
+      });
+      const cancelledLegacy = (
+        await api.supplierStatement(db, scope, f.supplierId, {
+          state: "ALL",
+          pageSize: 100,
+        })
+      ).payments.items.find((p) => p.id === legacy.id);
+      assert.equal(cancelledLegacy.status, "CANCELLED");
       const input = {
         requestKey: crypto.randomUUID(),
         supplierId: f.supplierId,

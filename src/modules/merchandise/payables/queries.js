@@ -3,7 +3,7 @@ const { Prisma } = require("@prisma/client"),
   { assertAccess } = require("./access"),
   { parsePayableFilters, uuid } = require("./validation"),
   { balanceOf } = require("./balance"),
-  { loadReceipt, receiptDto, receiptInclude } = require("./payments"),
+  { loadReceipt, receiptDto } = require("./payments"),
   { fail, toCents, fromCents, checked } = require("./money");
 const S = Prisma.sql;
 async function context(db, scope, raw) {
@@ -221,6 +221,63 @@ async function supplierPaymentReceipt(db, scope, id) {
   await assertAccess(db, scope);
   return receiptDto(await loadReceipt(db, scope, id));
 }
+async function supplierPaymentHistory(db, scope, id, f) {
+  const branch = scope.branchId
+    ? S`m.branch_id=${scope.branchId}::uuid`
+    : scope.branchIds.length
+      ? S`m.branch_id IN (${Prisma.join(scope.branchIds.map((v) => S`${v}::uuid`))})`
+      : S`false`;
+  const authorized = S`b.company_id=${scope.companyId}::uuid AND s.company_id=${scope.companyId}::uuid AND m.supplier_id=${id}::uuid AND ${branch}`;
+  const history = S`WITH history AS (
+    SELECT m.id,'RECEIPT'::text AS kind,m.status::text AS status,m.amount::text AS amount,m.paid_at,m.reference,m.registered_by,u.name AS actor_name,pm.id AS method_id,pm.name AS method_name,NULL::uuid AS incoming_id,m.cancel_reason
+    FROM supplier_payments m JOIN branches b ON b.id=m.branch_id JOIN suppliers s ON s.id=m.supplier_id JOIN users u ON u.id=m.registered_by LEFT JOIN payment_methods pm ON pm.id=m.payment_method_id
+    WHERE m.company_id=${scope.companyId}::uuid AND ${authorized}
+    UNION ALL
+    SELECT a.id,'LEGACY',CASE WHEN a.cancelled_at IS NULL THEN 'POSTED' ELSE 'CANCELLED' END,a.amount::text,a.paid_at,a.reference,a.registered_by,u.name,NULL::int,NULL::text,m.id,a.cancel_reason
+    FROM incoming_merchandise_payment_entries a JOIN incoming_merchandise m ON m.id=a.incoming_merchandise_id JOIN branches b ON b.id=m.branch_id JOIN suppliers s ON s.id=m.supplier_id JOIN users u ON u.id=a.registered_by
+    WHERE a.supplier_payment_id IS NULL AND m.source='PURCHASE' AND ${authorized}
+  )`;
+  const fetch = (page) =>
+    db.$queryRaw(
+      S`${history} SELECT *,COUNT(*) OVER() AS total_count FROM history ORDER BY paid_at DESC,id DESC LIMIT ${f.pageSize} OFFSET ${(page - 1) * f.pageSize}`,
+    );
+  let page = f.paymentPage || 1,
+    rows = await fetch(page);
+  const totalItems = Number(
+    rows[0]?.total_count ??
+      (
+        await db.$queryRaw(
+          S`${history} SELECT COUNT(*) AS total_count FROM history`,
+        )
+      )[0]?.total_count ??
+      0,
+  );
+  const totalPages = Math.max(1, Math.ceil(totalItems / f.pageSize));
+  if (page > totalPages) {
+    page = totalPages;
+    rows = await fetch(page);
+  }
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      status: r.status,
+      amount: r.amount,
+      paidAt: new Date(r.paid_at).toISOString(),
+      reference: r.reference,
+      registeredBy: { id: r.registered_by, name: r.actor_name },
+      paymentMethod: r.method_id
+        ? { id: r.method_id, name: r.method_name }
+        : null,
+      incomingId: r.incoming_id || null,
+      cancelReason: r.cancel_reason || null,
+    })),
+    page,
+    pageSize: f.pageSize,
+    totalItems,
+    totalPages,
+  };
+}
 async function supplierStatement(db, scope, id, raw = {}) {
   uuid(id);
   const { f } = await context(db, scope, raw),
@@ -230,57 +287,41 @@ async function supplierStatement(db, scope, id, raw = {}) {
     });
   if (!supplier) fail("Proveedor no disponible", 404, "NOT_FOUND");
   const branch = scope.branchId || { in: scope.branchIds },
-    where = { company_id: scope.companyId, branch_id: branch, supplier_id: id },
     auditWhere = {
       company_id: scope.companyId,
       incomingMerchandise: { supplier_id: id, branch_id: branch },
     },
-    paymentPage = f.paymentPage || 1,
     auditPage = f.auditPage || 1;
-  const [entries, summary, payments, totalPayments, audit, totalAudit] =
-    await Promise.all([
-      listPayableEntries(db, scope, {
-        ...raw,
-        supplierId: id,
-        page: f.entryPage || f.page,
-      }),
-      payablesSummary(db, scope, { ...raw, supplierId: id }),
-      db.supplierPayment.findMany({
-        where,
-        include: receiptInclude,
-        orderBy: [{ paid_at: "desc" }, { id: "desc" }],
-        take: f.pageSize,
-        skip: (paymentPage - 1) * f.pageSize,
-      }),
-      db.supplierPayment.count({ where }),
-      db.merchandisePaymentAuditEvent.findMany({
-        where: auditWhere,
-        select: {
-          id: true,
-          action: true,
-          reason: true,
-          before: true,
-          after: true,
-          created_at: true,
-          actor: { select: { id: true, name: true } },
-        },
-        orderBy: [{ created_at: "desc" }, { id: "desc" }],
-        take: f.pageSize,
-        skip: (auditPage - 1) * f.pageSize,
-      }),
-      db.merchandisePaymentAuditEvent.count({ where: auditWhere }),
-    ]);
+  const [entries, summary, payments, audit, totalAudit] = await Promise.all([
+    listPayableEntries(db, scope, {
+      ...raw,
+      supplierId: id,
+      page: f.entryPage || f.page,
+    }),
+    payablesSummary(db, scope, { ...raw, supplierId: id }),
+    supplierPaymentHistory(db, scope, id, f),
+    db.merchandisePaymentAuditEvent.findMany({
+      where: auditWhere,
+      select: {
+        id: true,
+        action: true,
+        reason: true,
+        before: true,
+        after: true,
+        created_at: true,
+        actor: { select: { id: true, name: true } },
+      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+      take: f.pageSize,
+      skip: (auditPage - 1) * f.pageSize,
+    }),
+    db.merchandisePaymentAuditEvent.count({ where: auditWhere }),
+  ]);
   return {
     supplier,
     summary,
     entries,
-    payments: {
-      items: payments.map(receiptDto),
-      page: paymentPage,
-      pageSize: f.pageSize,
-      totalItems: totalPayments,
-      totalPages: Math.max(1, Math.ceil(totalPayments / f.pageSize)),
-    },
+    payments,
     audit: {
       items: audit,
       page: auditPage,

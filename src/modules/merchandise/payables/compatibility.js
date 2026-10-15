@@ -72,7 +72,14 @@ async function changePaymentConditions(db, scope, id, body, key) {
     const initial = await entry(tx, scope, id);
     await lockSupplier(tx, scope, initial.supplier_id);
     const [row] = await loadEntries(tx, scope, [id], initial.supplier_id),
-      before = balanceOf(row),
+      before = {
+        ...balanceOf(row),
+        conditions: {
+          due_date: row.due_date ? new Date(row.due_date).toISOString() : null,
+          payment_term_id: row.payment_term_id ?? null,
+          payment_reference: row.payment_reference ?? null,
+        },
+      },
       data = {};
     if (row.source === "INITIAL")
       fail("La carga inicial no es una cuenta por pagar");
