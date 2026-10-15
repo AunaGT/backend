@@ -7,7 +7,7 @@ const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const ctrl = require('./paymentMethods.controller')
 const router = Router()
 
-router.get('/', ctrl.list)
+router.get('/', Auth, ctrl.list)
 
 router.post('/', Auth, hasPermission('catalogs.manage'), ctrl.create)
 router.put('/:id', Auth, hasPermission('catalogs.manage'), ctrl.update)

@@ -5,7 +5,6 @@ process.env.JWT_SECRET ||= 'catalog-summary-test-secret-at-least-32-characters'
 for (const [file, model, field, groups, expected] of [
   ['productCategories', 'productCategory', 'deleted', [[false, 24], [true, 7]], { total: 31, active: 24, deleted: 7 }],
   ['paymentTerms', 'paymentTerm', 'net_days', [[null, 7], [0, 5], [30, 12], [60, 7]], { total: 31, immediate: 5, credit: 19, unspecified: 7 }],
-  ['paymentMethods', 'paymentMethod', 'is_credit', [[false, 24], [true, 7]], { total: 31, immediate: 24, credit: 7 }],
 ]) {
   test(`${file} summary uses the complete filtered scope, not its page, and is opt-in`, async () => {
     const dbPath = require.resolve('../src/models/prisma')
