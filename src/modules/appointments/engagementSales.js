@@ -44,9 +44,8 @@ async function issueEngagementSale(db,scope,id,raw){
       const check=await checkCredit(tx,customer,remaining.toNumber(),{branch_id:scope.branchId})
       if(!check.ok&&!(input.creditOverride&&hasAgendaPermission(scope,'sales.credit.override')))v.fail(409,'CREDIT_NOT_AVAILABLE',check.motivo||'Crédito no disponible')
     }
-    const method=await tx.paymentMethod.findFirst({where:{is_credit:remaining.gt(0)},orderBy:{id:'asc'}})
-    if(!method)v.fail(409,'PAYMENT_METHOD_REQUIRED','Configura un medio comercial de pago')
-    const settlement={kind:'EXISTING_RECEIPTS',committedAmount:balance.committed,issuedAt:now,dueDate,paymentMethodId:method.id}
+    const paymentMethodId=await require('../../services/paymentMethods/engagementSettlement').resolveEngagementSettlementMethod(tx,scope,e,remaining)
+    const settlement={kind:'EXISTING_RECEIPTS',committedAmount:balance.committed,issuedAt:now,dueDate,paymentMethodId}
     const draft=await ensureEngagementDraft(tx,scope,{source:e})
     const sale=e.order_id?await require('../orders').invoiceEngagementOrder(tx,scope,{orderId:e.order_id,source:e,idempotencyKey:input.idempotencyKey,settlement,draftSaleId:draft.saleId})
       :await confirmEngagementDraft(tx,scope,{source:e,draftSaleId:draft.saleId,idempotencyKey:input.idempotencyKey,settlement})
