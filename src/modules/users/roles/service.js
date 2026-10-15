@@ -19,7 +19,7 @@ function grant(actor,role) {
  if(isSystemAdmin(role)||permissions(role).some(p=>!actor.permissions.includes(p)))roleError(403,'GRANT_FORBIDDEN','No puedes conceder permisos superiores a los tuyos')
 }
 async function resolveAssignableRole(tx,req,id) {
- const actor=await freshActor(tx,req,['users.create','users.edit','users.import','roles.manage'])
+ const actor=await freshActor(tx,req,['users.create','users.edit','users.import','companies.manage','roles.manage'])
  const role=await resolveVisibleRole(tx,requireCompany(req),id,{alias:false})
  if(!role)roleError(400,'ROLE_UNAVAILABLE','Rol no disponible en esta empresa')
  grant(actor,role);return role
@@ -102,4 +102,11 @@ async function deleteRole(db,req,id,raw) {
   await audit(tx,req,role,'Eliminación');return {id,message:'Rol eliminado'}
  })
 }
-module.exports={listRoles,getRole,saveRole,deleteRole,lockRoleCompany,resolveAssignableRole,freshActor}
+async function releaseRoleFallback(tx,user,companyId,oldRole,newRole) {
+ const [current]=await tx.$queryRaw`SELECT id,role_id FROM users WHERE id=${user.id}::uuid FOR UPDATE`
+ if(!current)roleError(404,'USER_UNAVAILABLE','Usuario no disponible')
+ if(current.role_id!==oldRole.id&&current.role_id!==oldRole.legacy_role_id)return
+ await tx.userCompany.updateMany({where:{user_id:user.id,company_id:{not:companyId},role_id:null},data:{role_id:current.role_id}})
+ await tx.user.update({where:{id:user.id},data:{role_id:newRole.id}})
+}
+module.exports={listRoles,getRole,saveRole,deleteRole,lockRoleCompany,resolveAssignableRole,freshActor,releaseRoleFallback}

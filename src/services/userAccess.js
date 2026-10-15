@@ -1,4 +1,5 @@
 const { expandPermissions } = require('../config/permissionDeps')
+const { isSystemAdmin } = require('../modules/users/roles/policy')
 const PASSWORD_CHANGE_REQUIRED = 'Cambio obligatorio de contraseña'
 const hasActiveMembership = user => user.user_companies?.some(m => m.status === 'ACTIVE' && m.company?.active !== false)
 
@@ -14,7 +15,7 @@ function effectiveUser(user, companyId) {
   return { ...user, active_company_id: companyId, sub: user.id, role, role_id: role?.id, role_name: role?.name, permissions: permissions(role) }
 }
 function assertGrant(actor, role) {
-  if (actor.role?.name?.toLowerCase() === 'admin') return
+  if (isSystemAdmin(actor.role)) return
   if (role.name?.toLowerCase() === 'admin' || permissions(role).some(p => !expandPermissions(actor.permissions || []).includes(p))) {
     fail(403, 'No puedes conceder permisos superiores a los tuyos')
   }

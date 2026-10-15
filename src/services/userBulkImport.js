@@ -13,8 +13,10 @@
  * Handles validation and batch import for users
  */
 const bcrypt = require('bcryptjs')
-const { prisma } = require('../models/prisma')
+const { prisma, prismaTransaction } = require('../models/prisma')
 const { assertGrant, fail } = require('./userAccess')
+const { visibleRolesWhere } = require('../modules/users/roles/policy')
+const { lockRoleCompany, resolveAssignableRole } = require('../modules/users/roles/service')
 const { ImportCancelledError } = require('../utils/importStream')
 const { nameMatcher, checkSimilarity, checkText, cell, nameCandidates } = require('../utils/importValidation')
 
@@ -194,7 +196,7 @@ async function bulkValidateUsers(rows, importOptionsRaw, context) {
     if (importOptions.createRoles.length) fail(400, 'Crea los roles desde Roles y permisos antes de importar')
 
     const roles = await prisma.role.findMany({
-        where: { OR: [{ company_id: context.companyId }, { company_id: null }] },
+        where: visibleRolesWhere(context.companyId),
         include: { permissions: { include: { permission: true } } },
     })
     const rolesMap = new Map()
@@ -261,22 +263,6 @@ async function bulkValidateUsers(rows, importOptionsRaw, context) {
     }
 }
 
-async function ensureRoleIdImport(name, cache) {
-    const trimmed = String(name || '').trim()
-    if (!trimmed) throw new Error('Rol vacío')
-    const key = trimmed.toLowerCase()
-    if (cache.has(key)) return cache.get(key)
-    let role = await prisma.role.findFirst({
-        where: { name: { equals: trimmed, mode: 'insensitive' } },
-    })
-    if (!role) {
-        const safeName = trimmed.slice(0, 50)
-        role = await prisma.role.create({ data: { name: safeName } })
-    }
-    cache.set(key, role.id)
-    return role.id
-}
-
 /**
  * Bulk create users
  * @param {Array} validRows - Array of validated user rows
@@ -293,7 +279,7 @@ async function bulkCreateUsers(validRows, context, onProgress = () => {}, isCanc
     const errors = []
     const roleIds = [...new Set(validRows.map(row => row.data.role_id).filter(Boolean))]
     const roles = await prisma.role.findMany({
-        where: { id: { in: roleIds }, OR: [{ company_id: context.companyId }, { company_id: null }] },
+        where: { id: { in: roleIds }, ...visibleRolesWhere(context.companyId) },
         include: { permissions: { include: { permission: true } } },
     })
     const rolesById = new Map(roles.map(role => [role.id, role]))
@@ -317,7 +303,10 @@ async function bulkCreateUsers(validRows, context, onProgress = () => {}, isCanc
             }
             const hashedPassword = await bcrypt.hash(d.password, 10)
 
-            await prisma.user.create({
+            await (prismaTransaction || prisma).$transaction(async tx => {
+              await lockRoleCompany(tx, context.companyId)
+              await resolveAssignableRole(tx, { companyId: context.companyId, user: context.user }, d.role_id)
+              await tx.user.create({
                 data: {
                     name: d.name,
                     email: d.email,
@@ -329,7 +318,8 @@ async function bulkCreateUsers(validRows, context, onProgress = () => {}, isCanc
                     // empleado (teléfono, dirección, ingreso) se carga en RRHH, que es
                     // donde la planilla la lee.
                 },
-            })
+              })
+            }, { timeout: 30000, maxWait: 5000 })
             created++
             existingEmails.add(d.email.toLowerCase())
         } catch (e) {

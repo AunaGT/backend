@@ -3,11 +3,10 @@ const { prisma, prismaTransaction } = require('../../models/prisma')
 const roleService = require('./roles/service')
 const { requireCompany } = require('../../middlewares/tenant')
 const { listQuery, assertGrant, permissions, fail, PASSWORD_CHANGE_REQUIRED } = require('../../services/userAccess')
-const { expandPermissions } = require('../../config/permissionDeps')
+const { isSystemAdmin } = require('./roles/policy')
 
 const roleInclude = { permissions: { include: { permission: true } } }
 const memberWhere = req => ({ user_companies: { some: { company_id: requireCompany(req) } } })
-const rolesWhere = req => ({ OR: [{ company_id: requireCompany(req) }, { company_id: null }] })
 const handle = fn => async (req, res, next) => { try { await fn(req, res) } catch (e) { next(e) } }
 const event = (tx, req, userId, action) => tx.userAccessEvent.create({ data: { company_id: requireCompany(req), user_id: userId, actor_id: req.user.sub, action } })
 const includes = companyId => ({
@@ -38,11 +37,7 @@ async function target(tx, req) {
   return user
 }
 async function assignableRole(tx, req, id) {
-  if (!Number.isSafeInteger(Number(id))) fail(400, 'Rol inválido')
-  const role = await tx.role.findFirst({ where: { id: Number(id), ...rolesWhere(req) }, include: roleInclude })
-  if (!role) fail(400, 'Rol no disponible')
-  assertGrant(req.user, role)
-  return role
+  return roleService.resolveAssignableRole(tx, req, id)
 }
 function identity(body, creating = false) {
   const data = {}
@@ -99,9 +94,10 @@ exports.register = handle(async (req, res) => {
   const status = req.body.access_status || 'ACTIVE'
   if (!['ACTIVE', 'INACTIVE'].includes(status)) fail(400, 'Estado inicial inválido')
   if (req.body.must_change_password !== undefined && typeof req.body.must_change_password !== 'boolean') fail(400, 'Cambio obligatorio inválido')
-  const role = await assignableRole(prisma, req, req.body.role_id)
   const password = await bcrypt.hash(req.body.password, 10)
-  const user = await prisma.$transaction(async tx => {
+  const user = await (prismaTransaction || prisma).$transaction(async tx => {
+    await roleService.lockRoleCompany(tx, companyId)
+    const role = await assignableRole(tx, req, req.body.role_id)
     const created = await tx.user.create({ data: { ...data, password, role_id: role.id,
       user_companies: { create: { company_id: companyId, role_id: role.id, status } },
       ...(req.branchId ? { default_branch_id: req.branchId, user_branches: { create: { branch_id: req.branchId } } } : {}),
@@ -109,13 +105,13 @@ exports.register = handle(async (req, res) => {
     await event(tx, req, created.id, 'Usuario creado')
     if (req.body.must_change_password) await event(tx, req, created.id, PASSWORD_CHANGE_REQUIRED)
     return tx.user.findUnique({ where: { id: created.id }, include: includes(companyId) })
-  })
+  }, { timeout: 30000, maxWait: 5000 })
   // Crear una cuenta no autoriza iniciar una sesión como esa persona.
   res.status(201).json({ user: serialize(user) })
 })
 exports.update = handle(async (req, res) => {
   const body = req.body || {}, data = identity(body)
-  const updated = await prisma.$transaction(async tx => {
+  const updated = await (prismaTransaction || prisma).$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM companies WHERE id = ${requireCompany(req)}::uuid FOR UPDATE`
     const user = await target(tx, req)
     if (user._count.user_companies > 1 && req.user.sub !== user.id && ((body.name !== undefined && body.name !== user.name) || (body.email !== undefined && body.email !== user.email) || body.password)) fail(403, 'La identidad de una cuenta compartida solo puede editarla su titular')
@@ -128,18 +124,19 @@ exports.update = handle(async (req, res) => {
       const role = await assignableRole(tx, req, body.role_id)
       const oldRole = user.user_companies[0].role || user.role
       if (role.id !== oldRole.id && req.user.sub === user.id) fail(409, 'No puedes cambiar tu propio rol')
-      if (oldRole.name.toLowerCase() === 'admin' && role.name.toLowerCase() !== 'admin') {
-        const others = await tx.userCompany.count({ where: { company_id: req.companyId, status: 'ACTIVE', user_id: { not: user.id }, OR: [{ role: { name: 'admin' } }, { role_id: null, user: { role: { name: 'admin' } } }] } })
+      if (isSystemAdmin(oldRole) && !isSystemAdmin(role)) {
+        const others = await tx.userCompany.count({ where: { company_id: req.companyId, status: 'ACTIVE', user_id: { not: user.id }, OR: [{ role: { system_key: 'ADMIN' } }, { role_id: null, user: { role: { system_key: 'ADMIN' } } }] } })
         if (!others) fail(409, 'Debe permanecer un administrador activo')
       }
       await tx.userCompany.update({ where: { user_id_company_id: { user_id: user.id, company_id: req.companyId } }, data: { role_id: role.id } })
+      if (role.id !== oldRole.id) await roleService.releaseRoleFallback(tx, user, req.companyId, oldRole, role)
     }
     await tx.user.update({ where: { id: user.id }, data })
     if (body.password) await tx.refreshToken.updateMany({ where: { user_id: user.id, revoked_at: null }, data: { revoked_at: new Date() } })
     await event(tx, req, user.id, 'Usuario actualizado')
     if (body.password) await event(tx, req, user.id, PASSWORD_CHANGE_REQUIRED)
     return target(tx, req)
-  })
+  }, { timeout: 30000, maxWait: 5000 })
   res.json(serialize(updated))
 })
 exports.setAccess = handle(async (req, res) => {
@@ -151,8 +148,8 @@ exports.setAccess = handle(async (req, res) => {
     await tx.$queryRaw`SELECT id FROM companies WHERE id = ${requireCompany(req)}::uuid FOR UPDATE`
     const user = await target(tx, req)
     const currentRole = user.user_companies[0].role || user.role
-    if (currentRole.name.toLowerCase() === 'admin' && status !== 'ACTIVE') {
-      const others = await tx.userCompany.count({ where: { company_id: req.companyId, status: 'ACTIVE', user_id: { not: user.id }, OR: [{ role: { name: 'admin' } }, { role_id: null, user: { role: { name: 'admin' } } }] } })
+    if (isSystemAdmin(currentRole) && status !== 'ACTIVE') {
+      const others = await tx.userCompany.count({ where: { company_id: req.companyId, status: 'ACTIVE', user_id: { not: user.id }, OR: [{ role: { system_key: 'ADMIN' } }, { role_id: null, user: { role: { system_key: 'ADMIN' } } }] } })
       if (!others) fail(409, 'Debe permanecer un administrador activo')
     }
     await tx.userCompany.update({ where: { user_id_company_id: { user_id: user.id, company_id: req.companyId } }, data: { status } })

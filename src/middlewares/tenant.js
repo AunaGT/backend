@@ -30,6 +30,7 @@ const moment = require('moment')
 const { secret, ACCESS_COOKIE } = require('../config/security')
 const { prisma } = require('../models/prisma')
 const { loadSessionUser, effectiveUser } = require('../services/userAccess')
+const { isSystemAdmin } = require('../modules/users/roles/policy')
 
 // Igual que Auth pero sin responder 401: las rutas públicas y Auth se encargan.
 function decodeUser(req) {
@@ -49,8 +50,7 @@ function decodeUser(req) {
 }
 
 function isAdmin(user) {
-  const roleName = user?.role?.name || user?.role_name
-  return typeof roleName === 'string' && roleName.toLowerCase() === 'admin'
+  return isSystemAdmin(user?.role)
 }
 
 function hasPerm(user, code) {

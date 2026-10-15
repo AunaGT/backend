@@ -48,7 +48,7 @@ test('no permite retirar al último administrador de una empresa', async t => {
     userCompany: { findUnique: async () => ({ status: 'ACTIVE' }) },
     $transaction: async fn => fn({
       $queryRaw: async () => [],
-      userCompany: { findUnique: async () => ({ status: 'ACTIVE', role: { name: 'admin' }, user: { role: { name: 'admin' } } }), count: async () => 0, deleteMany: async () => { wrote = true } },
+      userCompany: { findUnique: async () => ({ status: 'ACTIVE', role: { name: 'admin', company_id: null, system_key: 'ADMIN' }, user: { role: { name: 'admin', company_id: null, system_key: 'ADMIN' } } }), count: async () => 0, deleteMany: async () => { wrote = true } },
       userBranch: { deleteMany: async () => { wrote = true }, findFirst: async () => null },
       user: { update: async () => { wrote = true } },
     }),

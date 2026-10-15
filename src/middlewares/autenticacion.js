@@ -12,6 +12,7 @@ const jwt_simple = require('jwt-simple')
 const moment = require('moment')
 const { secret, ACCESS_COOKIE } = require('../config/security')
 const { loadSessionUser, effectiveUser } = require('../services/userAccess')
+const { isSystemAdmin } = require('../modules/users/roles/policy')
 
 exports.Auth = async function (req, res, next) {
   // Cookie httpOnly primero; fallback al header Bearer (curl/tests/herramientas).
@@ -82,8 +83,7 @@ function getUserPermissions(user) {
 
 // Verificar si el usuario es admin por nombre de rol
 function isAdminUser(user) {
-  const roleName = user?.role?.name || user?.role_name
-  return typeof roleName === 'string' && roleName.toLowerCase() === 'admin'
+  return isSystemAdmin(user?.role)
 }
 
 /**

@@ -8,16 +8,19 @@ test('precarga roles y correos una vez para el lote', async () => {
   let roleQueries = 0
   let emailQueries = 0
   const progress = []
-  require.cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: { prisma: {
-    role: { findMany: async () => { roleQueries++; return [{ id: 'role-a', company_id: 'co-a', permissions: [] }] } },
-    user: { findMany: async () => { emailQueries++; return [] }, create: async () => ({}) },
-  } } }
-  require.cache[accessPath] = { id: accessPath, filename: accessPath, loaded: true, exports: { assertGrant() {}, fail() { throw Error('invalid') } } }
+  const role={id:101,name:'Bodega',company_id:'co-a',permissions:[]},admin={id:73,name:'admin',company_id:null,system_key:'ADMIN',permissions:[]}
+  const db={
+    role: { findMany: async () => { roleQueries++; return [role] }, findFirst: async () => role },
+    user: { findMany: async () => { emailQueries++; return [] }, create: async () => ({}), findUnique: async () => ({id:'actor',role:admin,user_companies:[{company_id:'co-a',status:'ACTIVE',role:admin}]}) },
+    $queryRaw: async () => [{id:'co-a'}], $transaction: async run => run(db),
+  }
+  require.cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: { prisma: db, prismaTransaction: db } }
+  delete require.cache[accessPath]
   delete require.cache[servicePath]
   try {
     const { bulkCreateUsers } = require(servicePath)
-    const rows = ['a@example.test', 'b@example.test'].map((email, index) => ({ rowIndex: index + 2, data: { email, name: email, password: 'strong-pass-123', role_id: 'role-a' } }))
-    const result = await bulkCreateUsers(rows, { companyId: 'co-a', user: { id: 'admin' } }, event => progress.push(event))
+    const rows = ['a@example.test', 'b@example.test'].map((email, index) => ({ rowIndex: index + 2, data: { email, name: email, password: 'strong-pass-123', role_id: 101 } }))
+    const result = await bulkCreateUsers(rows, { companyId: 'co-a', user: { sub: 'actor', role: admin } }, event => progress.push(event))
     assert.equal(result.created, 2)
     assert.equal(roleQueries, 1)
     assert.equal(emailQueries, 1)
