@@ -277,8 +277,9 @@ function validateDenominations (value) {
  */
 exports.update = async (req, res, next) => {
   try {
-    const payload = req.body.settings || req.body
-    if (!payload || typeof payload !== 'object') {
+    const body = req.body
+    const payload = body && Object.hasOwn(body, 'settings') ? body.settings : body
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return res.status(400).json({ message: 'Se requiere un objeto con las claves a actualizar' })
     }
 
@@ -296,10 +297,12 @@ exports.update = async (req, res, next) => {
     }
     for (const daysKey of ['quote_validity_days', 'order_validity_days', 'quote_soft_hold_hours']) {
       if (payload[daysKey] !== undefined) {
-        const n = parseInt(String(payload[daysKey]), 10)
-        if (!Number.isFinite(n) || n < 1) {
+        const value = payload[daysKey]
+        const n = Number(value)
+        if (!['number', 'string'].includes(typeof value) || !Number.isSafeInteger(n) || n < 1) {
           return res.status(400).json({ message: `${daysKey} debe ser un entero ≥ 1` })
         }
+        payload[daysKey] = String(n)
       }
     }
     for (const rateKey of ['iva_rate', 'pequeno_rate']) {
