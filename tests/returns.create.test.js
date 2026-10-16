@@ -62,3 +62,11 @@ test('las empresas nuevas reciben una política de devoluciones configurable', (
     type: 'json',
   })
 })
+
+test('return window retains whole 24-hour periods and requires a permitted justified exception',()=>{
+  const base={saleDate:new Date('2026-01-01T12:00:00Z'),statusName:'Completada',availableUnits:1,policy:DEFAULT_RETURN_POLICY}
+  for(const now of ['2026-01-31T12:00:00Z','2026-02-01T11:59:59.999Z']) assert.equal(evaluateReturnEligibility({...base,now:new Date(now)}).eligible,true)
+  const expired={...base,now:new Date('2026-02-01T12:00:00Z')}
+  assert.equal(evaluateReturnEligibility(expired).eligible,false)
+  for(const [allowed,authorized,reason,eligible] of [[true,true,'Garantía',true],[true,false,'Garantía',false],[true,true,' ',false],[false,true,'Garantía',false]]) assert.equal(evaluateReturnEligibility({...expired,policy:{...DEFAULT_RETURN_POLICY,allowAuthorizedExceptions:allowed},override:{authorized,reason}}).eligible,eligible)
+})

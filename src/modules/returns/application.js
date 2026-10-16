@@ -1,5 +1,5 @@
 const { round2 } = require('../../services/accounting/logic')
-const { assertReturnTransition, normalizeReturnPolicy, RETURN_RESOLUTIONS } = require('./domain')
+const { assertReturnTransition, normalizeReturnPolicy, evaluateReturnEligibility, RETURN_RESOLUTIONS } = require('./domain')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, restoreStockMap } = require('../../services/bomStock')
 const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivables/domain/receivables')
@@ -138,7 +138,24 @@ async function assertDispositionLocations(tx, branchId, lines) {
   }
 }
 
-async function approveReturn(tx, { id, scope, userId, resolution, lines, policy, companyId, replacements }) {
+function assertCurrentReturnPolicy(record, policy) {
+  const normalized = normalizeReturnPolicy(policy)
+  if (!normalized.enabledResolutions.includes(record.approved_resolution)) throw invalid('La política vigente ya no permite esta resolución. Revisa la devolución antes de continuar.', 409)
+  const validDate = value => value != null && value !== '' && Number.isFinite(new Date(value).getTime())
+  if (!validDate(record.return_date) || !validDate(record.sale?.date)) throw invalid('No se puede validar el plazo: falta una fecha válida de venta o solicitud. Revisa el registro histórico.', 409)
+  const result = evaluateReturnEligibility({
+    saleDate: record.sale.date, now: new Date(record.return_date), statusName: record.sale.status?.name,
+    // Estas unidades ya están reservadas por la propia solicitud.
+    availableUnits: record.return_items?.some(item => Number(item.qty_returned) > 0) ? 1 : 0,
+    policy: normalized,
+    override: { authorized: Boolean(record.policy_overridden_by && validDate(record.policy_overridden_at)), reason: record.policy_override_reason },
+  })
+  if (!result.eligible) throw invalid(result.reasons.includes('RETURN_WINDOW_EXPIRED')
+    ? 'La política vigente no permite el plazo de esta solicitud ni una excepción autorizada. Revisa la devolución antes de continuar.'
+    : 'La venta o las unidades de esta solicitud ya no son elegibles para devolución.', 409)
+}
+
+async function approveReturn(tx, { id, scope, userId, resolution, lines, companyId, replacements }) {
   await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
@@ -146,7 +163,7 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy,
       status: true,
       return_items: true,
       replacement_items: true,
-      sale: { include: { sale_items: true } },
+      sale: { include: { sale_items: true, status: true } },
     },
   })
   if (!current) throw invalid('Devolución no encontrada', 404)
@@ -155,10 +172,8 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, policy,
   const approvedResolution = String(resolution || current.requested_resolution || '')
   assertReceiptReturnResolution(current.sale,approvedResolution)
   if (!RETURN_RESOLUTIONS.includes(approvedResolution)) throw invalid('La solución aprobada no es válida')
-  const normalizedPolicy = normalizeReturnPolicy(policy)
-  if (!normalizedPolicy.enabledResolutions.includes(approvedResolution)) {
-    throw invalid('La solución aprobada está deshabilitada por la política de la empresa', 409)
-  }
+  const normalizedPolicy = await getReturnPolicy(tx, companyId)
+  assertCurrentReturnPolicy({ ...current, approved_resolution: approvedResolution }, normalizedPolicy)
   const plannedLines = normalizeApprovalLines(current, lines)
   await assertDispositionLocations(tx, current.sale.branch_id, plannedLines)
 
@@ -283,6 +298,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       replacement_items: true,
       sale: {
         include: {
+          status: true,
           payment_method: true,
           paymentEntries: { select: { id: true, amount: true, created_at: true } },
           sale_items: true,
@@ -300,6 +316,8 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
     throw invalid('Esta devolución histórica requiere conciliar el movimiento de inventario antes de completarse', 409)
   }
 
+  const policy = await getReturnPolicy(tx, companyId)
+  assertCurrentReturnPolicy(current, policy)
   const plan = buildCompletionPlan(current, payload)
   const isExchange = plan.resolution === 'EXCHANGE'
   await assertDispositionLocations(tx, current.sale.branch_id, plan.lines)
@@ -364,7 +382,6 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
 
   if (isExchange) {
     if (!current.replacement_items?.length) throw invalid('El cambio aprobado no tiene productos de reemplazo', 409)
-    const policy = await getReturnPolicy(tx, companyId)
     replacement = await (deps.createReplacementSale || createReplacementSale)(tx, {
       returnRecord: current,
       replacements: current.replacement_items.map((item) => ({ product_id: item.product_id, qty: item.qty })),

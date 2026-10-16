@@ -9,7 +9,7 @@
  */
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
-const { normalizeReturnPolicy } = require('../returns/domain')
+const { normalizeReturnPolicy, validateReturnPolicyInput } = require('../returns/domain')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
 const { fetchLogoForHttp } = require('../../utils/pdfBranding')
@@ -41,6 +41,7 @@ exports.getAll = async (req, res, next) => {
         settings[row.key] = row.value
       }
     }
+    settings['returns.policy'] = normalizeReturnPolicy(settings['returns.policy'])
     res.json(settings)
   } catch (e) {
     next(e)
@@ -326,17 +327,8 @@ exports.update = async (req, res, next) => {
       }
     }
     if (payload['returns.policy'] !== undefined) {
-      const policy = payload['returns.policy']
-      if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
-        return res.status(400).json({ message: 'returns.policy debe ser un objeto' })
-      }
-      if (!Number.isInteger(Number(policy.windowDays)) || Number(policy.windowDays) < 1) {
-        return res.status(400).json({ message: 'returns.policy.windowDays debe ser un entero ≥ 1' })
-      }
-      if (!['CURRENT_PRICE', 'ORIGINAL_SALE_PRICE'].includes(policy.exchangePricing)) {
-        return res.status(400).json({ message: 'returns.policy.exchangePricing no es válido' })
-      }
-      payload['returns.policy'] = normalizeReturnPolicy(policy)
+      try { payload['returns.policy'] = validateReturnPolicyInput(payload['returns.policy']) }
+      catch (error) { if (error.status === 400) return res.status(400).json({ message: error.message }); throw error }
     }
 
     const allowedKeys = new Set([

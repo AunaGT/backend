@@ -629,7 +629,6 @@ exports.updateStatus = async (req, res, next) => {
         userId: req.user?.sub,
         resolution: req.body.approved_resolution,
         lines: req.body.lines,
-        policy: await getReturnPolicy(tx, req.companyId),
         companyId: req.companyId,
         replacements: req.body.replacements,
       }), { maxWait: 10000, timeout: 15000 })
@@ -744,7 +743,6 @@ exports.approve = async (req, res, next) => {
       userId: req.user?.sub,
       resolution: req.body.approved_resolution,
       lines: req.body.lines,
-      policy: await getReturnPolicy(tx, req.companyId),
       companyId: req.companyId,
       replacements: req.body.replacements,
     }), { maxWait: 10000, timeout: 15000 })

@@ -14,6 +14,7 @@ const {
 
 const approvedReturn = {
   id: 'return-1',
+  return_date: new Date('2026-01-11T12:00:00Z'),
   total_refund: 18,
   status: { name: 'Aprobada' },
   approved_resolution: 'REFUND_CASH',
@@ -21,6 +22,8 @@ const approvedReturn = {
     { id: 11, product_id: 'product-1', qty_returned: 2, refund_amount: 18 },
   ],
   sale: {
+    date: new Date('2026-01-01T12:00:00Z'),
+    status: {name:'Completada'},
     id: 'sale-1',
     branch_id: 'branch-1',
     total: 90,
@@ -120,6 +123,7 @@ test('aprobar conserva la solicitud original y no produce efectos físicos o fin
     requested_resolution: 'REFUND_CASH',
   }
   const tx = {
+    systemSetting: {findUnique:async()=>({value:JSON.stringify({enabledResolutions:['REFUND_TRANSFER']})})},
     $queryRaw: async () => [{ id: row.id }],
     return: {
       findFirst: async () => row,
@@ -133,6 +137,7 @@ test('aprobar conserva la solicitud original y no produce efectos físicos o fin
   }
 
   await approveReturn(tx, {
+    companyId: 'A',
     id: row.id,
     scope: { branch_id: 'branch-1' },
     userId: 'user-1',
@@ -177,6 +182,7 @@ function completionFixture({ failSettlement = false } = {}) {
     settlements: [],
   }
   const tx = {
+    systemSetting: {findUnique:async()=>null},
     $queryRaw: async () => [{ id: approvedReturn.id }],
     $executeRaw:async()=>0,
     companyPaymentMethod:{findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Efectivo',is_credit:false}})},
@@ -256,4 +262,44 @@ test('un fallo al registrar la salida de caja revierte inventario y venta', asyn
   assert.equal(fixture.state.sale.adjusted_total, 90)
   assert.equal(fixture.state.status, 'Aprobada')
   assert.equal(fixture.state.settlements.length, 0)
+})
+
+test('current return policy blocks completion before physical or financial effects',async()=>{
+  for(const configured of [{enabledResolutions:['REFUND_TRANSFER']},{windowDays:5}]) {
+    const f=completionFixture();f.tx.systemSetting.findUnique=async({where})=>{assert.equal(where.company_id_key.company_id,'A');return {value:JSON.stringify(configured)}}
+    await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.status===409 && /política|plazo/i.test(e.message))
+    assert.equal(f.state.stock,0);assert.equal(f.state.sale.adjusted_total,90);assert.equal(f.state.settlements.length,0)
+  }
+})
+test('approval rechecks the latest company policy after locking and before changing the request',async()=>{
+  for(const policy of [{windowDays:5},{enabledResolutions:['REFUND_TRANSFER']},{windowDays:5,allowAuthorizedExceptions:false}]) {
+    let changes=0
+    const row={...approvedReturn,status:{name:'Pendiente'},requested_resolution:'REFUND_CASH'}
+    const tx={$queryRaw:async()=>[],return:{findFirst:async()=>row,update:async()=>{changes++;return row}},systemSetting:{findUnique:async({where})=>{assert.equal(where.company_id_key.company_id,'A');return {value:JSON.stringify(policy)}}},returnStatus:{findFirst:async()=>({id:2})},returnItem:{update:async()=>{changes++}},stockLocation:{findMany:async()=>[]}}
+    await assert.rejects(approveReturn(tx,{id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409)
+    assert.equal(changes,0)
+  }
+})
+test('processing delay does not expire a timely request and completed retries ignore later policy changes',async()=>{
+  const f=completionFixture();await completeReturn(f.client,f.params,f.deps)
+  f.tx.systemSetting.findUnique=async()=>{throw Error('Una liquidación ya confirmada no se revalida')}
+  assert.equal((await completeReturn(f.client,f.params,f.deps))._idempotent,true);assert.equal(f.state.stock,2)
+})
+test('completion never invents an exception authorization or missing request date',async()=>{
+  for(const extra of [{policy_override_reason:'Motivo sin autor'},{policy_overridden_by:'U',policy_overridden_at:new Date(),policy_override_reason:' '},{return_date:null}]) {
+    const f=completionFixture(),read=f.tx.return.findFirst
+    f.tx.return.findFirst=async args=>({...await read(args),...extra})
+    f.tx.systemSetting.findUnique=async()=>({value:JSON.stringify({windowDays:5})})
+    await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.status===409)
+    assert.equal(f.state.stock,0);assert.equal(f.state.settlements.length,0)
+  }
+})
+test('completion honors audited exceptions only while the current policy permits them',async()=>{
+  for(const allowed of [true,false]) {
+    const f=completionFixture(),read=f.tx.return.findFirst
+    f.tx.return.findFirst=async args=>({...await read(args),policy_overridden_by:'U',policy_overridden_at:new Date('2026-01-11T12:00:00Z'),policy_override_reason:'Garantía autorizada'})
+    f.tx.systemSetting.findUnique=async()=>({value:JSON.stringify({windowDays:5,allowAuthorizedExceptions:allowed})})
+    if(allowed) await completeReturn(f.client,f.params,f.deps);else await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.status===409)
+    assert.equal(f.state.stock,allowed?2:0)
+  }
 })

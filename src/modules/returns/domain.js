@@ -118,6 +118,16 @@ function refundFromLine({originalQty,lineNet,qty,returnedQty=0,returnedAmount=0}
   return (requested.eq(available) ? moneyLeft : Prisma.Decimal.min(moneyLeft,new Prisma.Decimal(String(lineNet)).mul(requested).div(original).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP))).toNumber()
 }
 
+function validateReturnPolicyInput(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('returns.policy debe ser un objeto')
+  const days = Number(raw.windowDays)
+  if (!['number', 'string'].includes(typeof raw.windowDays) || !Number.isSafeInteger(days) || days < 1) throw invalid('El plazo de devolución debe ser un entero seguro de al menos 1 día')
+  if (!['CURRENT_PRICE', 'ORIGINAL_SALE_PRICE'].includes(raw.exchangePricing)) throw invalid('El precio para cambios no es válido')
+  if (raw.allowAuthorizedExceptions !== undefined && typeof raw.allowAuthorizedExceptions !== 'boolean') throw invalid('Permitir excepciones debe ser verdadero o falso')
+  if (raw.enabledResolutions !== undefined && (!Array.isArray(raw.enabledResolutions) || !raw.enabledResolutions.length || raw.enabledResolutions.some(value => !RETURN_RESOLUTIONS.includes(value)))) throw invalid('Selecciona al menos una resolución válida para devoluciones')
+  return normalizeReturnPolicy(raw)
+}
+
 function normalizeReturnPolicy(raw) {
   let value = raw
   if (typeof raw === 'string') {
@@ -176,6 +186,7 @@ module.exports = {
   estimateRefundAmount,
   refundFromLine,
   normalizeReturnPolicy,
+  validateReturnPolicyInput,
   normalizeReturnLines,
   returnFiscalStatus,
 }
