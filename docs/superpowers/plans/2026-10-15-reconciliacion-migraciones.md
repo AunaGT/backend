@@ -54,7 +54,7 @@ Frontend `F`: `/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend`.
 
 No construir una plataforma genérica de migraciones. Los nombres, fases y objetos autorizados corresponden a esta reconciliación.
 
-## Tarea 1: inventario reproducible y respaldo verificable
+## Task 1: inventario reproducible y respaldo verificable
 
 **Files:** crear `scripts/migrations/inventory.js`, `scripts/reconcile-migrations.js` inicialmente solo con `capture`/`inspect`, `tests/migrations.inventory.test.js`. Consumir `scripts/salesDevTarget.js`, `src/config/loadEnv.js` y el sanitizador existente de `scripts/sales-drafts-deploy.js`, sin activar su `main`.
 
@@ -124,7 +124,7 @@ git add scripts/migrations/inventory.js scripts/reconcile-migrations.js tests/mi
 git commit -m "feat(migrations): capture verifiable schema and private backup"
 ```
 
-## Tarea 2: SQL fiel, dependencias e aislamiento cerrado
+## Task 2: SQL fiel, dependencias e aislamiento cerrado
 
 **Files:** crear `scripts/migrations/baselineSql.js`, `tests/migrations.baseline-sql.test.js`; ampliar CLI con `prepare` y los manifiestos estructurales de la baseline. Todavía no mover la cadena activa ni tocar el historial remoto.
 
@@ -188,7 +188,7 @@ git add scripts/migrations/baselineSql.js scripts/reconcile-migrations.js tests/
 git commit -m "feat(migrations): compile faithful isolated baseline SQL"
 ```
 
-## Tarea 3: nueva cadena y compatibilidad de consumidores históricos
+## Task 3: nueva cadena y compatibilidad de consumidores históricos
 
 **Files:** crear `scripts/migrationFiles.js`, `tests/migrations.archive.test.js`, baseline/manifiestos y archivo histórico; modificar consumidores directos en `tests/hr.documents.schema.test.js`, `tests/returns.persistence.test.js`, `tests/helpers/appointmentsTestDb.cjs`, `tests/services.migration.e2e.js`, `tests/appointments.commercial-deploy.e2e.js`, `tests/promotions.coupon-concurrency.e2e.js`, `tests/orders.migration.sql`; revisar también `scripts/apply-returns-migration.js`, `scripts/apply-hr-documents-migration.js`, `scripts/appointments-staging.js`, `scripts/coupon-staging.js`, `scripts/sales-drafts-deploy.js`. Repetir búsqueda completa de referencias para no depender solo de esta lista.
 
@@ -233,7 +233,7 @@ rg -n 'prisma/migrations|migration.sql' scripts tests
 Esperado: todas las lecturas antiguas resueltas o bloqueadas con diagnóstico deliberado; pagos conserva su checksum; Prisma válido. No generar todavía el cliente de runtime que asumiría pagos instalados.
 - [ ] **6. Commit de la cadena y sus consumidores.** Añadir explícitamente los archivos de esta tarea, incluidos los movimientos detectados por Git, y revisar `git diff --cached --stat` y `--check` antes de `git commit -m "refactor(migrations): archive legacy chain and adopt audited baseline"`. Nunca usar `git add .` para arrastrar respaldos.
 
-## Tarea 4: ensayo real desde vacío, bootstrap y limpieza
+## Task 4: ensayo real desde vacío, bootstrap y limpieza
 
 **Files:** crear `tests/migrations.baseline.dev.e2e.js`, ampliar `scripts/reconcile-migrations.js` con `rehearse`; ampliar `tests/migrations.baseline-sql.test.js` con guardas locales de ejecución y limpieza.
 
@@ -282,7 +282,7 @@ git add scripts/reconcile-migrations.js tests/migrations.baseline.dev.e2e.js tes
 git commit -m "test(migrations): rehearse baseline safely on current Supabase"
 ```
 
-## Tarea 5: promoción recuperable y revisión antes de escrituras de historial
+## Task 5: promoción recuperable y revisión antes de escrituras de historial
 
 **Files:** crear `scripts/migrations/history.js`, `tests/migrations.history.test.js`; ampliar CLI con `promote-history`, `apply-payments`, `inspect`, `recover-history` y la reanudación; extender el ensayo de tarea4.
 
@@ -354,7 +354,7 @@ git diff --cached --check
 git commit -m "feat(migrations): promote baseline with recoverable audited history"
 ```
 
-## Tarea 6: promoción real, pagos e integración financiera
+## Task 6: promoción real, pagos e integración financiera
 
 **Files:** no añadir otra migración. Usar CLI y pruebas anteriores; actualizar solo el registro de ejecución y las correcciones concretas que una comprobación demuestre necesarias.
 
@@ -398,7 +398,7 @@ El comparador usa las proyecciones originales para `payment_methods`, donde se a
 Esperado: exit0, ningún QA residual, archivo histórico intacto, cambios limitados a los autorizados. No usar este resultado para afirmar que se probó una restauración completa de datos o que Storage/FEL/onboarding funcionan.
 - [ ] **6. Registrar resultado real.** `docs/planning/2026-10-15-reconciliacion-migraciones-verificacion.md` recoge comandos/resultados, fases, hashes no secretos, limpieza y procesos. No versionar rutas privadas con contenido sensible, dumps, recibos completos ni datos de clientes. Si hubo un fallo, describir el punto exacto y mantener el plan sin completar en vez de imprimir éxito.
 
-## Tarea 7: guía, comprobaciones finales y retorno al plan de pagos
+## Task 7: guía, comprobaciones finales y retorno al plan de pagos
 
 **Files:** modificar `B/docs/DEPLOYMENT_AND_MIGRATIONS.md`, registro anterior y `F/docs/planning/2026-10-15-metodos-pago-por-empresa-verificacion.md`.
 
