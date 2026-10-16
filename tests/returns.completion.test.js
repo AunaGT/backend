@@ -303,3 +303,20 @@ test('completion honors audited exceptions only while the current policy permits
     assert.equal(f.state.stock,allowed?2:0)
   }
 })
+
+test('approval and completion decode the stored Guatemala request clock before enforcing the window',async()=>{
+  // The production writer stores Guatemala wall-clock components as UTC.
+  // Actual request: Feb 1 at 12Z (06:00 Guatemala), exactly period 31.
+  const storedDate=new Date('2026-02-01T06:00:00Z')
+  const policy={windowDays:30,allowAuthorizedExceptions:false,enabledResolutions:['REFUND_CASH']}
+  const f=completionFixture(),read=f.tx.return.findFirst
+  f.tx.return.findFirst=async args=>({...await read(args),return_date:storedDate})
+  f.tx.systemSetting.findUnique=async()=>({value:JSON.stringify(policy)})
+  await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.status===409 && /plazo/i.test(e.message))
+  assert.equal(f.state.stock,0);assert.equal(f.state.settlements.length,0)
+  let writes=0
+  const row={...approvedReturn,return_date:storedDate,status:{name:'Pendiente'},requested_resolution:'REFUND_CASH'}
+  const tx={$queryRaw:async()=>[],return:{findFirst:async()=>row,update:async()=>{writes++;return row}},systemSetting:{findUnique:async()=>({value:JSON.stringify(policy)})},returnStatus:{findFirst:async()=>({id:2})},returnItem:{update:async()=>{writes++}},stockLocation:{findMany:async()=>[]}}
+  await assert.rejects(approveReturn(tx,{id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409 && /plazo/i.test(e.message))
+  assert.equal(writes,0)
+})

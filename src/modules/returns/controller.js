@@ -11,7 +11,6 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const {Prisma}=require('@prisma/client')
 const {lineSnapshot}=require('../../services/catalogItemRules')
-const { DateTime } = require('luxon')
 const {
   getAvailabilityBatchWithKits,
 } = require('../../services/bomStock')
@@ -25,6 +24,7 @@ const {
   assertReturnTransition,
   buildReturnWhere,
   evaluateReturnEligibility,
+  returnRequestDateForStorage,
   estimateRefundAmount,
   refundFromLine,
   normalizeReturnLines,
@@ -374,8 +374,10 @@ exports.create = async (req, res, next) => {
 
       const canOverridePolicy = String(req.user?.role?.name || req.user?.role_name || '').toLowerCase() === 'admin' ||
         (Array.isArray(req.user?.permissions) && req.user.permissions.includes('returns.override_policy'))
+      const requestInstant = new Date()
       const policyResult = evaluateReturnEligibility({
         saleDate: sale.date,
+        now: requestInstant,
         statusName: sale.status.name,
         availableUnits: sale.sale_items.filter(item=>availableReturnQty(item.qty,item.return_items.map(row=>({qty_returned:row.qty_returned,status:row.return.status}))).gt(0)).length,
         policy,
@@ -510,18 +512,7 @@ exports.create = async (req, res, next) => {
       }
 
 
-      const nowGt = DateTime.now().setZone('America/Guatemala');
-      const returnDate = DateTime.utc(
-        nowGt.year,
-        nowGt.month,
-        nowGt.day,
-        nowGt.hour,
-        nowGt.minute,
-        nowGt.second,
-        nowGt.millisecond
-      ).toJSDate();
-
-      console.log('[RETURN DATE] Guatemala local time:', nowGt.toFormat('yyyy-MM-dd HH:mm:ss'));
+      const returnDate = returnRequestDateForStorage(requestInstant)
 
       // 4. Crear la devolución
       const returnRecord = await tx.return.create({
@@ -543,7 +534,7 @@ exports.create = async (req, res, next) => {
           ...(policyResult.exceptionApplied && {
             policy_override_reason: String(policy_override_reason).trim(),
             policy_overridden_by: req.user?.sub || null,
-            policy_overridden_at: new Date(),
+            policy_overridden_at: requestInstant,
           })
         }
       })

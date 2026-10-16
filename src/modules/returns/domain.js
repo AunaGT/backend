@@ -1,6 +1,7 @@
 const ACTIVE_RETURN_STATUSES = Object.freeze(['Pendiente', 'Aprobada', 'Completada'])
 const {Prisma}=require('@prisma/client')
 const {commercialQuantity}=require('../../services/catalogItemRules')
+const { DateTime } = require('luxon')
 
 const RETURN_RESOLUTIONS = Object.freeze([
   'REFUND_ORIGINAL',
@@ -159,6 +160,16 @@ function evaluateReturnEligibility({ saleDate, statusName, availableUnits, polic
   return { eligible: reasons.length === 0, daysElapsed, reasons, exceptionApplied }
 }
 
+// return_date conserva históricamente el reloj de Guatemala en componentes UTC.
+// No cambiar esa representación: listados/filtros la consumen así. Para calcular
+// duración frente a sale.date (un instante real), deshacer la codificación.
+function returnRequestDateForStorage(instant) {
+  return DateTime.fromJSDate(instant, { zone: 'America/Guatemala' }).setZone('UTC', { keepLocalTime: true }).toJSDate()
+}
+function returnRequestInstant(storedDate) {
+  return DateTime.fromJSDate(new Date(storedDate), { zone: 'UTC' }).setZone('America/Guatemala', { keepLocalTime: true }).toJSDate()
+}
+
 function returnFiscalStatus(saleDtes) {
   const originalDocuments = (saleDtes || [])
     .filter((dte) => dte.authorization || /autoriz/i.test(String(dte.status || '')))
@@ -183,6 +194,8 @@ module.exports = {
   assertReturnTransition,
   buildReturnWhere,
   evaluateReturnEligibility,
+  returnRequestDateForStorage,
+  returnRequestInstant,
   estimateRefundAmount,
   refundFromLine,
   normalizeReturnPolicy,

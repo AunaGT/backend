@@ -1,5 +1,5 @@
 const { round2 } = require('../../services/accounting/logic')
-const { assertReturnTransition, normalizeReturnPolicy, evaluateReturnEligibility, RETURN_RESOLUTIONS } = require('./domain')
+const { assertReturnTransition, normalizeReturnPolicy, evaluateReturnEligibility, returnRequestInstant, RETURN_RESOLUTIONS } = require('./domain')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, restoreStockMap } = require('../../services/bomStock')
 const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivables/domain/receivables')
@@ -144,7 +144,7 @@ function assertCurrentReturnPolicy(record, policy) {
   const validDate = value => value != null && value !== '' && Number.isFinite(new Date(value).getTime())
   if (!validDate(record.return_date) || !validDate(record.sale?.date)) throw invalid('No se puede validar el plazo: falta una fecha válida de venta o solicitud. Revisa el registro histórico.', 409)
   const result = evaluateReturnEligibility({
-    saleDate: record.sale.date, now: new Date(record.return_date), statusName: record.sale.status?.name,
+    saleDate: record.sale.date, now: returnRequestInstant(record.return_date), statusName: record.sale.status?.name,
     // Estas unidades ya están reservadas por la propia solicitud.
     availableUnits: record.return_items?.some(item => Number(item.qty_returned) > 0) ? 1 : 0,
     policy: normalized,
