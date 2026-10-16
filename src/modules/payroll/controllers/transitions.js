@@ -28,22 +28,20 @@ const { requireCompany, requireBranch } = require('../../../middlewares/tenant')
 const { fail, toUuid } = require('../../hr')
 const { RUN_INCLUDE, TX_OPTIONS } = require('./payroll')
 const { postPayrollRun, postPayrollPayment, reversePayrollRun } = require('../../../services/payroll/posting')
+const {lockPayrollRun}=require('../../../services/payroll/rateVersions')
 
 /** Lee la corrida de la empresa del request o falla con 404. */
 async function loadRun(tx, req) {
   const companyId = requireCompany(req)
   const id = toUuid(req.params.id, 'Planilla no encontrada')
-  const run = await tx.payrollRun.findFirst({
+  const run = await lockPayrollRun(tx,{id,companyId,branchId:requireBranch(req)}, {
     // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
     // sucursal es aparte (UserBranch), así que sin esto alguien reasignado a otra
     // sucursal podría confirmar, pagar o anular planillas de la anterior.
-    where: { id, company_id: companyId, branch_id: requireBranch(req) },
     // employee: lo usa el 422 de postPayrollRun para nombrar a quién revisarle los anticipos.
-    include: {
       payslips: {
         include: { lines: true, employee: { select: { first_name: true, last_name: true } } },
       },
-    },
   })
   if (!run) fail(404, 'Planilla no encontrada')
   return run

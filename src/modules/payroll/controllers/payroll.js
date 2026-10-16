@@ -17,7 +17,7 @@
 const { prisma, prismaTransaction } = require('../../../models/prisma')
 const { requireCompany, requireBranch, targetBranch, branchWhere } = require('../../../middlewares/tenant')
 const { fail, toDate, trim, toEnum, toUuid } = require('../../hr')
-const { getPayrollRates } = require('../../../services/payroll/rates')
+const { resolvePayrollRates, ratesForRun, snapshotOf, lockPayrollRun, lockRates } = require('../../../services/payroll/rateVersions')
 const { buildPayslip } = require('../../../services/payroll/build')
 const { round2 } = require('../../../services/payroll/calc')
 
@@ -113,9 +113,8 @@ async function ytdTotals(tx, run, employeeIds) {
  * `{ [employee_id]: horasExtra }` y pisa lo sugerido por la asistencia.
  */
 async function generatePayslips(tx, run, overrides = {}) {
+  const rates = ratesForRun(run)
   await tx.payslip.deleteMany({ where: { run_id: run.id } }) // las líneas caen en cascada
-
-  const rates = await getPayrollRates(tx, run.company_id)
 
   const employees = await tx.employee.findMany({
     where: {
@@ -297,6 +296,8 @@ exports.create = async (req, res, next) => {
 
     const created = await prismaTransaction.$transaction(async (tx) => {
       const code = await nextRunCode(tx, companyId, payDate)
+      await lockRates(tx,companyId)
+      const resolved=await resolvePayrollRates(tx,companyId,payDate)
       const run = await tx.payrollRun.create({
         data: {
           company_id: companyId,
@@ -309,6 +310,8 @@ exports.create = async (req, res, next) => {
           pay_date: payDate,
           notes: trim(b.notes, 1000),
           created_by: req.user?.sub || null,
+          rates_snapshot: snapshotOf(resolved),
+          rate_version_id: resolved.versionId,
         },
       })
 
@@ -330,9 +333,7 @@ exports.recalculate = async (req, res, next) => {
     const updated = await prismaTransaction.$transaction(async (tx) => {
       // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
       // sucursal es aparte (UserBranch).
-      const run = await tx.payrollRun.findFirst({
-        where: { id, company_id: companyId, branch_id: requireBranch(req) },
-      })
+      const run = await lockPayrollRun(tx,{id,companyId,branchId:requireBranch(req)})
       if (!run) fail(404, 'Planilla no encontrada')
       if (run.status !== 'BORRADOR') fail(409, 'Solo se puede recalcular una planilla en borrador')
       await generatePayslips(tx, run, overrides)
@@ -341,6 +342,34 @@ exports.recalculate = async (req, res, next) => {
 
     res.json(updated)
   } catch (e) { next(e) }
+}
+
+/** Explicit adoption checks the preview's version AND values under the same lock. */
+exports.previewRates=async(req,res,next)=>{try{
+  const companyId=requireCompany(req),branchId=requireBranch(req),id=toUuid(req.params.id,'Planilla no encontrada')
+  const run=await prisma.payrollRun.findFirst({where:{id,company_id:companyId,branch_id:branchId}})
+  if(!run)fail(404,'Planilla no encontrada')
+  if(run.status!=='BORRADOR')fail(409,'Solo un borrador puede adoptar parámetros nuevos')
+  res.json(await resolvePayrollRates(prisma,companyId,run.pay_date))
+}catch(e){next(e)}}
+exports.adoptRates=async(req,res,next)=>{
+  try{
+    if(req.body?.confirmed!==true)fail(400,'Confirma el cambio de parámetros del borrador')
+    const companyId=requireCompany(req),branchId=requireBranch(req),id=toUuid(req.params.id,'Planilla no encontrada')
+    const updated=await prismaTransaction.$transaction(async tx=>{
+      const run=await lockPayrollRun(tx,{id,companyId,branchId})
+      if(run.status!=='BORRADOR')fail(409,'Solo un borrador puede adoptar parámetros nuevos')
+      await lockRates(tx,companyId)
+      const resolved=await resolvePayrollRates(tx,companyId,run.pay_date)
+      const {validatePayrollRates}=require('../../../services/payroll/rateVersions')
+      const expected=validatePayrollRates(req.body.expectedRates)
+      if(req.body.expectedVersionId!==resolved.versionId||JSON.stringify(expected)!==JSON.stringify(resolved.rates))fail(409,'Los parámetros cambiaron. Revisa la comparación otra vez')
+      const nextRun=await tx.payrollRun.update({where:{id},data:{rates_snapshot:snapshotOf(resolved),rate_version_id:resolved.versionId}})
+      await generatePayslips(tx,nextRun,req.body.overtime||{})
+      return tx.payrollRun.findUnique({where:{id},include:RUN_INCLUDE})
+    },TX_OPTIONS)
+    res.json(updated)
+  }catch(e){next(e)}
 }
 
 /** DELETE /api/payroll/runs/:id — solo en BORRADOR */

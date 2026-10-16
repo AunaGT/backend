@@ -36,7 +36,7 @@ const DEFAULT_RATES = {
 /**
  * Lee `payroll.rates` de SystemSetting y lo mezcla con los defaults. Una clave
  * ausente, no numérica o negativa se ignora: es preferible calcular con el
- * default legal que reventar la planilla por un JSON mal editado.
+ * valor inicial compatible que reventar la planilla por un JSON mal editado.
  */
 async function getPayrollRates(db, companyId) {
   const row = await db.systemSetting.findUnique({

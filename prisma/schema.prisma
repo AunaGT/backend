@@ -429,6 +429,7 @@ model Company {
   attendance         Attendance[]
   employee_advances  EmployeeAdvance[]
   payroll_runs       PayrollRun[]
+  payroll_rate_versions PayrollRateVersion[]
   company_modules    CompanyModule[]
   service_schedule_profiles ServiceScheduleProfile[]
   service_providers ServiceProvider[]
@@ -2895,6 +2896,9 @@ model PayrollRun {
   period_end          DateTime      @db.Date
   pay_date            DateTime      @db.Date
   status              PayrollStatus @default(BORRADOR)
+  rates_snapshot      Json?
+  rate_version_id     String?       @db.Uuid
+  rate_version        PayrollRateVersion? @relation(fields: [rate_version_id], references: [id], onDelete: Restrict)
   total_earnings      Decimal       @default(0) @db.Decimal(14, 2)
   total_deductions    Decimal       @default(0) @db.Decimal(14, 2)
   total_net           Decimal       @default(0) @db.Decimal(14, 2)
@@ -2918,6 +2922,24 @@ model PayrollRun {
   @@index([branch_id, status])
   @@index([company_id, pay_date])
   @@map("payroll_runs")
+}
+
+model PayrollRateVersion {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  effective_from DateTime? @db.Date
+  is_baseline Boolean @default(false)
+  rates Json
+  reason String @db.Text
+  created_by String? @db.Uuid
+  created_at DateTime @default(now())
+  cancelled_at DateTime?
+  cancelled_by String? @db.Uuid
+  cancel_reason String? @db.Text
+  runs PayrollRun[]
+  @@index([company_id, effective_from])
+  @@map("payroll_rate_versions")
 }
 
 /// Recibo de un empleado en una corrida. Congela el cálculo: subirle el sueldo
