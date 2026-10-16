@@ -67,6 +67,19 @@ El manifiesto de la baseline enumera las definiciones SQL que Prisma no expresa 
 
 La baseline conserva el catálogo de sistema Borrador; pagos inicializa los cuatro medios básicos y preferencias por empresa. **No ejecutar la semilla general sobre datos existentes:** contiene limpieza de categorías, cambios de caja y una credencial administrativa heredada. Este despliegue no certifica el onboarding general de una instancia nueva; tampoco Storage, FEL ni integraciones externas.
 
+## Configuración: revisiones, auditoría y vigencias de nómina (16-10-2026)
+
+Después de la baseline y medios de pago, la cadena incluye `20261016160000_setting_revisions_audit` y `20261016170000_payroll_rate_versions`. Son aditivas: no reconstruyen auditoría ni tasas históricas. Aplicar ambas con `migrate:deploy`, generar Prisma y reiniciar el backend antes de usar sus endpoints. Se aplicaron a la Supabase de desarrollo autorizada; no constituye un despliegue a producción.
+
+- Los escritores de ajustes ahora exigen la revisión que leyó el cliente (`expectedRevisions`; logo/cuentas usan revisión individual). Una clave ausente tiene revisión 0; 409 exige revisar/recargar, nunca reintentar automáticamente. El trigger mantiene revisiones y eventos de claves permitidas incluso desde otros escritores. Valores desconocidos/secretos no se auditan.
+- El historial y las versiones usan tablas privadas con RLS/ACL cerradas a clientes Supabase. La API autorizada usa la conexión PostgreSQL de backend; no conceder acceso al navegador ni añadirlas a Realtime.
+- Vencimientos guarda `inventory.expiry_alert_policy` por empresa (30/7 si está ausente). La semilla empresarial idempotente añade únicamente claves faltantes y conserva políticas personalizadas. No ejecutar la semilla general para rellenar esta política.
+- Nómina selecciona por fecha de pago, congela copia al crear y conserva esa copia al recalcular. Confirmadas/pagadas no adoptan tasas nuevas; corridas antiguas sin copia conservan recibos y no se presentan como si usaran las tasas actuales. Solo borradores pueden adoptar explícitamente.
+- Publicación/cancelación requiere `settings.manage` y `payroll.confirm`; lectura requiere Configuración y `payroll.view`, además del módulo activo. La adopción usa `payroll.create`. No se conceden permisos automáticamente.
+- Los índices parciales `payroll_rates_active_date` y `payroll_rates_one_baseline` complementan el bloqueo transaccional. Prisma no representa sus predicados: no eliminarlos como supuesto drift.
+
+Pruebas opt-in contra la misma base de desarrollo: `node --test tests/settings.revision.e2e.js tests/payroll.rate-versions.e2e.js tests/expiry.policy.e2e.js`. Crean registros con UUID propios y los eliminan por esos identificadores; no crean otra instancia, no activan módulos ni conceden accesos. No ejecutarlas en producción. La semilla general y el onboarding de una instancia nueva siguen sujetos a la advertencia anterior.
+
 ## Fotos de contactos (esquema aplicado en staging)
 
 La migración `20261008120000_contact_images` añade únicamente la columna nullable
