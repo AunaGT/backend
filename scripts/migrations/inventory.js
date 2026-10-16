@@ -19,7 +19,7 @@ const queries={
   policies:`SELECT tablename AS table,policyname AS name,permissive,roles,cmd,qual,with_check FROM pg_policies WHERE schemaname=$1 ORDER BY tablename,policyname`,
   grants:`SELECT c.relname AS name,c.relkind::text AS kind,CASE WHEN x.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END AS grantee,x.privilege_type,x.is_grantable FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl,acldefault(CASE WHEN c.relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,c.relowner))) x WHERE n.nspname=$1 AND c.relkind IN ('r','p','S') AND c.relname NOT LIKE '_prisma_migrations%' ORDER BY c.relname,grantee,x.privilege_type`,
   functionGrants:`SELECT p.proname AS name,pg_get_function_identity_arguments(p.oid) AS args,CASE WHEN x.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END AS grantee,x.privilege_type,x.is_grantable FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f'::"char",p.proowner))) x WHERE n.nspname=$1 AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.objid=p.oid AND d.deptype='e') ORDER BY p.proname,grantee,x.privilege_type`,
-  publications:`SELECT pubname,tablename AS table,attnames,rowfilter FROM pg_publication_tables WHERE schemaname=$1 ORDER BY pubname,tablename`,
+  publications:`SELECT v.pubname,v.tablename AS table,v.attnames,v.rowfilter,(r.prattrs IS NOT NULL) AS explicit_columns,p.puballtables AS all_tables FROM pg_publication_tables v JOIN pg_publication p ON p.pubname=v.pubname JOIN pg_namespace n ON n.nspname=v.schemaname JOIN pg_class c ON c.relnamespace=n.oid AND c.relname=v.tablename LEFT JOIN pg_publication_rel r ON r.prpubid=p.oid AND r.prrelid=c.oid WHERE v.schemaname=$1 ORDER BY v.pubname,v.tablename`,
   extensions:`SELECT e.extname AS name,e.extversion AS version,n.nspname AS schema FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE $1::text IS NOT NULL ORDER BY e.extname`,
   extensionObjects:`SELECT n.nspname AS schema,c.opcname AS name,'opclass'::text AS kind FROM pg_opclass c JOIN pg_namespace n ON n.oid=c.opcnamespace JOIN pg_depend d ON d.objid=c.oid AND d.classid='pg_opclass'::regclass AND d.deptype='e' WHERE $1::text IS NOT NULL ORDER BY n.nspname,c.opcname`,
 }
@@ -30,6 +30,8 @@ async function captureInventory(db,schema){
 }
 function compareInventory(actual,expected,{sourceSchema='public',targetSchema='public',exclude=[]}={}){
   const normalize=(value,schema,kind)=>{
+    // Array order preserves logical order; physical attnum holes do not survive a rebuild.
+    if(kind==='columns'&&Array.isArray(value))value=value.map(({position,...column})=>column)
     let text=JSON.stringify(canonical(value))
     if(!['extensions','extensionObjects'].includes(kind)){
       const protectedNames=expected.extensionObjects||[]

@@ -77,7 +77,14 @@ async function main(){
       const r=readReceipt(receiptPath),listing=await child('pg_restore',['--list',r.backup.file])
       verifyReceipt(r,connectionIdentity(url),()=>listing)
       console.log(JSON.stringify({backupVerified:true,identity:r.identity,tables:r.inventory.tables.length,pendingAtCapture:r.pending}))
-    }else throw Error('Choose capture or inspect')
+    }else if(mode==='prepare'){
+      const r=readReceipt(receiptPath),listing=await child('pg_restore',['--list',r.backup.file]);verifyReceipt(r,connectionIdentity(url),()=>listing)
+      const dump=fs.readFileSync(r.schemaFile,'utf8');if(hash(dump)!==r.schemaChecksum)throw Error('Source schema checksum mismatch')
+      const candidate=require('./migrations/baselineSql').compileBaseline(dump,r.inventory)
+      const dir=path.dirname(receiptPath),sqlFile=path.join(dir,'baseline.sql'),manifestFile=path.join(dir,'candidate.json')
+      savePrivate(sqlFile,candidate.sql);savePrivate(manifestFile,{sourceReceiptHash:hash(fs.readFileSync(receiptPath)),sqlFile,checksum:candidate.checksum,inventory:r.inventory})
+      console.log(JSON.stringify({candidate:manifestFile,bytes:Buffer.byteLength(candidate.sql),checksum:candidate.checksum}))
+    }else throw Error('Choose capture, prepare or inspect')
   }finally{await db.$disconnect()}
 }
 if(require.main===module)main().catch(e=>{console.error(sanitizeDiagnostic(e.message));process.exitCode=1})

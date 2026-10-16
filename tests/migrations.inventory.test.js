@@ -13,6 +13,12 @@ test('fingerprints preserve amount changes but ignore row and property ordering'
   assert.notEqual(fingerprintRows([{id:'R',amount:'10.00'}]),fingerprintRows([{id:'R',amount:'11.00'}]))
   assert.equal(fingerprintRows([{id:'B',amount:'1'},{id:'A',amount:'2'}]),fingerprintRows([{amount:'2',id:'A'},{amount:'1',id:'B'}]))
 })
+test('physical dropped-column holes do not alter logical column order equivalence',()=>{
+  const source={columns:[{table:'sales',name:'id',position:1},{table:'sales',name:'total',position:3}]}
+  const rebuilt={columns:[{table:'sales',name:'id',position:1},{table:'sales',name:'total',position:2}]}
+  assert.deepEqual(compareInventory(rebuilt,source),[])
+  assert.notDeepEqual(compareInventory({columns:[...rebuilt.columns].reverse()},source),[])
+})
 test('sequence metadata is exposed as serializable text to the Prisma boundary',async()=>{
   const db={$queryRawUnsafe:async sql=>{
     if(!sql.includes('FROM pg_sequences'))return[]
