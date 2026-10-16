@@ -121,8 +121,9 @@ function refundFromLine({originalQty,lineNet,qty,returnedQty=0,returnedAmount=0}
 
 function validateReturnPolicyInput(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('returns.policy debe ser un objeto')
+  if (!['number', 'string'].includes(typeof raw.windowDays)) throw invalid('El plazo de devolución debe ser un entero seguro de al menos 1 día')
   const days = Number(raw.windowDays)
-  if (!['number', 'string'].includes(typeof raw.windowDays) || !Number.isSafeInteger(days) || days < 1) throw invalid('El plazo de devolución debe ser un entero seguro de al menos 1 día')
+  if (!Number.isSafeInteger(days) || days < 1) throw invalid('El plazo de devolución debe ser un entero seguro de al menos 1 día')
   if (!['CURRENT_PRICE', 'ORIGINAL_SALE_PRICE'].includes(raw.exchangePricing)) throw invalid('El precio para cambios no es válido')
   if (raw.allowAuthorizedExceptions !== undefined && typeof raw.allowAuthorizedExceptions !== 'boolean') throw invalid('Permitir excepciones debe ser verdadero o falso')
   if (raw.enabledResolutions !== undefined && (!Array.isArray(raw.enabledResolutions) || !raw.enabledResolutions.length || raw.enabledResolutions.some(value => !RETURN_RESOLUTIONS.includes(value)))) throw invalid('Selecciona al menos una resolución válida para devoluciones')

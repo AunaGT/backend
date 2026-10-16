@@ -36,6 +36,17 @@ test('return policy persists one canonical JSON value only for the resolved comp
   })
   assert.equal(writes.length,1);assert.equal(writes[0].type,'json');assert.equal(writes[0].company_id,'A');assert.deepEqual(rows[0],other)
 })
+test('JSON-shaped objects that cannot convert to a number return 400 without opening a transaction',async()=>{
+  let transactions=0
+  const db={$transaction:async()=>{transactions++;throw Error('No debe abrir una transacción')}}
+  await withMocks({[model]:{prisma:db,prismaTransaction:db}},target,async controller=>{
+    const res=jsonResponse();let error
+    await controller.update({companyId:'A',body:{settings:{'returns.policy':{...policy,windowDays:{toString:null,valueOf:null}}}}},res,e=>{error=e})
+    assert.equal(error,undefined)
+    assert.equal(res.statusCode,400)
+  })
+  assert.equal(transactions,0)
+})
 test('legacy PATCH optional policy fields retain their compatible effective defaults', async () => {
   const {db}=fixture()
   await withMocks({[model]:{prisma:db,prismaTransaction:db}},target,async controller=>{
