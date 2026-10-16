@@ -100,5 +100,5 @@ async function main(){
     }else throw Error('Choose capture, prepare, rehearse or inspect')
   }finally{await db.$disconnect()}
 }
-if(require.main===module)main().catch(e=>{console.error(sanitizeDiagnostic(e.message));process.exitCode=1})
 module.exports={verifyReceipt,assertTarget,postgresEnv,child,savePrivate,readReceipt,capture,localMigrations,main}
+if(require.main===module)main().catch(e=>{console.error(sanitizeDiagnostic(e.message));process.exitCode=1})

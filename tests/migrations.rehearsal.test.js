@@ -32,3 +32,10 @@ test('registered recovery metadata includes its PostgreSQL row-array types for e
   assert.ok(names.includes('__auna_attempt_abc'))
   assert.ok(!names.includes('unexpected'))
 })
+test('real CLI initializes its exports before delegated modes validate their receipt',()=>{
+  const {spawnSync}=require('node:child_process'),path=require('node:path')
+  const url='postgresql://test:test@127.0.0.1:5432/absent?schema=public'
+  const result=spawnSync(process.execPath,[path.join(__dirname,'../scripts/reconcile-migrations.js'),'rehearse','--receipt','relative.json'],{env:{...process.env,AUNA_BASELINE_DEV:'1',DIRECT_URL:url,DATABASE_URL:url},encoding:'utf8',timeout:5000})
+  assert.equal(result.status,1)
+  assert.match(result.stderr,/Absolute private receipt required/)
+})
