@@ -28,6 +28,7 @@ for (const failModules of [false, true]) {
         return { id: model === 'company' ? 'company-a' : model === 'account' ? `account-${data.code}` : 'branch-a', ...data }
       }
       const tx = {
+        $queryRaw:async()=>{query('settingsActor',null);return[]},
         paymentMethod: { findMany: async () => [1,2,3,4].map(id=>({id})) },
         companyPaymentMethod: { createMany: async ({data}) => query('paymentPreferences',data) },
         company: { create: async ({ data }) => query('company', data) },
@@ -35,6 +36,8 @@ for (const failModules of [false, true]) {
         userCompany: { create: async ({ data }) => query('userCompany', data) },
         userBranch: { create: async ({ data }) => query('userBranch', data) },
         systemSetting: {
+          create:async({data})=>({...query('systemSetting',data),revision:1}),
+          findMany:async()=>pending.filter(row=>row.model==='systemSetting').map(row=>({...row.data,revision:1})),
           upsert: async ({ create }) => query('systemSetting', create),
           createMany: async ({ data }) => query('settings', data),
           findUnique: async () => { query('readSettings', null); return null },

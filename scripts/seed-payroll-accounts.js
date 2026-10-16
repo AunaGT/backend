@@ -10,13 +10,13 @@
 
 // El .env no se carga solo cuando esto corre con `node` (index.js sí lo hace).
 require('dotenv/config')
-const { prisma } = require('../src/models/prisma')
+const { prisma,prismaTransaction } = require('../src/models/prisma')
 const { seedChartOfAccounts } = require('../src/services/accounting/seedChartOfAccounts')
 
 async function main() {
   const companies = await prisma.company.findMany({ select: { id: true, name: true } })
   for (const company of companies) {
-    await seedChartOfAccounts(prisma, company.id)
+    await prismaTransaction.$transaction(tx=>seedChartOfAccounts(tx, company.id),{maxWait:15000,timeout:30000})
     console.log(`  Cuentas actualizadas: ${company.name}`)
   }
   console.log(`${companies.length} empresa(s) procesada(s)`)
@@ -24,4 +24,4 @@ async function main() {
 
 main()
   .catch((e) => { console.error(e); process.exit(1) })
-  .finally(() => prisma.$disconnect())
+  .finally(async() => {await prisma.$disconnect();if(prismaTransaction!==prisma)await prismaTransaction.$disconnect()})

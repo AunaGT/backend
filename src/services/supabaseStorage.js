@@ -29,13 +29,15 @@ function storagePathFromPublicUrl(publicUrl, bucket) {
 }
 
 async function removePublicObject(publicUrl, bucket) {
-  if (!publicUrl || !supabase) return
-  const path = storagePathFromPublicUrl(publicUrl, bucket)
-  if (!path) return
+  if (!publicUrl) return true
+  if (!supabase) return false
   try {
-    await supabase.storage.from(bucket).remove([path])
+    const path = storagePathFromPublicUrl(publicUrl, bucket)
+    if (!path) return true // Not an object owned by this bucket; nothing to delete.
+    const {error}=await supabase.storage.from(bucket).remove([path])
+    return !error
   } catch {
-    /* no bloquear si el archivo ya no existe */
+    return false // Advisory cleanup must report failure without undoing a committed reference.
   }
 }
 

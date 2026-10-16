@@ -69,7 +69,7 @@ exports.create = async (req, res, next) => {
       await seedCompanySettings(tx, company.id, company)
       await seedCompanyPaymentMethods(tx, company.id)
       // Nace con catálogo de cuentas y mapeo por defecto: sin esto no puede contabilizar nada
-      await seedChartOfAccounts(tx, company.id)
+      await seedChartOfAccounts(tx, company.id,{actorId:req.user?.sub})
       // Compatibilidad inicial: las empresas nuevas reciben el catálogo modular
       // completo. Luego un administrador comercial puede suspender módulos.
       await seedCompanyModules(tx, company.id)

@@ -6,8 +6,12 @@ const GENERAL_SETTING_KEYS=Object.freeze([
   'default_experience_profile','sales_allow_credit','sales_show_fiscal_fields','sales_show_channels','inventory_services_enabled','returns.policy',
   'inventory.expiry_alert_policy',
 ])
-function historyKeys(user){return [...GENERAL_SETTING_KEYS,
-  ...(hasPerm(user,'accounting.view')?['accounting.defaultAccounts']:[]),
-  ...(hasPerm(user,'products.view')?['inventory.barcode_label_layout','inventory.shelf_price_label_layout']:[]),
-]}
+async function historyKeys(user,companyId){
+  const {getCompanyModuleBlock}=require('../platform/service')
+  const [accounting,inventory]=await Promise.all([
+    hasPerm(user,'accounting.view')?getCompanyModuleBlock(companyId,'accounting'):true,
+    hasPerm(user,'products.view')?getCompanyModuleBlock(companyId,'inventory'):true,
+  ])
+  return [...GENERAL_SETTING_KEYS,...(!accounting?['accounting.defaultAccounts']:[]),...(!inventory?['inventory.barcode_label_layout','inventory.shelf_price_label_layout']:[])]
+}
 module.exports={GENERAL_SETTING_KEYS,historyKeys}

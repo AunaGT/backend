@@ -411,7 +411,7 @@ exports.history=async(req,res,next)=>{
   try{
     const page=Number(req.query?.page||1),pageSize=Number(req.query?.pageSize||10)
     if(!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({message:'La página del historial no es válida.'})
-    const allowed=historyKeys(req.user),requested=req.query?.keys?String(req.query.keys).split(','):allowed
+    const allowed=await historyKeys(req.user,req.companyId),requested=req.query?.keys?String(req.query.keys).split(','):allowed
     const keys=requested.filter(key=>allowed.includes(key)),where={company_id:req.companyId,key:{in:keys}}
     const [totalItems,items]=await Promise.all([prisma.settingAuditEvent.count({where}),prisma.settingAuditEvent.findMany({where,orderBy:[{created_at:'desc'},{id:'desc'}],skip:(page-1)*pageSize,take:pageSize})])
     const actorIds=[...new Set(items.map(item=>item.actor_id).filter(Boolean))]

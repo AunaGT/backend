@@ -76,7 +76,7 @@ const DEFAULT_ACCOUNT_CODES = {
 }
 
 /** Crea el catálogo de cuentas y el mapeo por defecto de una empresa; nunca pisa cuentas ya remapeadas. */
-async function seedChartOfAccounts(tx, companyId) {
+async function seedChartOfAccounts(tx, companyId, {actorId=null}={}) {
   const accountIdByCode = {}
   for (const acc of ACCOUNTS_SEED) {
     const created = await tx.account.upsert({
@@ -102,17 +102,9 @@ async function seedChartOfAccounts(tx, companyId) {
   if (existingDefaults) {
     try { mergedDefaults = { ...DEFAULT_ACCOUNT_CODES, ...JSON.parse(existingDefaults.value) } } catch { /* JSON corrupto: se restaura el default */ }
   }
-  await tx.systemSetting.upsert({
-    where: { company_id_key: { company_id: companyId, key: 'accounting.defaultAccounts' } },
-    update: { value: JSON.stringify(mergedDefaults) },
-    create: {
-      company_id: companyId,
-      key: 'accounting.defaultAccounts',
-      type: 'json',
-      description: 'Mapeo de cuentas por defecto para asientos automáticos',
-      value: JSON.stringify(mergedDefaults),
-    },
-  })
+  const {setSettingsActor,writeSettings}=require('../settingsRevision')
+  await setSettingsActor(tx,{actorId,source:'accounting-seed'})
+  await writeSettings(tx,{companyId,changes:{'accounting.defaultAccounts':{value:JSON.stringify(mergedDefaults),type:'json'}},expectedRevisions:{'accounting.defaultAccounts':existingDefaults?existingDefaults.revision:0}})
 }
 
 module.exports = { seedChartOfAccounts, ACCOUNTS_SEED, DEFAULT_ACCOUNT_CODES }

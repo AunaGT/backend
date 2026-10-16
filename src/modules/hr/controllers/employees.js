@@ -224,7 +224,7 @@ exports.create = async (req, res, next) => {
       contract_type: b.contract_type ? toEnum(b.contract_type, CONTRACT_TYPES, 'El tipo de contrato no es válido') : undefined,
       pay_frequency: b.pay_frequency ? toEnum(b.pay_frequency, PAY_FREQUENCIES, 'La frecuencia de pago no es válida') : undefined,
       base_salary: toMoney(b.base_salary, 'El sueldo base', { required: true }),
-      bonificacion_incentivo: toMoney(b.bonificacion_incentivo, 'La bonificación incentivo') ?? (await require('../../../services/payroll/rateVersions').resolvePayrollRates(prisma,companyId,new Date())).rates.bonificacionIncentivo,
+      bonificacion_incentivo: toMoney(b.bonificacion_incentivo, 'La bonificación incentivo') ?? (await require('../../../services/payroll/rateVersions').resolvePayrollRates(prisma,companyId,DateTime.now().setZone('America/Guatemala').toISODate())).rates.bonificacionIncentivo,
       payment_method: b.payment_method ? toEnum(b.payment_method, PAYMENT_METHODS, 'La forma de pago no es válida') : undefined,
       bank_name: trim(b.bank_name, 100),
       bank_account: trim(b.bank_account, 50),
