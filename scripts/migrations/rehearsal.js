@@ -71,7 +71,9 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
   cli.savePrivate(path.join(dir,'migrations','migration_lock.toml'),'provider = "postgresql"\n')
   const db=open?await open(url):new (require('@prisma/client').PrismaClient)({datasources:{db:{url}}})
   const attempt='_auna_attempt_'+r.runId.replaceAll('-','')
-  const run={schema,allowed:allowedObjects(r.inventory,a.paymentSql,['_prisma_migrations_original',attempt,'_prisma_migrations_pkey1','_prisma_migrations_pkey2','_qa_unexpected']),sourceReceiptHash:hash(fs.readFileSync(receiptPath)),baselineChecksum:a.manifest.checksum,paymentChecksum:hash(a.paymentSql),installation:false,historyRecovery:false,qaCleaned:false}
+  const auditSchema='auna_baseline_qa_'+randomUUID().replaceAll('-','')
+  const historyObjects=['_prisma_migrations_original','_prisma_migrations_pkey',attempt,attempt+'_pkey',attempt+'_1',attempt+'_1_pkey']
+  const run={schema,auditSchema,allowed:allowedObjects(r.inventory,a.paymentSql,[...historyObjects,'_qa_unexpected']),sourceReceiptHash:hash(fs.readFileSync(receiptPath)),baselineChecksum:a.manifest.checksum,paymentChecksum:hash(a.paymentSql),installation:false,historyRecovery:false,qaCleaned:false}
   let created=false
   const deploy=()=>cli.child(process.execPath,[require.resolve('prisma/build/index.js'),'migrate','deploy','--schema',path.join(dir,'schema.prisma')],privateEnv)
   try{
@@ -93,7 +95,7 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
       if(compareInventory(stripHistory(current),actual,{sourceSchema:schema,targetSchema:schema,exclude:['grants','functionGrants','publications']}).length||JSON.stringify(await captureRows(db,schema,qaProjections))!==JSON.stringify(qaRows))fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
     }
     const historyReceipt=await require('../../tests/helpers/rehearseMigrationHistory.cjs').rehearseMigrationHistory(db,{
-      schema,runId:r.runId,baselineChecksum:hash(baselineSql),paymentChecksum:hash(paymentSql),url,verifyBusiness:verifyQa,
+      schema,auditSchema,runId:r.runId,baselineChecksum:hash(baselineSql),paymentChecksum:hash(paymentSql),url,verifyBusiness:verifyQa,
       resolve:signal=>cli.child(process.execPath,[require.resolve('prisma/build/index.js'),'migrate','resolve','--applied',baseline,'--schema',path.join(dir,'schema.prisma')],privateEnv,{signal}),
     })
     fs.mkdirSync(path.join(dir,'migrations',payment))
@@ -118,7 +120,15 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
     run.installation=true
   }catch(error){run.failure={code:error.code,message:error.message};throw error}
   finally{
-    try{if(created){await cleanupRehearsal(db,run);run.qaCleaned=true}}
+    try{if(created){
+      const audit=await require('./history').auditStatus(db,{qaSchema:schema,qaAuditSchema:auditSchema,runId:r.runId})
+      if(audit){
+        if(!audit.owned||!audit.restricted||audit.marker!=='auna:baseline:20261015:'+r.runId)fail('BASELINE_QA_CLEANUP_REFUSED')
+        run.auditOid=audit.oid
+        await cleanupRehearsal(db,{schema:auditSchema,oid:audit.oid,allowed:[...historyObjects,...historyObjects.map(n=>'_'+n)]})
+      }
+      await cleanupRehearsal(db,run);run.qaCleaned=true
+    }}
     catch(error){run.cleanupFailure={code:error.code,message:error.message};throw error}
     finally{try{cli.savePrivate(path.join(dir,'result.json'),run)}finally{await db.$disconnect()}}
   }

@@ -1,10 +1,10 @@
 const assert=require('node:assert/strict')
 const {fingerprintRows,identifier}=require('../../scripts/migrations/inventory')
 const history=require('../../scripts/migrations/history')
-async function rehearseMigrationHistory(db,{schema,runId,baselineChecksum,paymentChecksum,resolve,verifyBusiness,url}){
+async function rehearseMigrationHistory(db,{schema,auditSchema,runId,baselineChecksum,paymentChecksum,resolve,verifyBusiness,url}){
   const [row]=await db.$queryRawUnsafe('SELECT oid::text AS oid FROM pg_class WHERE relnamespace=$1::regnamespace AND relname=$2',schema,'_prisma_migrations')
   const rows=await db.$queryRawUnsafe(`SELECT row_to_json(h)::text AS row FROM ${identifier(schema)}._prisma_migrations h ORDER BY id`)
-  const r={qaSchema:schema,runId,historyOid:row.oid,historyHash:fingerprintRows(rows.map(r=>r.row)),baselineChecksum,paymentChecksum}
+  const r={qaSchema:schema,qaAuditSchema:auditSchema,runId,historyOid:row.oid,historyHash:fingerprintRows(rows.map(r=>r.row)),baselineChecksum,paymentChecksum}
   const {PrismaClient}=require('@prisma/client'),gateDb=new PrismaClient({datasources:{db:{url}}})
   try{
     await history.withMigrationGate(gateDb,async gate=>{
@@ -17,6 +17,11 @@ async function rehearseMigrationHistory(db,{schema,runId,baselineChecksum,paymen
       await gate.check();await history.archiveHistory(db,r)
       assert.equal(await history.inspectHistory(db,r),'ARCHIVED')
       await history.archiveHistory(db,r)
+      await history.recoverHistory(db,r,{verifyBusiness})
+      assert.equal(await history.inspectHistory(db,r),'CAPTURED')
+      await history.archiveHistory(db,r)
+      await gate.check();await resolve(gate.signal)
+      assert.equal(await history.inspectHistory(db,r),'BASELINED')
       await history.recoverHistory(db,r,{verifyBusiness})
       assert.equal(await history.inspectHistory(db,r),'CAPTURED')
       await history.archiveHistory(db,r)

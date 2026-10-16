@@ -43,10 +43,31 @@ test('transaction-bound gate aborts work on lost heartbeat and releases on exit'
   assert.equal(released,true)
 })
 test('uncoordinated peer sessions are refused even when their query starts with SELECT',async()=>{
-  await assert.rejects(assertNoWriters({$queryRawUnsafe:async()=>[{pid:99,query:'SELECT mutating_function()',state:'active'}]},42),{code:'BASELINE_WRITER_DETECTED'})
+  await assert.rejects(assertNoWriters({$queryRawUnsafe:async sql=>sql.includes('pg_has_role')?[{visible:true}]:[{pid:99,query:'SELECT mutating_function()',state:'active'}]},42),{code:'BASELINE_WRITER_DETECTED'})
 })
 test('promotion refuses missing opt-in and unknown modes before reading files or opening connections',async()=>{
   const {runPromotion}=require('../scripts/migrations/promotion')
   await assert.rejects(runPromotion({mode:'promote-history',env:{}}),{code:'BASELINE_OPT_IN_REQUIRED'})
   await assert.rejects(runPromotion({mode:'unknown',env:{AUNA_BASELINE_DEV:'1'}}),{code:'BASELINE_MODE_INVALID'})
+})
+test('cross-schema recovery preserves original history and multiple native attempts without PK collisions, then promotes again',async()=>{
+  const db=historyFixture('CAPTURED')
+  for(let i=0;i<2;i++){
+    await archiveHistory(db,db.receipt)
+    db.installBaseline()
+    await recoverHistory(db,db.receipt,{verifyBusiness:async()=>{}})
+    assert.equal(await inspectHistory(db,db.receipt),'CAPTURED')
+  }
+  const attempts=[...db.tables].filter(([name])=>name.startsWith('auna_migration_audit._auna_attempt_'))
+  assert.equal(attempts.length,2)
+  assert.equal(db.tables.get('public._prisma_migrations').oid,'41')
+  await archiveHistory(db,db.receipt)
+  assert.equal(await inspectHistory(db,db.receipt),'ARCHIVED')
+})
+test('writer inspection requires across-role visibility and queries peers without a current-user filter',async()=>{
+  let peerQuery
+  const db={$queryRawUnsafe:async sql=>{if(sql.includes('pg_has_role'))return [{visible:true}];peerQuery=sql;return []}}
+  await assertNoWriters(db,42)
+  assert.doesNotMatch(peerQuery,/usename\s*=\s*current_user/i)
+  await assert.rejects(assertNoWriters({$queryRawUnsafe:async()=>[{visible:false}]},42),{code:'BASELINE_WRITER_VISIBILITY_REQUIRED'})
 })

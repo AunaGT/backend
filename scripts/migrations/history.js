@@ -3,8 +3,29 @@ const {assertQaSchema}=require('./baselineSql')
 const {baseline,payment}=require('./rehearsal')
 const fail=code=>{throw Object.assign(new Error(code),{code})}
 function location(r){
-  if(r.qaSchema){assertQaSchema(r.qaSchema);return {source:r.qaSchema,audit:r.qaSchema,archived:'_prisma_migrations_original'}}
+  if(r.qaSchema){assertQaSchema(r.qaSchema);assertQaSchema(r.qaAuditSchema);if(r.qaSchema===r.qaAuditSchema)fail('BASELINE_SCHEMA_INVALID');return {source:r.qaSchema,audit:r.qaAuditSchema,archived:'_prisma_migrations_original'}}
   return {source:'public',audit:'auna_migration_audit',archived:'_prisma_migrations_20261015'}
+}
+function ownerTag(r){
+  if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(r.runId))fail('BASELINE_AUDIT_COLLISION')
+  return 'auna:baseline:20261015:'+r.runId
+}
+async function auditStatus(db,r){
+  return (await db.$queryRawUnsafe("SELECT n.oid::text AS oid,n.nspowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owned,obj_description(n.oid,'pg_namespace') AS marker,NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) a WHERE a.grantee<>n.nspowner) AS restricted FROM pg_namespace n WHERE n.nspname=$1",location(r).audit))[0]
+}
+async function validateAudit(db,r,{allowOriginal=false}={}){
+  const l=location(r),status=await auditStatus(db,r),prefix='_auna_attempt_'+r.runId.replaceAll('-','')
+  if(!status?.owned||!status.restricted||status.marker!==ownerTag(r))fail('BASELINE_AUDIT_COLLISION')
+  const objects=await db.$queryRawUnsafe("SELECT c.relname AS name,c.relkind::text AS kind,COALESCE(t.relname,c.relname) AS table FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_index i ON i.indexrelid=c.oid LEFT JOIN pg_class t ON t.oid=i.indrelid WHERE n.nspname=$1 UNION SELECT proname,'f',proname FROM pg_proc WHERE pronamespace=$1::regnamespace UNION SELECT typname,'e',typname FROM pg_type WHERE typnamespace=$1::regnamespace AND typtype IN ('e','d')",l.audit)
+  for(const o of objects){
+    if(!['r','i'].includes(o.kind))fail('BASELINE_AUDIT_COLLISION')
+    if(allowOriginal&&o.table===l.archived)continue
+    if(o.table!==prefix&&!new RegExp('^'+prefix+'_\\d+$').test(o.table))fail('BASELINE_AUDIT_COLLISION')
+    if(o.kind==='r'){
+      const saved=await table(db,l.audit,o.table)
+      if(saved.rows.length>1||saved.rows.some(m=>m.migration_name!==baseline||m.checksum!==r.baselineChecksum||!m.finished_at||m.rolled_back_at))fail('BASELINE_AUDIT_COLLISION')
+    }
+  }
 }
 async function table(db,schema,name){
   const found=await db.$queryRawUnsafe("SELECT c.oid::text AS oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind='r'",schema,name)
@@ -19,6 +40,7 @@ async function inspectHistory(db,r){
     return 'CAPTURED'
   }
   if(original.oid!==r.historyOid||original.hash!==r.historyHash)fail('BASELINE_HISTORY_REVIEW_REQUIRED')
+  await validateAudit(db,r,{allowOriginal:true})
   if(!current||!current.rows.length)return 'ARCHIVED'
   const active=current.rows.filter(m=>!m.rolled_back_at)
   if(active.some(m=>!m.finished_at)||active.length!==current.rows.length||active.length>2)fail('BASELINE_HISTORY_REVIEW_REQUIRED')
@@ -34,12 +56,12 @@ async function archiveHistory(db,r){
     await tx.$executeRawUnsafe("SET LOCAL lock_timeout='10s'")
     await tx.$executeRawUnsafe(`LOCK TABLE ${identifier(l.source)}._prisma_migrations IN ACCESS EXCLUSIVE MODE`)
     if(await inspectHistory(tx,r)!=='CAPTURED')fail('BASELINE_HISTORY_REVIEW_REQUIRED')
-    if(!r.qaSchema){
-      if((await tx.$queryRawUnsafe('SELECT oid::text FROM pg_namespace WHERE nspname=$1',l.audit)).length)fail('BASELINE_AUDIT_COLLISION')
+    if(!await auditStatus(tx,r)){
       await tx.$executeRawUnsafe(`CREATE SCHEMA ${identifier(l.audit)}`)
       await tx.$executeRawUnsafe(`REVOKE ALL ON SCHEMA ${identifier(l.audit)} FROM PUBLIC,anon,authenticated,service_role`)
-      await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}._prisma_migrations SET SCHEMA ${identifier(l.audit)}`)
-    }
+      await tx.$executeRawUnsafe(`COMMENT ON SCHEMA ${identifier(l.audit)} IS '${ownerTag(r)}'`)
+    }else await validateAudit(tx,r)
+    await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}._prisma_migrations SET SCHEMA ${identifier(l.audit)}`)
     await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.audit)}._prisma_migrations RENAME TO ${identifier(l.archived)}`)
     await tx.$executeRawUnsafe(`REVOKE ALL ON TABLE ${identifier(l.audit)}.${identifier(l.archived)} FROM PUBLIC,anon,authenticated,service_role`)
     if(await inspectHistory(tx,r)!=='ARCHIVED')fail('BASELINE_HISTORY_REVIEW_REQUIRED')
@@ -52,21 +74,26 @@ async function recoverHistory(db,r,{verifyBusiness}={}){
   if(phase==='CAPTURED')return
   if(!verifyBusiness)fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
   await verifyBusiness()
-  const l=location(r),attempt='_auna_attempt_'+r.runId.replaceAll('-','')
-  if(!/^_auna_attempt_[0-9a-f]{32}$/.test(attempt))fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
+  const l=location(r),attemptBase='_auna_attempt_'+r.runId.replaceAll('-','')
+  if(!/^_auna_attempt_[0-9a-f]{32}$/.test(attemptBase))fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
   await db.$transaction(async tx=>{
     await tx.$executeRawUnsafe("SET LOCAL lock_timeout='10s'")
     await tx.$executeRawUnsafe(`LOCK TABLE ${identifier(l.audit)}.${identifier(l.archived)} IN ACCESS EXCLUSIVE MODE`)
-    if(await inspectHistory(tx,r)!==phase||await table(tx,l.audit,attempt))fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
+    if(await inspectHistory(tx,r)!==phase)fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
     const current=await table(tx,l.source,'_prisma_migrations')
     if(current){
       await tx.$executeRawUnsafe(`LOCK TABLE ${identifier(l.source)}._prisma_migrations IN ACCESS EXCLUSIVE MODE`)
-      if(!r.qaSchema)await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}._prisma_migrations SET SCHEMA ${identifier(l.audit)}`)
-      await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.audit)}._prisma_migrations RENAME TO ${identifier(attempt)}`)
+      let attempt=attemptBase,suffix=0
+      while(await table(tx,l.audit,attempt)){if(++suffix>1000)fail('BASELINE_RECOVERY_REVIEW_REQUIRED');attempt=attemptBase+'_'+suffix}
+      const [pk]=await tx.$queryRawUnsafe("SELECT conname AS name FROM pg_constraint WHERE conrelid=$1::regclass AND contype='p'",`${identifier(l.source)}._prisma_migrations`)
+      if(!pk)fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
+      await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}._prisma_migrations RENAME CONSTRAINT ${identifier(pk.name)} TO ${identifier(attempt+'_pkey')}`)
+      await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}._prisma_migrations RENAME TO ${identifier(attempt)}`)
+      if(l.source!==l.audit)await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.source)}.${identifier(attempt)} SET SCHEMA ${identifier(l.audit)}`)
       await tx.$executeRawUnsafe(`REVOKE ALL ON TABLE ${identifier(l.audit)}.${identifier(attempt)} FROM PUBLIC,anon,authenticated,service_role`)
     }
     await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.audit)}.${identifier(l.archived)} RENAME TO _prisma_migrations`)
-    if(!r.qaSchema)await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.audit)}._prisma_migrations SET SCHEMA ${identifier(l.source)}`)
+    if(l.source!==l.audit)await tx.$executeRawUnsafe(`ALTER TABLE ${identifier(l.audit)}._prisma_migrations SET SCHEMA ${identifier(l.source)}`)
     if(await inspectHistory(tx,r)!=='CAPTURED')fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
   },{timeout:30000,maxWait:15000})
 }
@@ -101,7 +128,9 @@ async function applyPaymentCommands(db,r,gate,run){
   if(await inspectHistory(db,r)!=='PAYMENTS_APPLIED')fail('BASELINE_HISTORY_REVIEW_REQUIRED')
 }
 async function assertNoWriters(db,gatePid){
-  const peers=await db.$queryRawUnsafe("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND usename=current_user AND backend_type='client backend' AND pid<>pg_backend_pid() AND pid IS DISTINCT FROM $1::int AND state IS DISTINCT FROM 'idle'",gatePid??null)
+  const [visibility]=await db.$queryRawUnsafe("SELECT current_setting('is_superuser')='on' OR pg_has_role(current_user,'pg_read_all_stats','USAGE') AS visible")
+  if(!visibility?.visible)fail('BASELINE_WRITER_VISIBILITY_REQUIRED')
+  const peers=await db.$queryRawUnsafe("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid() AND pid IS DISTINCT FROM $1::int AND state IS DISTINCT FROM 'idle'",gatePid??null)
   if(peers.length)fail('BASELINE_WRITER_DETECTED')
 }
-module.exports={inspectHistory,archiveHistory,recoverHistory,withMigrationGate,validateRehearsal,applyPaymentCommands,assertNoWriters,table,location}
+module.exports={inspectHistory,archiveHistory,recoverHistory,withMigrationGate,validateRehearsal,applyPaymentCommands,assertNoWriters,table,location,auditStatus}
