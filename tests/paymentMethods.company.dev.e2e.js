@@ -142,7 +142,7 @@ test('company payment methods on current development Supabase', {
         f.ids.categories.push(category.id)
         await tx.product.create({data:{id:productId,company_id:A.id,name:'QA asesoría',category_id:category.id,status_id:stockStatus.id,price:100,cost:0,kind:'SERVICE',service_unit_label:'Sesión'}})
         return tx.appointmentEngagement.create({data:{id:engagementId,company_id:A.id,branch_id:A.branchId,customer_id:A.customerId,source:'DIRECT',currency_code:'GTQ',agreed_total:100,commercial_snapshot:{customerNit:'CF',isFinalConsumer:true},created_by:A.userId,
-          lines:{create:{company_id:A.id,branch_id:A.branchId,product_id:productId,item_kind:'SERVICE',item_name:'QA asesoría',unit_label:'Sesión',qty:1,unit_price:100,line_total:100}}},include:{customer:true,lines:true}})
+          lines:{create:{product_id:productId,item_kind:'SERVICE',item_name:'QA asesoría',unit_label:'Sesión',qty:1,unit_price:100,line_total:100}}},include:{customer:true,lines:true}})
       },TX)
       const scope={companyId:A.id,branchId:A.branchId,branchIds:[A.branchId],userId:A.userId,isAdmin:true,permissions:[]}
       const bankMethods=await db.paymentMethod.findMany({where:{company_id:null,base_code:{in:['CARD','TRANSFER']}},orderBy:{id:'asc'}})
