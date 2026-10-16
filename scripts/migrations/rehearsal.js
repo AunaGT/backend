@@ -24,8 +24,8 @@ async function cleanupRehearsal(db,run){
   await db.$executeRawUnsafe(`DROP SCHEMA ${identifier(run.schema)} CASCADE`)
   if((await db.$queryRawUnsafe('SELECT oid::text FROM pg_namespace WHERE nspname=$1',run.schema)).length)fail('BASELINE_QA_CLEANUP_REFUSED')
 }
-function allowedObjects(inventory,paymentSql){
-  const names=new Set(['_prisma_migrations','_prisma_migrations_pkey'])
+function allowedObjects(inventory,paymentSql,extra=[]){
+  const names=new Set(['_prisma_migrations','_prisma_migrations_pkey',...extra])
   for(const key of ['tables','sequences','indexes','functions','types'])for(const o of inventory[key])names.add(o.name)
   for(const m of paymentSql.matchAll(/CREATE (?:OR REPLACE )?(?:UNIQUE )?(?:TABLE|TYPE|FUNCTION|INDEX|TRIGGER)\s+"?([A-Za-z_0-9]+)"?/gi))names.add(m[1])
   for(const name of ['company_payment_methods_pkey','company_payment_methods_position_check','payment_methods_company_id_name_key'])names.add(name)
@@ -70,7 +70,8 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
   cli.savePrivate(path.join(dir,'migrations',baseline,'migration.sql'),baselineSql)
   cli.savePrivate(path.join(dir,'migrations','migration_lock.toml'),'provider = "postgresql"\n')
   const db=open?await open(url):new (require('@prisma/client').PrismaClient)({datasources:{db:{url}}})
-  const run={schema,allowed:allowedObjects(r.inventory,a.paymentSql),sourceReceiptHash:hash(fs.readFileSync(receiptPath)),baselineChecksum:a.manifest.checksum,paymentChecksum:hash(a.paymentSql),installation:false,historyRecovery:false,qaCleaned:false}
+  const attempt='_auna_attempt_'+r.runId.replaceAll('-','')
+  const run={schema,allowed:allowedObjects(r.inventory,a.paymentSql,['_prisma_migrations_original',attempt,'_prisma_migrations_pkey1','_prisma_migrations_pkey2','_qa_unexpected']),sourceReceiptHash:hash(fs.readFileSync(receiptPath)),baselineChecksum:a.manifest.checksum,paymentChecksum:hash(a.paymentSql),installation:false,historyRecovery:false,qaCleaned:false}
   let created=false
   const deploy=()=>cli.child(process.execPath,[require.resolve('prisma/build/index.js'),'migrate','deploy','--schema',path.join(dir,'schema.prisma')],privateEnv)
   try{
@@ -84,10 +85,26 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
     const actual=await db.$transaction(async tx=>{await tx.$executeRawUnsafe('SET LOCAL search_path=pg_catalog');return captureInventory(tx,schema)},{timeout:60000,maxWait:15000})
     const diffs=compareInventory(actual,r.inventory,{targetSchema:schema,exclude:['grants','functionGrants','publications']})
     if(diffs.length){cli.savePrivate(path.join(dir,'catalog-mismatch.json'),{diffs,actual});fail('BASELINE_QA_MISMATCH',`Rebuilt catalog differs: ${diffs.join(',')}`)}
+    const stripHistory=inventory=>Object.fromEntries(Object.entries(inventory).map(([key,values])=>[key,values.filter(o=>!['_prisma_migrations_original',attempt].includes(o.table||o.name))]))
+    const qaProjections=Object.fromEntries(actual.tables.map(t=>[t.name,actual.columns.filter(c=>c.table===t.name).map(c=>c.name)]))
+    const qaRows=await captureRows(db,schema,qaProjections)
+    const verifyQa=async()=>{
+      const current=await db.$transaction(async tx=>{await tx.$executeRawUnsafe('SET LOCAL search_path=pg_catalog');return captureInventory(tx,schema)},{timeout:60000})
+      if(compareInventory(stripHistory(current),actual,{sourceSchema:schema,targetSchema:schema,exclude:['grants','functionGrants','publications']}).length||JSON.stringify(await captureRows(db,schema,qaProjections))!==JSON.stringify(qaRows))fail('BASELINE_RECOVERY_REVIEW_REQUIRED')
+    }
+    const historyReceipt=await require('../../tests/helpers/rehearseMigrationHistory.cjs').rehearseMigrationHistory(db,{
+      schema,runId:r.runId,baselineChecksum:hash(baselineSql),paymentChecksum:hash(paymentSql),url,verifyBusiness:verifyQa,
+      resolve:signal=>cli.child(process.execPath,[require.resolve('prisma/build/index.js'),'migrate','resolve','--applied',baseline,'--schema',path.join(dir,'schema.prisma')],privateEnv,{signal}),
+    })
     fs.mkdirSync(path.join(dir,'migrations',payment))
     cli.savePrivate(path.join(dir,'migrations',payment,'migration.sql'),paymentSql)
     await deploy()
-    const after=await db.$transaction(async tx=>{await tx.$executeRawUnsafe('SET LOCAL search_path=pg_catalog');return captureInventory(tx,schema)},{timeout:60000,maxWait:15000})
+    const after=stripHistory(await db.$transaction(async tx=>{await tx.$executeRawUnsafe('SET LOCAL search_path=pg_catalog');return captureInventory(tx,schema)},{timeout:60000,maxWait:15000}))
+    const history=require('./history')
+    if(await history.inspectHistory(db,historyReceipt)!=='PAYMENTS_APPLIED')fail('BASELINE_QA_MISMATCH')
+    try{await history.recoverHistory(db,historyReceipt,{verifyBusiness:verifyQa});fail('BASELINE_QA_MISMATCH')}
+    catch(error){if(error.code!=='BASELINE_RECOVERY_REVIEW_REQUIRED')throw error}
+    run.historyRecovery=true
     assertPaymentCatalog(after,r.inventory,a.paymentSql,schema)
     const oldTables=r.inventory.tables.map(o=>o.name)
     if(after.tables.length!==oldTables.length+1||!after.tables.some(o=>o.name==='company_payment_methods'))fail('BASELINE_QA_MISMATCH')
@@ -99,8 +116,11 @@ async function runRehearsal({env=process.env,receiptPath,open}={}){
     await cli.child('psql',['-X','--no-password','--set','ON_ERROR_STOP=1'],cli.postgresEnv(url,env),{input:`SET search_path=${identifier(schema)},pg_catalog,extensions;\n`+fixture})
     await assertSource(db,r)
     run.installation=true
-  }finally{
-    try{if(created){await cleanupRehearsal(db,run);run.qaCleaned=true}cli.savePrivate(path.join(dir,'result.json'),run)}finally{await db.$disconnect()}
+  }catch(error){run.failure={code:error.code,message:error.message};throw error}
+  finally{
+    try{if(created){await cleanupRehearsal(db,run);run.qaCleaned=true}}
+    catch(error){run.cleanupFailure={code:error.code,message:error.message};throw error}
+    finally{try{cli.savePrivate(path.join(dir,'result.json'),run)}finally{await db.$disconnect()}}
   }
   return {receipt:path.join(dir,'result.json'),...run}
 }

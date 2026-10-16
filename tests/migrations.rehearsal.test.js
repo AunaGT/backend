@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict')
-const {runRehearsal,cleanupRehearsal}=require('../scripts/migrations/rehearsal')
+const {runRehearsal,cleanupRehearsal,allowedObjects}=require('../scripts/migrations/rehearsal')
 test('rehearsal refuses without opt-in before opening any database',async()=>{
   let opened=0
   await assert.rejects(runRehearsal({env:{},open:()=>{opened++}}),{code:'BASELINE_OPT_IN_REQUIRED'})
@@ -21,4 +21,14 @@ test('timed-out children and their descendants are terminated before the caller 
     await new Promise(resolve=>setTimeout(resolve,650))
     assert.equal(fs.existsSync(file),false)
   }finally{fs.rmSync(dir,{recursive:true})}
+})
+test('failed native commands preserve exit status and sanitized stdout for exact pending-migration diagnosis',async()=>{
+  const {child}=require('../scripts/reconcile-migrations')
+  await assert.rejects(child(process.execPath,['-e',"console.log('Pending 202610150002_company_payment_methods');process.exit(1)"]),error=>error.exitCode===1&&error.stdout.includes('Pending 202610150002_company_payment_methods'))
+})
+test('registered recovery metadata includes its PostgreSQL row-array types for exact cleanup',()=>{
+  const names=allowedObjects({tables:[],sequences:[],indexes:[],functions:[],types:[]},'',['_prisma_migrations_original','_auna_attempt_abc'])
+  assert.ok(names.includes('__prisma_migrations_original'))
+  assert.ok(names.includes('__auna_attempt_abc'))
+  assert.ok(!names.includes('unexpected'))
 })

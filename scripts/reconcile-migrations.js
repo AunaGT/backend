@@ -18,7 +18,7 @@ function child(binary,args,env=process.env,{input,timeout=120000,signal}={}){
     function finish(error){if(settled)return;settled=true;clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',aborted);error?reject(error):resolve(out)}
     p.stdout.on('data',b=>{out+=b;if(out.length>32*1024*1024)cancel(new Error('Child output limit'))})
     p.stderr.on('data',b=>{err=(err+b).slice(-20000)})
-    p.on('error',finish);p.on('close',code=>finish(cancelError||(code===0?null:new Error(sanitizeDiagnostic(`${binary} failed (${code}): ${err}`,env)))))
+    p.on('error',finish);p.on('close',code=>finish(cancelError||(code===0?null:Object.assign(new Error(sanitizeDiagnostic(`${binary} failed (${code}): ${err}`,env)),{exitCode:code,stdout:sanitizeDiagnostic(out,env)}))))
     p.stdin.on('error',()=>{});p.stdin.end(input)
   })
 }
@@ -82,7 +82,9 @@ async function main(){
     else if(mode==='inspect'){
       const r=readReceipt(receiptPath),listing=await child('pg_restore',['--list',r.backup.file])
       verifyReceipt(r,connectionIdentity(url),()=>listing)
-      console.log(JSON.stringify({backupVerified:true,identity:r.identity,tables:r.inventory.tables.length,pendingAtCapture:r.pending}))
+      const {artifacts}=require('./migrations/rehearsal'),a=artifacts(r,hash(fs.readFileSync(receiptPath)))
+      const phase=await require('./migrations/history').inspectHistory(db,{...r,baselineChecksum:a.manifest.checksum,paymentChecksum:hash(a.paymentSql)})
+      console.log(JSON.stringify({backupVerified:true,identity:r.identity,tables:r.inventory.tables.length,phase,pendingAtCapture:r.pending}))
     }else if(mode==='prepare'){
       const r=readReceipt(receiptPath),listing=await child('pg_restore',['--list',r.backup.file]);verifyReceipt(r,connectionIdentity(url),()=>listing)
       const dump=fs.readFileSync(r.schemaFile,'utf8');if(hash(dump)!==r.schemaChecksum)throw Error('Source schema checksum mismatch')
@@ -92,6 +94,9 @@ async function main(){
       console.log(JSON.stringify({candidate:manifestFile,bytes:Buffer.byteLength(candidate.sql),checksum:candidate.checksum}))
     }else if(mode==='rehearse'){
       console.log(JSON.stringify(await require('./migrations/rehearsal').runRehearsal({receiptPath})))
+    }else if(['promote-history','apply-payments','recover-history'].includes(mode)){
+      const rehearsalPath=process.argv[process.argv.indexOf('--rehearsal')+1]
+      console.log(JSON.stringify(await require('./migrations/promotion').runPromotion({mode,receiptPath,rehearsalPath})))
     }else throw Error('Choose capture, prepare, rehearse or inspect')
   }finally{await db.$disconnect()}
 }

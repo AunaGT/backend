@@ -5,6 +5,7 @@ test('install canonical baseline and payments on the same development Supabase, 
   require('../src/config/loadEnv')
   const result=await require('../scripts/migrations/rehearsal').runRehearsal({receiptPath:process.env.AUNA_BASELINE_RECEIPT})
   assert.equal(result.installation,true)
+  assert.equal(result.historyRecovery,true)
   assert.equal(result.qaCleaned,true)
   console.log(JSON.stringify({rehearsalReceipt:result.receipt,installation:result.installation,historyRecovery:result.historyRecovery,qaCleaned:result.qaCleaned}))
 })
