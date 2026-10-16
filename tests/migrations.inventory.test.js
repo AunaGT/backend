@@ -19,6 +19,13 @@ test('physical dropped-column holes do not alter logical column order equivalenc
   assert.deepEqual(compareInventory(rebuilt,source),[])
   assert.notDeepEqual(compareInventory({columns:[...rebuilt.columns].reverse()},source),[])
 })
+test('enum order and exact varchar text-array casts survive PostgreSQL dump reparse without hiding changed values',()=>{
+  const before={types:[{name:'Status',label:'A',position:'1'},{name:'Status',label:'B',position:'1.5'}],constraints:[{definition:"CHECK (state::text = ANY (ARRAY['A'::character varying, 'B'::character varying]::text[]))"}],indexes:[{definition:"WHERE ((state)::text = ANY ((ARRAY['A'::character varying, 'B'::character varying])::text[]))"}]}
+  const after={types:[{name:'Status',label:'A',position:'1'},{name:'Status',label:'B',position:'2'}],constraints:[{definition:"CHECK (state::text = ANY (ARRAY['A'::character varying::text, 'B'::character varying::text]))"}],indexes:[{definition:"WHERE ((state)::text = ANY (ARRAY[('A'::character varying)::text, ('B'::character varying)::text]))"}]}
+  assert.deepEqual(compareInventory(after,before),[])
+  assert.notDeepEqual(compareInventory({...after,types:[...after.types].reverse()},before),[])
+  assert.notDeepEqual(compareInventory({...after,constraints:[{definition:after.constraints[0].definition.replace("'B'","'C'")}]},before),[])
+})
 test('sequence metadata is exposed as serializable text to the Prisma boundary',async()=>{
   const db={$queryRawUnsafe:async sql=>{
     if(!sql.includes('FROM pg_sequences'))return[]

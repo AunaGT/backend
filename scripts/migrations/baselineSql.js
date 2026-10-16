@@ -75,6 +75,7 @@ function checkStatement(sql){
   if(/^INSERT INTO (?:(?:"public"|public) \. )?"?sale_statuses"?\b/i.test(head)&&sql.includes("'Borrador'"))return
   // Payment migration is hash-bound to its original reviewed artifact by the caller.
   if(/^(?:UPDATE|INSERT INTO) payment_methods\b/i.test(head)||/^INSERT INTO company_payment_methods\b/i.test(head)||/^DROP INDEX payment_methods_name_key\b/i.test(head))return
+  if(/^DROP TRIGGER confirmed_sale_payment_method_guard ON sales\s*;/i.test(head))return
   unsupported()
 }
 function renderEnvironment(inventory){

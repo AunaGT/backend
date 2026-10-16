@@ -7,6 +7,14 @@ function canonical(value){
 }
 const hash=value=>createHash('sha256').update(value).digest('hex')
 const fingerprintRows=rows=>hash(rows.map(r=>typeof r==='string'?r:JSON.stringify(canonical(r))).sort().join('\n'))
+function normalizedDefinition(sql){
+  return sql.replace(/\(ARRAY\[([^\]]*)\]\)::text\[\]|ARRAY\[([^\]]*)\](::text\[\])?/g,(whole,wrapped,plain,cast)=>{
+    const elements=(wrapped??plain).match(/\(?\s*'(?:[^']|'')*'::character varying\)?(?:::text)?/g)
+    if(!elements||elements.join(', ').replaceAll(' ','')!==(wrapped??plain).replaceAll(' ',''))return whole
+    if(!wrapped&&!cast&&!elements.every(v=>v.endsWith('::text')))return whole
+    return 'ARRAY['+elements.map(v=>v.match(/'(?:[^']|'')*'/)[0]+'::text').join(', ')+']'
+  })
+}
 const queries={
   tables:`SELECT c.relname AS name,c.relkind::text AS kind,c.relrowsecurity AS rls,c.relforcerowsecurity AS force_rls FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p') AND c.relname<>'_prisma_migrations' AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.objid=c.oid AND d.deptype='e') ORDER BY c.relname`,
   columns:`SELECT c.relname AS table,a.attname AS name,a.attnum::int AS position,format_type(a.atttypid,a.atttypmod) AS type,a.attnotnull AS not_null,a.attidentity::text AS identity,a.attgenerated::text AS generated,pg_get_expr(d.adbin,d.adrelid) AS expression FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relkind IN ('r','p') AND c.relname<>'_prisma_migrations' AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname,a.attnum`,
@@ -32,6 +40,9 @@ function compareInventory(actual,expected,{sourceSchema='public',targetSchema='p
   const normalize=(value,schema,kind)=>{
     // Array order preserves logical order; physical attnum holes do not survive a rebuild.
     if(kind==='columns'&&Array.isArray(value))value=value.map(({position,...column})=>column)
+    // Enum numeric sort slots are physical; the ordered labels are the contract.
+    if(kind==='types'&&Array.isArray(value))value=value.map(({position,...type})=>type)
+    if(['constraints','indexes'].includes(kind)&&Array.isArray(value))value=value.map(o=>({...o,definition:normalizedDefinition(o.definition)}))
     let text=JSON.stringify(canonical(value))
     if(!['extensions','extensionObjects'].includes(kind)){
       const protectedNames=expected.extensionObjects||[]

@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict')
 const {compileBaseline,compileRehearsal,assertQaSchema,statements}=require('../scripts/migrations/baselineSql')
+const {hash}=require('../scripts/migrations/inventory')
 const schema='auna_baseline_qa_'+'a'.repeat(32)
 const inventory={tables:[{name:'sales'}],functions:[{name:'guard'}],types:[],sequences:[],extensionObjects:[{schema:'public',name:'gin_trgm_ops',kind:'opclass'}],grants:[],functionGrants:[],publications:[]}
 test('shared schemas and malformed temporary identities cannot be rehearsal or cleanup targets',()=>{
@@ -44,4 +45,11 @@ test('baseline does not freeze a full-table publication into a column list or in
   assert.match(result.environmentSql,/ADD TABLE ONLY public\."sales";/)
   assert.doesNotMatch(result.environmentSql,/"sales" \(/)
   assert.match(result.environmentSql,/REVOKE ALL ON SEQUENCE public\."sales_id_seq"/)
+})
+test('reviewed payment migration can be isolated in full without recreating platform objects',()=>{
+  const fs=require('node:fs'),path=require('node:path')
+  const sql=fs.readFileSync(path.join(__dirname,'../prisma/migrations/202610150002_company_payment_methods/migration.sql'),'utf8')
+  const output=compileRehearsal(sql,{schema,inventory,artifactChecksum:hash(sql)})
+  assert.match(output,/DROP TRIGGER confirmed_sale_payment_method_guard ON sales/)
+  assert.doesNotMatch(output,/search_path=public/)
 })

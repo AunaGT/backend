@@ -5,14 +5,20 @@ const {sanitizeDiagnostic}=require('./sales-drafts-deploy')
 const {captureInventory,captureRows,fingerprintRows,hash}=require('./migrations/inventory')
 const root=path.resolve(__dirname,'..')
 function postgresEnv(rawUrl,baseEnv=process.env){const u=new URL(rawUrl);return {...baseEnv,PGHOST:u.hostname,PGPORT:u.port||'5432',PGUSER:decodeURIComponent(u.username),PGPASSWORD:decodeURIComponent(u.password),PGDATABASE:decodeURIComponent(u.pathname.slice(1)),PGSSLMODE:'require',PGCONNECT_TIMEOUT:'15'}}
-function child(binary,args,env=process.env,{input,timeout=120000}={}){
+function child(binary,args,env=process.env,{input,timeout=120000,signal}={}){
   return new Promise((resolve,reject)=>{
-    const p=spawn(binary,args,{cwd:root,env,stdio:['pipe','pipe','pipe']});let out='',err='',settled=false
-    const timer=setTimeout(()=>{p.kill('SIGTERM');finish(new Error(`${binary} timeout`))},timeout)
-    function finish(error){if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(out)}
-    p.stdout.on('data',b=>{out+=b;if(out.length>32*1024*1024){p.kill();finish(new Error('Child output limit'))}})
+    if(signal?.aborted){reject(signal.reason||new Error('Child aborted'));return}
+    const grouped=process.platform!=='win32'
+    const p=spawn(binary,args,{cwd:root,env,stdio:['pipe','pipe','pipe'],detached:grouped});let out='',err='',settled=false,cancelError,killTimer
+    const kill=kind=>{try{grouped?process.kill(-p.pid,kind):p.kill(kind)}catch(error){if(error.code!=='ESRCH')p.kill(kind)}}
+    function cancel(error){if(cancelError)return;cancelError=error;kill('SIGTERM');killTimer=setTimeout(()=>kill('SIGKILL'),1000)}
+    const timer=setTimeout(()=>cancel(new Error(`${binary} timeout`)),timeout)
+    const aborted=()=>cancel(signal.reason||new Error('Child aborted'))
+    signal?.addEventListener('abort',aborted,{once:true})
+    function finish(error){if(settled)return;settled=true;clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',aborted);error?reject(error):resolve(out)}
+    p.stdout.on('data',b=>{out+=b;if(out.length>32*1024*1024)cancel(new Error('Child output limit'))})
     p.stderr.on('data',b=>{err=(err+b).slice(-20000)})
-    p.on('error',finish);p.on('close',code=>finish(code===0?null:new Error(sanitizeDiagnostic(`${binary} failed (${code}): ${err}`,env))))
+    p.on('error',finish);p.on('close',code=>finish(cancelError||(code===0?null:new Error(sanitizeDiagnostic(`${binary} failed (${code}): ${err}`,env)))))
     p.stdin.on('error',()=>{});p.stdin.end(input)
   })
 }
@@ -84,7 +90,9 @@ async function main(){
       const dir=path.dirname(receiptPath),sqlFile=path.join(dir,'baseline.sql'),manifestFile=path.join(dir,'candidate.json')
       savePrivate(sqlFile,candidate.sql);savePrivate(manifestFile,{sourceReceiptHash:hash(fs.readFileSync(receiptPath)),sqlFile,checksum:candidate.checksum,inventory:r.inventory})
       console.log(JSON.stringify({candidate:manifestFile,bytes:Buffer.byteLength(candidate.sql),checksum:candidate.checksum}))
-    }else throw Error('Choose capture, prepare or inspect')
+    }else if(mode==='rehearse'){
+      console.log(JSON.stringify(await require('./migrations/rehearsal').runRehearsal({receiptPath})))
+    }else throw Error('Choose capture, prepare, rehearse or inspect')
   }finally{await db.$disconnect()}
 }
 if(require.main===module)main().catch(e=>{console.error(sanitizeDiagnostic(e.message));process.exitCode=1})
