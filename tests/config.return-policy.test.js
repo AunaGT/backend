@@ -12,6 +12,8 @@ function fixture() {
       if(old) Object.assign(old,update); else rows.push(create)
     },
   }, $transaction:async run=>run(db) }
+  db.$queryRaw=async()=>[]
+  db.systemSetting.create=async({data})=>db.systemSetting.upsert({create:{...data,revision:1},update:{},where:{company_id_key:{company_id:data.company_id,key:data.key}}})
   return {db,rows,writes}
 }
 test('invalid return policies reject the entire PATCH before opening a transaction', async () => {
@@ -31,7 +33,7 @@ test('return policy persists one canonical JSON value only for the resolved comp
   const {db,rows,writes}=fixture(),other=structuredClone(rows[0])
   await withMocks({[model]:{prisma:db,prismaTransaction:db}},target,async controller=>{
     const res=jsonResponse()
-    await controller.update({companyId:'A',body:{settings:{'returns.policy':{...policy,windowDays:'45',enabledResolutions:['REFUND_CASH','REFUND_CASH']}}}},res,e=>{throw e})
+    await controller.update({companyId:'A',body:{expectedRevisions:{'returns.policy':0},settings:{'returns.policy':{...policy,windowDays:'45',enabledResolutions:['REFUND_CASH','REFUND_CASH']}}}},res,e=>{throw e})
     assert.equal(res.statusCode,200);assert.deepEqual(res.body['returns.policy'],{...policy,windowDays:45})
   })
   assert.equal(writes.length,1);assert.equal(writes[0].type,'json');assert.equal(writes[0].company_id,'A');assert.deepEqual(rows[0],other)
@@ -51,7 +53,7 @@ test('legacy PATCH optional policy fields retain their compatible effective defa
   const {db}=fixture()
   await withMocks({[model]:{prisma:db,prismaTransaction:db}},target,async controller=>{
     const res=jsonResponse()
-    await controller.update({companyId:'A',body:{'returns.policy':{windowDays:15,exchangePricing:'ORIGINAL_SALE_PRICE'}}},res,e=>{throw e})
+    await controller.update({companyId:'A',body:{expectedRevisions:{'returns.policy':0},'returns.policy':{windowDays:15,exchangePricing:'ORIGINAL_SALE_PRICE'}}},res,e=>{throw e})
     assert.equal(res.statusCode,200);assert.equal(res.body['returns.policy'].allowAuthorizedExceptions,true);assert.equal(res.body['returns.policy'].enabledResolutions.length,5)
   })
 })

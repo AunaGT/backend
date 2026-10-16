@@ -22,7 +22,13 @@ function settingsDb({ failCompany = false, failKey = null } = {}) {
       const rows = new Map(state.rows)
       let company = { ...state.company }
       const tx = {
+        $queryRaw:async()=>[],
         systemSetting: {
+          create:async({data})=>{
+            if(data.key===failKey)throw Error('Fallo de clave')
+            const key=keyOf(data);if(rows.has(key))throw Object.assign(Error('Duplicado'),{code:'P2002'})
+            rows.set(key,{...data,revision:1});return rows.get(key)
+          },
           upsert: async ({ where, create, update }) => {
             assert.equal(where.company_id_key.company_id, create.company_id)
             if (create.key === failKey) throw new Error('Fallo de clave')
@@ -92,11 +98,14 @@ test('vigencias aceptadas se guardan como enteros canónicos', async () => {
     upsert: async ({ create }) => { rows.set(create.key, create) },
     findMany: async () => [...rows.values()],
   } }
+  db.$queryRaw=async()=>[]
+  db.systemSetting.create=async({data})=>{const row={...data,revision:1};rows.set(data.key,row);return row}
+  db.systemSetting.updateMany=async({where,data})=>{const row=rows.get(where.key);if(row?.revision!==where.revision)return{count:0};rows.set(where.key,{...row,...data,revision:row.value===data.value?row.revision:row.revision+1});return{count:1}}
   db.$transaction = async run => run(db)
   await withMocks({ [model]: { prisma: db, prismaTransaction: db } }, target, async controller => {
     for (const [input, expected] of [[12, '12'], ['12', '12'], ['1e2', '100']]) {
       const res = jsonResponse()
-      await controller.update({ companyId: 'A', body: { order_validity_days: input } }, res,
+      await controller.update({ companyId: 'A', body: { order_validity_days: input,expectedRevisions:{order_validity_days:rows.get('order_validity_days')?.revision??0} } }, res,
         error => { throw error })
       assert.equal(res.statusCode, 200)
       assert.equal(res.body.order_validity_days, expected)
@@ -115,7 +124,7 @@ test('PATCH conserva empresa ajena y confirma identidad y claves juntas', async 
       invalidations.push(id)
     } } }, target, async controller => {
     const res = jsonResponse()
-    await controller.update({ companyId: 'A', body: { settings: {
+    await controller.update({ companyId: 'A', body: { expectedRevisions:{company_name:0,order_validity_days:0,cash_closure_denominations:0}, settings: {
       company_name: 'Empresa A', order_validity_days: '12',
       cash_closure_denominations: [{ denomination: 10, type: 'Billete' }],
     } } }, res, error => { throw error })
@@ -139,6 +148,7 @@ test('fallo de clave o Company no deja parcial ni invalida caché', async () => 
       [timezone]: { invalidateSystemConfigCache: id => invalidations.push(id) } }, target,
     async controller => {
       await controller.update({ companyId: 'A', body: {
+        expectedRevisions:{company_name:0,order_validity_days:0},
         company_name: 'No confirmar', order_validity_days: '12',
       } }, res, error => { forwarded = error })
     })

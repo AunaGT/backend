@@ -14,6 +14,7 @@ const {
   update,
   uploadLogo,
   removeLogo,
+  history,
 } = require('./controller')
 
 const router = Router()
@@ -24,6 +25,7 @@ const uploadLogoImage = multer({
 })
 
 router.get('/', Auth, hasPermission('settings.view', 'settings.manage'), getAll)
+router.get('/history', Auth, hasPermission('settings.view', 'settings.manage'), history)
 router.get('/public', Auth, getPublic)
 router.get('/company-name', getCompanyName)
 router.get('/company-logo', getCompanyLogo)

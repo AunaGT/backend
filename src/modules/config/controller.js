@@ -10,6 +10,8 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { normalizeReturnPolicy, validateReturnPolicyInput } = require('../returns/domain')
+const {settingRevisions,assertExpectedRevisions,setSettingsActor,writeSettings}=require('../../services/settingsRevision')
+const {GENERAL_SETTING_KEYS,historyKeys}=require('./settingsKeys')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
 const { fetchLogoForHttp } = require('../../utils/pdfBranding')
@@ -30,7 +32,7 @@ exports.getAll = async (req, res, next) => {
       orderBy: { key: 'asc' }
     })
     const settings = {}
-    for (const row of rows) {
+    for (const row of rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key))) {
       if (row.type === 'json') {
         try {
           settings[row.key] = JSON.parse(row.value)
@@ -42,6 +44,7 @@ exports.getAll = async (req, res, next) => {
       }
     }
     settings['returns.policy'] = normalizeReturnPolicy(settings['returns.policy'])
+    settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
     res.json(settings)
   } catch (e) {
     next(e)
@@ -133,10 +136,12 @@ exports.getCompanyLogo = async (req, res, next) => {
  * Sube logo al bucket Supabase "logo" y guarda company_logo_url.
  */
 exports.uploadLogo = async (req, res, next) => {
+  let uploadedUrl,committed=false
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No se proporcionó ningún archivo' })
     }
+    const expected=logoRevision(req)
 
     let file = req.file
     const isSvg = file.mimetype === 'image/svg+xml' || file.mimetype === 'image/svg'
@@ -155,35 +160,18 @@ exports.uploadLogo = async (req, res, next) => {
       }
     }
 
-    const prev = await prisma.systemSetting.findFirst({ where: { key: 'company_logo_url', company_id: req.companyId } })
-    const prevUrl = prev?.value?.trim()
-
-    const imageUrl = await uploadImageBuffer({
+    const imageUrl = uploadedUrl = await uploadImageBuffer({
       bucket: COMPANY_LOGO_BUCKET,
-      file: req.file,
+      file,
       pathPrefix: 'company',
     })
-
-    await prisma.systemSetting.upsert({
-      where: { company_id_key: { company_id: req.companyId, key: 'company_logo_url' } },
-      update: { value: imageUrl, type: 'string' },
-      create: {
-        company_id: req.companyId,
-        key: 'company_logo_url',
-        value: imageUrl,
-        type: 'string',
-        description: 'URL pública del logo del negocio (bucket logo)',
-      },
-    })
-
-    if (prevUrl && prevUrl !== imageUrl) {
-      await removePublicObject(prevUrl, COMPANY_LOGO_BUCKET)
-    }
-
-    await prisma.company.update({ where: { id: req.companyId }, data: { logo_url: imageUrl } })
+    const saved=await saveLogoReference(req,imageUrl,expected)
+    committed=true
+    const warning=saved.previous && saved.previous!==imageUrl ? await cleanupLogo(saved.previous) : undefined
     invalidateSystemConfigCache(req.companyId)
-    res.json({ imageUrl, company_logo_url: imageUrl })
+    res.json({ imageUrl, company_logo_url: imageUrl,_revisions:saved.revisions,warning })
   } catch (e) {
+    if(uploadedUrl&&!committed){const warning=await cleanupLogo(uploadedUrl);if(warning)e.message+=` ${warning}`}
     if (e.status) return res.status(e.status).json({ message: e.message })
     next(e)
   }
@@ -195,31 +183,34 @@ exports.uploadLogo = async (req, res, next) => {
  */
 exports.removeLogo = async (req, res, next) => {
   try {
-    const prev = await prisma.systemSetting.findFirst({ where: { key: 'company_logo_url', company_id: req.companyId } })
-    const prevUrl = prev?.value?.trim()
-
-    await prisma.systemSetting.upsert({
-      where: { company_id_key: { company_id: req.companyId, key: 'company_logo_url' } },
-      update: { value: '', type: 'string' },
-      create: {
-        company_id: req.companyId,
-        key: 'company_logo_url',
-        value: '',
-        type: 'string',
-        description: 'URL pública del logo del negocio (bucket logo)',
-      },
-    })
-
-    if (prevUrl) {
-      await removePublicObject(prevUrl, COMPANY_LOGO_BUCKET)
-    }
-
-    await prisma.company.update({ where: { id: req.companyId }, data: { logo_url: null } })
+    const saved=await saveLogoReference(req,'',logoRevision(req))
+    const warning=saved.previous?await cleanupLogo(saved.previous):undefined
     invalidateSystemConfigCache(req.companyId)
-    res.json({ company_logo_url: '' })
+    res.json({ company_logo_url: '',_revisions:saved.revisions,warning })
   } catch (e) {
+    if(e.status)return res.status(e.status).json({message:e.message})
     next(e)
   }
+}
+
+function logoRevision(req){
+  const raw=req.body?.expectedRevision
+  const value=typeof raw==='string'&&/^(0|[1-9]\d*)$/.test(raw)?Number(raw):raw
+  assertExpectedRevisions({company_logo_url:true},raw===undefined?undefined:{company_logo_url:value})
+  return value
+}
+async function cleanupLogo(url){
+  try{if(await removePublicObject(url,COMPANY_LOGO_BUCKET)===false)throw Error('No eliminado')}
+  catch{return 'No se pudo limpiar un archivo de logo en Storage. La referencia confirmada se conserva.'}
+}
+async function saveLogoReference(req,value,expected){
+  return prismaTransaction.$transaction(async tx=>{
+    await setSettingsActor(tx,{actorId:req.user?.sub,source:'company-logo'})
+    const previous=await tx.systemSetting.findFirst({where:{company_id:req.companyId,key:'company_logo_url'}})
+    const rows=await writeSettings(tx,{companyId:req.companyId,changes:{company_logo_url:{value,type:'string'}},expectedRevisions:{company_logo_url:expected}})
+    await tx.company.update({where:{id:req.companyId},data:{logo_url:value||null}})
+    return{previous:previous?.value?.trim(),revisions:settingRevisions(rows)}
+  },{maxWait:15000,timeout:30000})
 }
 
 /**
@@ -279,10 +270,11 @@ function validateDenominations (value) {
 exports.update = async (req, res, next) => {
   try {
     const body = req.body
-    const payload = body && Object.hasOwn(body, 'settings') ? body.settings : body
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    const raw = body && Object.hasOwn(body, 'settings') ? body.settings : body
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       return res.status(400).json({ message: 'Se requiere un objeto con las claves a actualizar' })
     }
+    const {expectedRevisions:ignored,...payload}=raw
 
     if (payload.cash_closure_denominations !== undefined) {
       const err = validateDenominations(payload.cash_closure_denominations)
@@ -362,6 +354,9 @@ exports.update = async (req, res, next) => {
       'inventory_services_enabled',
       'returns.policy',
     ])
+    if(Object.keys(payload).some(key=>!allowedKeys.has(key)))return res.status(400).json({message:'La solicitud contiene una configuración no admitida.'})
+    const changes=Object.fromEntries(Object.entries(payload).map(([key,value])=>[key,{value:typeof value==='object'?JSON.stringify(value):String(value),type:['cash_closure_denominations','returns.policy'].includes(key)?'json':'string'}]))
+    assertExpectedRevisions(changes,body?.expectedRevisions)
 
     // La identidad de la empresa vive en dos lados: la fila Company (selector,
     // traslados, contabilidad) y estas claves (PDFs, membretes). Se espejan para
@@ -372,16 +367,8 @@ exports.update = async (req, res, next) => {
     if (payload.company_address !== undefined) companyFields.address = String(payload.company_address)
     if (payload.company_logo_url !== undefined) companyFields.logo_url = String(payload.company_logo_url).slice(0, 500)
     const rows = await prismaTransaction.$transaction(async tx => {
-      for (const [key, value] of Object.entries(payload)) {
-        if (!allowedKeys.has(key)) continue
-        const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value)
-        const type = ['cash_closure_denominations', 'returns.policy'].includes(key) ? 'json' : 'string'
-        await tx.systemSetting.upsert({
-          where: { company_id_key: { company_id: req.companyId, key } },
-          update: { value: valueStr, type },
-          create: { company_id: req.companyId, key, value: valueStr, type }
-        })
-      }
+      await setSettingsActor(tx,{actorId:req.user?.sub,source:'configuration'})
+      await writeSettings(tx,{companyId:req.companyId,changes,expectedRevisions:body.expectedRevisions})
       if (Object.keys(companyFields).length > 0) {
         await tx.company.update({ where: { id: req.companyId }, data: companyFields })
       }
@@ -391,7 +378,7 @@ exports.update = async (req, res, next) => {
     invalidateSystemConfigCache(req.companyId)
 
     const settings = {}
-    for (const row of rows) {
+    for (const row of rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key))) {
       if (row.type === 'json') {
         try {
           settings[row.key] = JSON.parse(row.value)
@@ -402,8 +389,25 @@ exports.update = async (req, res, next) => {
         settings[row.key] = row.value
       }
     }
+    settings['returns.policy']=normalizeReturnPolicy(settings['returns.policy'])
+    settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
     res.json(settings)
   } catch (e) {
+    if(e.status)return res.status(e.status).json({message:e.message})
     next(e)
   }
+}
+
+exports.history=async(req,res,next)=>{
+  try{
+    const page=Number(req.query?.page||1),pageSize=Number(req.query?.pageSize||10)
+    if(!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({message:'La página del historial no es válida.'})
+    const allowed=historyKeys(req.user),requested=req.query?.keys?String(req.query.keys).split(','):allowed
+    const keys=requested.filter(key=>allowed.includes(key)),where={company_id:req.companyId,key:{in:keys}}
+    const [totalItems,items]=await Promise.all([prisma.settingAuditEvent.count({where}),prisma.settingAuditEvent.findMany({where,orderBy:[{created_at:'desc'},{id:'desc'}],skip:(page-1)*pageSize,take:pageSize})])
+    const actorIds=[...new Set(items.map(item=>item.actor_id).filter(Boolean))]
+    const actors=actorIds.length?await prisma.user.findMany({where:{id:{in:actorIds},user_companies:{some:{company_id:req.companyId}}},select:{id:true,name:true}}):[]
+    const names=new Map(actors.map(actor=>[actor.id,actor.name]))
+    res.json({items:items.map(item=>({...item,actor_name:names.get(item.actor_id)||null})),totalItems,totalPages:Math.max(1,Math.ceil(totalItems/pageSize)),page})
+  }catch(error){next(error)}
 }

@@ -10,7 +10,8 @@
 
 /** Contabilidad: catálogo de cuentas, períodos, configuración, diario, posteo y cierre anual. */
 
-const { prisma } = require('../../models/prisma')
+const { prisma,prismaTransaction } = require('../../models/prisma')
+const {assertExpectedRevisions,setSettingsActor,writeSettings}=require('../../services/settingsRevision')
 const { round2 } = require('../../services/accounting/logic')
 const {
   AccountingError, createEntry, getDefaultAccounts, periodKeyForDate,
@@ -133,13 +134,14 @@ exports.getConfig = async (req, res, next) => {
     const setting = await prisma.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: req.companyId } })
     let defaults = {}
     try { defaults = setting ? JSON.parse(setting.value) : {} } catch { defaults = {} }
-    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS] })
+    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS],revision:setting?.revision??0 })
   } catch (e) { next(e) }
 }
 
 exports.updateConfig = async (req, res, next) => {
   try {
     const incoming = req.body?.defaults || {}
+    assertExpectedRevisions({[SETTING_KEY]:true},req.body?.expectedRevision===undefined?undefined:{[SETTING_KEY]:req.body.expectedRevision})
     let current = {}
     const existing = await prisma.systemSetting.findFirst({ where: { key: SETTING_KEY, company_id: req.companyId } })
     if (existing) {
@@ -164,12 +166,11 @@ exports.updateConfig = async (req, res, next) => {
       }
       defaults[key] = String(code)
     }
-    await prisma.systemSetting.upsert({
-      where: { company_id_key: { company_id: req.companyId, key: SETTING_KEY } },
-      update: { value: JSON.stringify(defaults) },
-      create: { company_id: req.companyId, key: SETTING_KEY, type: 'json', value: JSON.stringify(defaults), description: 'Mapeo de cuentas por defecto para asientos automáticos' },
-    })
-    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS] })
+    const rows=await prismaTransaction.$transaction(async tx=>{
+      await setSettingsActor(tx,{actorId:req.user?.sub,source:'accounting-defaults'})
+      return writeSettings(tx,{companyId:req.companyId,changes:{[SETTING_KEY]:{value:JSON.stringify(defaults),type:'json'}},expectedRevisions:{[SETTING_KEY]:req.body.expectedRevision}})
+    },{maxWait:15000,timeout:30000})
+    res.json({ defaults, keys: [...DEFAULT_ACCOUNT_KEYS, ...OPTIONAL_ACCOUNT_KEYS],revision:rows[0].revision })
   } catch (e) { next(e) }
 }
 

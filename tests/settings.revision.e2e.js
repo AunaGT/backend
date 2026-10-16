@@ -38,6 +38,22 @@ test('real setting revisions arbitrate races and audit only committed allowed ch
     const absentRace=await Promise.allSettled([writeSettingsInTx('first'),writeSettingsInTx('second')])
     assert.equal(absentRace.filter(r=>r.status==='fulfilled').length,1);assert.equal(absentRace.find(r=>r.status==='rejected').reason.status,409)
     async function writeSettingsInTx(value){return db.$transaction(tx=>writeSettings(tx,{companyId:ids[0],changes:{timezone:{value,type:'string'}},expectedRevisions:{timezone:0}}))}
+    const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
+    await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db,prismaTransaction:db}},require.resolve('../src/modules/config/controller'),async controller=>{
+      const req={companyId:ids[0],user:{sub:actor,permissions:['settings.manage']}}
+      const loaded=jsonResponse();await controller.getAll(req,loaded,e=>{throw e})
+      const snapshot=await db.settingAuditEvent.count({where:{company_id:ids[0]}}),beforeCompany=await db.company.findUnique({where:{id:ids[0]}})
+      const rejected=jsonResponse();await controller.update({...req,body:{settings:{company_name:'Must rollback',timezone:'UTC'},expectedRevisions:{company_name:loaded.body._revisions.company_name,timezone:999}}},rejected,e=>{throw e})
+      assert.equal(rejected.statusCode,409)
+      assert.equal((await db.company.findUnique({where:{id:ids[0]}})).name,beforeCompany.name)
+      assert.equal((await db.systemSetting.findUnique({where:{company_id_key:{company_id:ids[0],key:'company_name'}}})).value,latest.value)
+      assert.equal(await db.settingAuditEvent.count({where:{company_id:ids[0]}}),snapshot)
+      const saved=jsonResponse();await controller.update({...req,body:{settings:{company_name:'Confirmed identity',timezone:'UTC'},expectedRevisions:{company_name:loaded.body._revisions.company_name,timezone:loaded.body._revisions.timezone}}},saved,e=>{throw e})
+      assert.equal(saved.statusCode,200);assert.equal((await db.company.findUnique({where:{id:ids[0]}})).name,'Confirmed identity')
+      assert.equal(saved.body._revisions.company_name,loaded.body._revisions.company_name+1)
+      const history=jsonResponse();await controller.history({...req,query:{}},history,e=>{throw e})
+      assert.ok(history.body.items.length>0);assert.ok(history.body.items.every(item=>item.key!=='unlisted.secret'))
+    })
   }finally{
     // Only these two UUIDs belong to this run. Company cascade also removes audit events.
     await db.company.deleteMany({where:{id:{in:ids}}});await db.$disconnect()

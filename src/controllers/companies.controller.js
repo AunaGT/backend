@@ -17,6 +17,8 @@ const { seedChartOfAccounts } = require('../services/accounting/seedChartOfAccou
 const { invalidateSystemConfigCache } = require('../utils/getTimezone')
 const { seedCompanyModules } = require('../modules/platform/service')
 const { assertGrant } = require('../services/userAccess')
+const {settingRevisions,readSettingsRevisions,assertExpectedRevisions,setSettingsActor,writeSettings}=require('../services/settingsRevision')
+const IDENTITY_KEYS=['company_name','company_nit','company_address','company_logo_url']
 
 const COMPANY_SELECT = {
   id: true, name: true, code: true, tax_id: true, address: true,
@@ -31,11 +33,12 @@ exports.list = async (req, res, next) => {
       where: { user_id: req.user.sub, status: 'ACTIVE', ...(all ? {} : { company: { active: true } }) },
       select: { experience_profile: true, company: { select: all ? {
         ...COMPANY_SELECT,
+        system_settings:{where:{key:{in:IDENTITY_KEYS}},select:{key:true,revision:true}},
         branches: { select: { id: true, company_id: true, name: true, code: true, address: true, phone: true, active: true, is_default: true, operational_status: true, manager_user_id: true, manager: { select: { id: true, name: true } } }, orderBy: { name: 'asc' } },
       } : COMPANY_SELECT } },
       orderBy: { company: { name: 'asc' } },
     })
-    res.json(rows.map((r) => ({ ...r.company, branch_count: r.company.branches?.length, experience_profile: r.experience_profile ?? null })))
+    res.json(rows.map(r=>{const{system_settings,...company}=r.company;return{...company,branch_count:company.branches?.length,experience_profile:r.experience_profile??null,...(all?{_revisions:settingRevisions(system_settings||[],IDENTITY_KEYS)}:{})}}))
   } catch (e) { next(e) }
 }
 
@@ -99,21 +102,20 @@ exports.update = async (req, res, next) => {
     if (logo_url !== undefined) data.logo_url = logo_url
     if (active !== undefined) data.active = Boolean(active)
 
-    const company = await prisma.company.update({ where: { id }, data, select: COMPANY_SELECT })
-
     // Espejo a las claves que usan los PDFs y membretes (ver settings.update)
     const mirror = []
     if (name !== undefined) mirror.push(['company_name', String(name)])
     if (tax_id !== undefined) mirror.push(['company_nit', String(tax_id ?? '')])
     if (address !== undefined) mirror.push(['company_address', String(address ?? '')])
     if (logo_url !== undefined) mirror.push(['company_logo_url', String(logo_url ?? '')])
-    for (const [key, value] of mirror) {
-      await prisma.systemSetting.upsert({
-        where: { company_id_key: { company_id: id, key } },
-        update: { value, type: 'string' },
-        create: { company_id: id, key, value, type: 'string' },
-      })
-    }
+    const changes=Object.fromEntries(mirror.map(([key,value])=>[key,{value,type:'string'}]))
+    if(mirror.length)assertExpectedRevisions(changes,req.body.expectedRevisions)
+    const company=await prismaTransaction.$transaction(async tx=>{
+      await setSettingsActor(tx,{actorId:req.user?.sub,source:'companies'})
+      if(mirror.length)await writeSettings(tx,{companyId:id,changes,expectedRevisions:req.body.expectedRevisions})
+      const result=await tx.company.update({where:{id},data,select:COMPANY_SELECT})
+      return{...result,_revisions:await readSettingsRevisions(tx,id,IDENTITY_KEYS)}
+    },{maxWait:15000,timeout:30000})
     if (mirror.length > 0) invalidateSystemConfigCache(id)
 
     res.json(company)

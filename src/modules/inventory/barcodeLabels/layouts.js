@@ -1,6 +1,7 @@
 const {assertAccess,authorizedScope,productWhere,has,error}=require('./access')
 const {parseLayoutInput,parseLabelDesign,parsePaperSettings,createLabelTemplate,createShelfLabelTemplate,defaultPaper,fail}=require('./validation')
 const KEY='inventory.barcode_label_layout'
+const {setSettingsActor}=require('../../../services/settingsRevision')
 const keyFor=purpose=>purpose==='shelf'?'inventory.shelf_price_label_layout':KEY
 function layoutFromRow(row,purpose='barcode'){
   if(!row)return{revision:0,design:purpose==='shelf'?createShelfLabelTemplate():createLabelTemplate(),defaultPaper:defaultPaper()}
@@ -15,6 +16,7 @@ async function saveBarcodeLayout(db,scope,raw,purpose='barcode'){
   if((input.design.purpose==='shelf')!==(purpose==='shelf'))fail('purpose')
   return db.$transaction(async tx=>{
     await assertAccess(tx,scope,{save:true})
+    await setSettingsActor(tx,{actorId:scope.userId,source:purpose==='shelf'?'shelf-price-design':'barcode-design'})
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`barcode-labels:${scope.companyId}`},0))`
     const where={company_id_key:{company_id:scope.companyId,key:keyFor(purpose)}},current=layoutFromRow(await tx.systemSetting.findUnique({where}),purpose)
     if(current.revision!==input.expectedRevision)error(409,'LAYOUT_CONFLICT','Otra persona guardó un diseño. Recarga antes de reemplazarlo')
