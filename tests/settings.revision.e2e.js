@@ -1,0 +1,45 @@
+// Runs only against the user's existing development Supabase; never creates another database.
+require('../src/config/loadEnv')
+const test=require('node:test'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto')
+const {PrismaClient}=require('@prisma/client')
+const {writeSettings,setSettingsActor}=require('../src/services/settingsRevision')
+test('real setting revisions arbitrate races and audit only committed allowed changes',async()=>{
+  const db=new PrismaClient({datasources:{db:{url:process.env.DIRECT_URL||process.env.DATABASE_URL}}}),ids=[randomUUID(),randomUUID()],actor=randomUUID()
+  const changes=value=>({company_name:{value,type:'string'}})
+  const write=(companyId,value,expected)=>db.$transaction(async tx=>{
+    await setSettingsActor(tx,{actorId:actor,source:'configuration-e2e'})
+    return writeSettings(tx,{companyId,changes:changes(value),expectedRevisions:{company_name:expected}})
+  },{timeout:15000,maxWait:10000})
+  try{
+    for(const id of ids)await db.company.create({data:{id,name:'QA ajustes identificados',code:`sc-${id.slice(0,12)}`}})
+    const first=await write(ids[0],'Original',0);assert.equal(first[0].revision,1)
+    await write(ids[1],'Otra empresa',0)
+    const race=await Promise.allSettled([write(ids[0],'Cliente A',1),write(ids[0],'Cliente B',1)])
+    assert.equal(race.filter(r=>r.status==='fulfilled').length,1)
+    assert.equal(race.find(r=>r.status==='rejected').reason.status,409)
+    const latest=await db.systemSetting.findUnique({where:{company_id_key:{company_id:ids[0],key:'company_name'}}})
+    assert.equal(latest.revision,2)
+    const before=await db.settingAuditEvent.count({where:{company_id:ids[0]}})
+    await write(ids[0],latest.value,2)
+    assert.equal(await db.settingAuditEvent.count({where:{company_id:ids[0]}}),before)
+    await assert.rejects(db.$transaction(async tx=>{
+      await setSettingsActor(tx,{actorId:actor,source:'configuration-e2e'})
+      await writeSettings(tx,{companyId:ids[0],changes:{timezone:{value:'UTC',type:'string'}},expectedRevisions:{timezone:0}})
+      throw Error('rollback deliberado')
+    }),/rollback deliberado/)
+    assert.equal(await db.systemSetting.count({where:{company_id:ids[0],key:'timezone'}}),0)
+    assert.equal(await db.settingAuditEvent.count({where:{company_id:ids[0]}}),before)
+    await db.systemSetting.create({data:{company_id:ids[0],key:'unlisted.secret',value:'must-not-be-audited',type:'string'}})
+    assert.equal(await db.settingAuditEvent.count({where:{company_id:ids[0]}}),before)
+    const events=await db.settingAuditEvent.findMany({where:{company_id:ids[0]},orderBy:{revision:'asc'}})
+    assert.equal(events.length,2);assert.equal(events[0].before_value,null);assert.equal(events[1].before_value,'Original')
+    assert.equal(events[1].after_value,latest.value);assert.equal(events[1].actor_id,actor);assert.equal(events[1].source,'configuration-e2e')
+    assert.equal((await db.systemSetting.findUnique({where:{company_id_key:{company_id:ids[1],key:'company_name'}}})).value,'Otra empresa')
+    const absentRace=await Promise.allSettled([writeSettingsInTx('first'),writeSettingsInTx('second')])
+    assert.equal(absentRace.filter(r=>r.status==='fulfilled').length,1);assert.equal(absentRace.find(r=>r.status==='rejected').reason.status,409)
+    async function writeSettingsInTx(value){return db.$transaction(tx=>writeSettings(tx,{companyId:ids[0],changes:{timezone:{value,type:'string'}},expectedRevisions:{timezone:0}}))}
+  }finally{
+    // Only these two UUIDs belong to this run. Company cascade also removes audit events.
+    await db.company.deleteMany({where:{id:{in:ids}}});await db.$disconnect()
+  }
+})
