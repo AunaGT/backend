@@ -42,7 +42,7 @@ test('migration preserves integer quantities, net totals and physical columns, t
   fixture(url, schema)
   try {
     const before = sql(url, schema, 'SELECT qty, net_total FROM sale_items; SELECT stock FROM product_stocks;')
-    for (const migration of migrations) sql(url, schema, fs.readFileSync(path.join(__dirname, '../prisma/migrations', migration, 'migration.sql'), 'utf8'))
+    for (const migration of migrations) sql(url, schema, fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath(migration,{historical:true}), 'utf8'))
     assert.equal(sql(url, schema, 'SELECT qty::integer, net_total FROM sale_items; SELECT stock FROM product_stocks;'), before)
     assert.equal(sql(url, schema, 'SELECT item_name, item_kind, unit_label, quantity_decimals FROM sale_items;'), 'Bien|STANDARD|unidad|0')
     sql(url, schema, `INSERT INTO products (id,name,kind,supplier_id,stock,min_stock,cost,tracks_expiry,stock_assembled,service_unit_label,quantity_decimals)
@@ -60,8 +60,8 @@ test('preflight aborts out-of-range legacy quantities instead of truncating them
   const schema = 'services_' + randomUUID().replaceAll('-', '')
   fixture(url, schema, 100000000)
   try {
-    sql(url, schema, fs.readFileSync(path.join(__dirname, '../prisma/migrations', migrations[0], 'migration.sql'), 'utf8'))
-    assert.throws(() => sql(url, schema, fs.readFileSync(path.join(__dirname, '../prisma/migrations', migrations[1], 'migration.sql'), 'utf8')), /rango/i)
+    sql(url, schema, fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath(migrations[0],{historical:true}), 'utf8'))
+    assert.throws(() => sql(url, schema, fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath(migrations[1],{historical:true}), 'utf8')), /rango/i)
     assert.equal(sql(url, schema, 'SELECT qty FROM sale_items;'), '100000000')
   } finally { sql(url, schema, `DROP SCHEMA "${schema}" CASCADE;`) }
 })
@@ -71,7 +71,7 @@ test('legacy zero-quantity records are preserved but new zero-quantity lines are
   const schema='services_'+randomUUID().replaceAll('-','')
   fixture(url,schema,0)
   try {
-    for(const migration of migrations)sql(url,schema,fs.readFileSync(path.join(__dirname,'../prisma/migrations',migration,'migration.sql'),'utf8'))
+    for(const migration of migrations)sql(url,schema,fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath(migration,{historical:true}),'utf8'))
     assert.equal(sql(url,schema,'SELECT qty::text FROM sale_items;'),'0.0000')
     assert.throws(()=>sql(url,schema,"INSERT INTO sale_items (id,product_id,qty,net_total) VALUES (3,'b',0,0);"),/constraint/i)
   } finally {sql(url,schema,`DROP SCHEMA "${schema}" CASCADE;`)}

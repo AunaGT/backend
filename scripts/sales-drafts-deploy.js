@@ -36,6 +36,7 @@ function verifyBackup(manifestPath,identity){
   return manifest
 }
 async function main(){
+  require('./migrationFiles').assertActiveMigration(migrationName)
   require('../src/config/loadEnv')
   const url=process.env.DIRECT_URL,target=approvedDevTarget(url),identity=connectionIdentity(url)
   approvedDevTarget(process.env.DATABASE_URL)

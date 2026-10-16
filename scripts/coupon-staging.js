@@ -9,7 +9,7 @@ function couponStagingUrl(env=process.env){
   for(const key of [...url.searchParams.keys()]){if(!['sslmode','connect_timeout','pgbouncer','connection_limit','pool_timeout','schema'].includes(key))throw Error('Opción de conexión no autorizada');url.searchParams.delete(key)}
   url.searchParams.set('connect_timeout','10');return url.toString()
 }
-const migrationSql=()=>fs.readFileSync(path.join(__dirname,'../prisma/migrations',MIGRATION,'migration.sql'),'utf8')
+const migrationSql=()=>fs.readFileSync(require('./migrationFiles').migrationSqlPath(MIGRATION,{historical:true}),'utf8')
 async function rehearsal(db){
   const schema='coupon_qa_'+randomUUID().replace(/-/g,'')
   try{
@@ -30,6 +30,7 @@ async function rehearsal(db){
   return true
 }
 async function deploy(){
+  require('./migrationFiles').assertActiveMigration(MIGRATION)
   require('../src/config/loadEnv')
   const raw=couponStagingUrl(),url=new URL(raw),db=new PrismaClient({datasources:{db:{url:raw}}})
   try{
@@ -60,5 +61,5 @@ async function deploy(){
     console.log('Aplicada únicamente '+MIGRATION)
   }finally{await db.$disconnect()}
 }
-if(require.main===module)deploy().catch(()=>{console.error('Despliegue detenido; consulta fase anterior. No se exponen credenciales.');process.exitCode=1})
+if(require.main===module)deploy().catch(error=>{console.error(error.code||'Despliegue detenido; consulta fase anterior. No se exponen credenciales.');process.exitCode=1})
 module.exports={couponStagingUrl,rehearsal}

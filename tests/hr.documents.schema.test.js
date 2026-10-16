@@ -7,7 +7,7 @@ test('modelos documentales conservan versiones y alta idempotente', () => {
   const schema = readFileSync(join(__dirname, '../prisma/schema.prisma'), 'utf8')
   for (const name of ['EmployeeDocumentType', 'EmployeeDocument', 'EmployeeHistory']) assert.match(schema, new RegExp(`model ${name} \\{`))
   assert.match(schema, /@@unique\(\[company_id, creation_request_id\]\)/)
-  const migration = readFileSync(join(__dirname, '../prisma/migrations/20261005120000_hr_employee_documents/migration.sql'), 'utf8')
+  const migration = readFileSync(require('../scripts/migrationFiles').migrationSqlPath('20261005120000_hr_employee_documents',{historical:true}), 'utf8')
   assert.match(migration, /UNIQUE INDEX[^;]+\("employee_id", "type_id"\)[^;]+WHERE "archived_at" IS NULL/s)
   assert.doesNotMatch(migration, /DROP\s+(TABLE|COLUMN)/i)
 })

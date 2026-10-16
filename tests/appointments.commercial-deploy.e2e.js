@@ -3,7 +3,7 @@ const {withAppointmentsTestDb}=require('./helpers/appointmentsTestDb.cjs')
 const hash=data=>crypto.createHash('sha256').update(data).digest('hex')
 async function recordPrerequisites(db,schema){
   await db.$executeRawUnsafe(`CREATE TABLE "${schema}"._prisma_migrations (id VARCHAR(36) PRIMARY KEY,checksum VARCHAR(64) NOT NULL,migration_name VARCHAR(255) NOT NULL,finished_at TIMESTAMPTZ,logs TEXT,rolled_back_at TIMESTAMPTZ,started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),applied_steps_count INTEGER NOT NULL DEFAULT 0)`)
-  for(const name of ['202610120002_appointments_core','202610120003_appointments_flexible','202610120004_appointments_unified_services'])await db.$executeRawUnsafe(`INSERT INTO "${schema}"._prisma_migrations (id,checksum,migration_name,finished_at) VALUES ($1::uuid,$2,$3,NOW())`,crypto.randomUUID(),hash(fs.readFileSync(path.join(__dirname,'../prisma/migrations',name,'migration.sql'))),name)
+  for(const name of ['202610120002_appointments_core','202610120003_appointments_flexible','202610120004_appointments_unified_services'])await db.$executeRawUnsafe(`INSERT INTO "${schema}"._prisma_migrations (id,checksum,migration_name,finished_at) VALUES ($1::uuid,$2,$3,NOW())`,crypto.randomUUID(),hash(fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath(name,{historical:true}))),name)
 }
 test('deploy guard executes the exact commercial delta on prior data while preserving financial and authorization fingerprints',async()=>withAppointmentsTestDb(async({db,scope,schema,fixtures:f})=>{
   const {runCommercialDelta,commercialFingerprint}=require('../scripts/appointments-staging')

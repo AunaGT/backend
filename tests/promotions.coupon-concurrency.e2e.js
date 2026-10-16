@@ -14,7 +14,7 @@ test('real PostgreSQL advisory contention makes cleanup wait for claim and rejec
       await tx.$executeRawUnsafe('CREATE TABLE users(id UUID PRIMARY KEY)')
       await tx.$executeRawUnsafe('CREATE TABLE promotions (LIKE public.promotions INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)')
       await tx.$executeRawUnsafe('ALTER TABLE promotions DROP COLUMN coupon_design')
-      const sql=fs.readFileSync(path.join(__dirname,'../prisma/migrations/202610120001_promotion_coupon_design/migration.sql'),'utf8')
+      const sql=fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath('202610120001_promotion_coupon_design',{historical:true}),'utf8')
       for(const statement of sql.split(';').filter(s=>s.trim()))await tx.$executeRawUnsafe(statement)
     },{timeout:30000,maxWait:10000})
     const scoped=new URL(url);scoped.searchParams.set('schema',schema);db=new PrismaClient({datasources:{db:{url:scoped.toString()}}})

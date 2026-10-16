@@ -6,7 +6,7 @@ function selectAppointmentsMigration(value='core') {
   if(!Object.hasOwn(allowed,value)) throw Error('Migración de Agenda no permitida')
   return allowed[value]
 }
-const migrationSql=(selection='core')=>fs.readFileSync(path.join(__dirname,'../prisma/migrations',selectAppointmentsMigration(selection),'migration.sql'),'utf8')
+const migrationSql=(selection='core')=>fs.readFileSync(require('./migrationFiles').migrationSqlPath(selectAppointmentsMigration(selection),{historical:true}),'utf8')
 const hash=data=>createHash('sha256').update(data).digest('hex')
 const statements=sql=>sql.replace(/^--[^\n]*$/gm,'').split(';').map(s=>s.trim()).filter(Boolean)
 function stagingUrl(env=process.env){
@@ -138,6 +138,7 @@ async function rehearseRestoredCommercialMigration(raw,receiptPath,localRaw){
   }finally{await db.$disconnect()}
 }
 async function applyMigration(raw,receiptPath,selection='core'){
+  require('./migrationFiles').assertActiveMigration(selectAppointmentsMigration(selection))
   if(selection==='commercial')stagingUrl({...process.env,APPOINTMENTS_MIGRATION:'commercial',APPOINTMENTS_STAGING_DATABASE_URL:raw})
   const receipt=verifyBackup(raw,receiptPath,selection),MIGRATION=selectAppointmentsMigration(selection)
   if(selection==='commercial')validateRestoreProof(receipt,hash(migrationSql(selection)))
@@ -184,6 +185,7 @@ async function applyMigration(raw,receiptPath,selection='core'){
   }finally{await db.$disconnect()}
 }
 async function main(){
+  require('./migrationFiles').assertActiveMigration(selectAppointmentsMigration(process.env.APPOINTMENTS_MIGRATION||'core'))
   const mode=process.argv[2]
   if(!['--rehearse','--backup','--apply'].includes(mode))throw Error('Usa --rehearse, --backup o --apply; requieren aprobación explícita')
   require('../src/config/loadEnv')
@@ -194,5 +196,5 @@ async function main(){
   if(mode==='--backup')console.log('Backup privado verificado: '+createBackup(raw,selection))
   if(mode==='--apply')console.log(await applyMigration(raw,process.env.APPOINTMENTS_BACKUP_RECEIPT,selection))
 }
-if(require.main===module)main().catch(()=>{console.error('Operación detenida. Revisa destino, aprobación, backup y migración; no se exponen credenciales.');process.exitCode=1})
+if(require.main===module)main().catch(error=>{console.error(error.code||'Operación detenida. Revisa destino, aprobación, backup y migración; no se exponen credenciales.');process.exitCode=1})
 module.exports={stagingUrl,rehearseAppointmentsMigration,verifyBackup,selectAppointmentsMigration,validateBackupReceipt,createBackup,applyMigration,validateRestoreProof,commercialFingerprint,runCommercialDelta,rehearseRestoredCommercialMigration}

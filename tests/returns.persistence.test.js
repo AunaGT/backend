@@ -26,7 +26,7 @@ test('genera referencias D por sucursal usando la tabla de devoluciones', async 
 test('el esquema y la migración conservan históricos con trazabilidad aditiva', () => {
   const root = path.join(__dirname, '..')
   const schema = fs.readFileSync(path.join(root, 'prisma/schema.prisma'), 'utf8')
-  const migration = fs.readFileSync(path.join(root, 'prisma/migrations/20260930120000_returns_settlement/migration.sql'), 'utf8')
+  const migration = fs.readFileSync(require('../scripts/migrationFiles').migrationSqlPath('20260930120000_returns_settlement',{historical:true}), 'utf8')
 
   for (const fragment of [
     'enum ReturnResolution',

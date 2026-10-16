@@ -1,0 +1,307 @@
+{
+  "formatVersion": 1,
+  "baseline": "0_auna_baseline_20261015",
+  "sourceReceiptHash": "c2985630d700e2b2fe4660c51c154cfa575b2d4005d0b94789bb403f205cf17d",
+  "migrations": [
+    {
+      "name": "20260211233410_init",
+      "checksum": "1d7a599abca4a40666f7c959581d37bb4febf50251ccfb0420d6758abd0e282e"
+    },
+    {
+      "name": "20260212015000_supplier_many_categories",
+      "checksum": "157b75e5beb10d84d3e19601aae48796221f5cb6a1a907548dfcdaf32d12ee4d"
+    },
+    {
+      "name": "20260212020000_add_sale_reference",
+      "checksum": "db899af32c08d8a41156e345178e521a305aef42beee275bfe39285a2b48f7af"
+    },
+    {
+      "name": "20260212180000_supplier_estado",
+      "checksum": "c50b9d32041fa5fe05acb2818d8792b965ab2ebab41f830798e5cde998db1557"
+    },
+    {
+      "name": "20260212200000_add_sale_created_by",
+      "checksum": "3ebaa0dd9c5dfdcfc27ef728f11363196e9293a5c232111e955b6d3405f662a6"
+    },
+    {
+      "name": "20260212210000_add_cash_closure_cashier_supervisor_ids",
+      "checksum": "c972f4d2cc9fb295119870f0785bab5817af22896092fcc2983e81b05377de7e"
+    },
+    {
+      "name": "20260214000000_add_system_settings",
+      "checksum": "09dde480c3b4fc7ba006e7e0f47f090c31c621297356d98fece5bbf1a741b9ce"
+    },
+    {
+      "name": "20260327120000_inventory_count_sessions",
+      "checksum": "ae30671ba82582ae0d6c8c6950c015fc53221cd6678cc79119959a8f300da36e"
+    },
+    {
+      "name": "20260328120000_supplier_party_type",
+      "checksum": "ca596c173f2cfe334860fe4d7533c7c1894877961a95ad6004baf3e38cf23808"
+    },
+    {
+      "name": "20260329100000_supplier_tax_id",
+      "checksum": "2fd58f7762fd37837a2f5b2debcb60993943dddd5198b715d4987c8ec8b2ff11"
+    },
+    {
+      "name": "20260329120000_supplier_entity_kind",
+      "checksum": "256a8754b3464418921fdc46349335a5ff1e5020a8635e91e20b9fc5f7ba4104"
+    },
+    {
+      "name": "20260401140000_performance_indexes_contacts_inventory",
+      "checksum": "419c4ef524cbd42efaf453abfabea7f88d8f1ee6d3dad1b888a0aa8833aa6cef"
+    },
+    {
+      "name": "20260402120000_supplier_payment_terms_many",
+      "checksum": "fbdd49b94177edf8d0e0c62ff43377c9ae09a208bf0df096f941d1237b21de42"
+    },
+    {
+      "name": "20260403140000_incoming_merchandise_payment",
+      "checksum": "c3b1c8a5788cc702bdacb4929711726271ebfa8756cc843ff6d28ecc7d721da5"
+    },
+    {
+      "name": "20260403160000_payment_term_net_days_merchandise_audit",
+      "checksum": "779b7d31c37dcd1ca3c71b3691a2de8b8117331381530bf5d4263d7155c1291f"
+    },
+    {
+      "name": "20260404200000_merchandise_payment_entries",
+      "checksum": "41612090d3a6ca1c415af877c4e811b9756eea985765cfbfe1d842dff7de39ed"
+    },
+    {
+      "name": "20260513120000_cash_register_sessions",
+      "checksum": "7b287345ac2cf9e4abe8f99907b4075e043c51c86b79dab8754ab88b8b82748b"
+    },
+    {
+      "name": "20260513190000_inventory_count_advanced",
+      "checksum": "6dd23a8b9caa23adb05f02491cd88beb137cc871dcb9789e04d4e4f479da8e95"
+    },
+    {
+      "name": "20260514140000_sale_cash_register_session",
+      "checksum": "804f301e881a7544e0055a77dbebadd2d1667268332822cf52ead777bee3c2ca"
+    },
+    {
+      "name": "20260515120000_multi_price_tiers_rules",
+      "checksum": "1cde995425c2e45b9dcd583546cc6358bbd0b29b5a68d10e8260feacd4730cb4"
+    },
+    {
+      "name": "20260515130000_product_available_for_sale",
+      "checksum": "3fc8f4d75cc45638ff9621e1b6b9f188a85fac9dd666b62b8744b23ad74d214f"
+    },
+    {
+      "name": "20260522120000_cash_closure_opening_float",
+      "checksum": "91cb0614b5ad927e2125f8021541f22e14ac77c774a8a5e5eeea29599bd1ea8d"
+    },
+    {
+      "name": "20260522140000_product_category_image_url",
+      "checksum": "aa9b565ce426ee6b8ecedc88714e3f9afc26ce58dd7c8dd49aff91b7d1e0f72a"
+    },
+    {
+      "name": "20260522160000_sales_search_trgm_indexes",
+      "checksum": "2257c340664b60e5f9a2f2d9d3effa4416b59ecef768bc354c62fc14219b2321"
+    },
+    {
+      "name": "20260522180000_commercial_documents_stock_reservations",
+      "checksum": "dde4431776096f5583d7dcafa8498d04accac1e7cd1002d0b71850d4f8d39596"
+    },
+    {
+      "name": "20260522200000_commercial_docs_phase4",
+      "checksum": "ca66783750d622b092d79a21569c6235dc781bf4a0836ebe6f4fffc0a2254a11"
+    },
+    {
+      "name": "20260522210000_quote_display_price_tiers",
+      "checksum": "904296a4d3b3645cff68b8360eadabe8d02cd529652b81669345d693945c94b4"
+    },
+    {
+      "name": "20260522220000_revert_quote_display_price_tiers",
+      "checksum": "aab9336f1a152ff6298be1b8dbf4d343a32c9a484de1ad4cd03a3aaf31625399"
+    },
+    {
+      "name": "20260522230000_product_kits_bom",
+      "checksum": "7f77a5c1118b606615b247c739185154bb5ad11f76a1e57252f374e389f3122a"
+    },
+    {
+      "name": "20260713000000_kit_stock_assembled",
+      "checksum": "97119017e2a799ac95bd8f434386a5f5a14ad94508cace5d7ebaf98535902061"
+    },
+    {
+      "name": "20260811110000_baseline_drift",
+      "checksum": "8afea542f5f02ff1656bde40f17a39f2432bdf55f8cf794f63c7f39fea39a59d"
+    },
+    {
+      "name": "20260811120000_multi_company_branches",
+      "checksum": "5686a1a0ced42fc1987e5538fb7b28d3c00358926ab10f567b3203c0289fab85"
+    },
+    {
+      "name": "20260812100000_journal_entry_branch",
+      "checksum": "4618bc768606c53d87b974442094df74b76b0b48975da39c941a85e427fc788f"
+    },
+    {
+      "name": "20260812140000_transfer_lots_snapshot",
+      "checksum": "f564478e8bffc75732615a117d1344584b2634cd2f0d296b2a626b9215c87cb7"
+    },
+    {
+      "name": "20260813100000_promotion_branches",
+      "checksum": "c35a3c0ccdd477e7217850c43cb0a8d9d3ca4394025af91864f53637726029f8"
+    },
+    {
+      "name": "20260814100000_warehouses_locations",
+      "checksum": "d15a9fcaaeb69ac280513fd8848ed1ab4905ed2ff0fd62f703d4041ff056e987"
+    },
+    {
+      "name": "20260814140000_branch_sales_location",
+      "checksum": "cdca0ffeb8e5d95d6ae93226cb41a56d55445ab81102c2eda069b2947e312822"
+    },
+    {
+      "name": "20260814160000_count_by_location",
+      "checksum": "9c87f0d2cedeabac9d96b83b00553755260044e1bdff5ae84954d06aacb6af25"
+    },
+    {
+      "name": "20260816120000_lots_by_location",
+      "checksum": "0da7675f515f490d455c75b13bf05ec8790f01539538a51fb63f105eb5b35f7b"
+    },
+    {
+      "name": "20260816160000_warehouse_named_after_branch",
+      "checksum": "76e1f9d38d93e40d89067253f8c3ba0795924170b6152e78013dba4bcebc14b4"
+    },
+    {
+      "name": "20260816180000_sale_item_unit_cost",
+      "checksum": "08c25afeb8ded49cb4e184ce0c03206be2fa7a2d33c4f8cec1fdb8af4ea0161c"
+    },
+    {
+      "name": "20260817120000_journal_stock_adjustment",
+      "checksum": "b7d8d2a9309bf983220a15251d3a85e2d2e5b9853ca25c8c776c87bb4b428b05"
+    },
+    {
+      "name": "20260817140000_sale_idempotency_key",
+      "checksum": "5c01865c0bf18989c891052255092eed572f4ef676a436d0f514f0c99549d228"
+    },
+    {
+      "name": "20260818183910_merchandise_source_classification",
+      "checksum": "f9f64b6d9f6d5900c3d4d680a07a2e9568410fcd9151c1cc39006892b1836312"
+    },
+    {
+      "name": "20260823161457_hr_employees_attendance_advances",
+      "checksum": "3652f0fa5254aa4497dd0df4a32d73ee9d1991a0295a5704d9be2b23f8077bad"
+    },
+    {
+      "name": "20260823202202_payroll_runs_payslips",
+      "checksum": "2a4b214e3b8892c2a1d9b46e2f67e663335c2547d212b0997d2a6f5dd23049af"
+    },
+    {
+      "name": "20260824013502_payroll_journal_source_types",
+      "checksum": "b993928e1b2565ba5584cc45206e960f8d54d54218a8868bea52eb00a0b8c119"
+    },
+    {
+      "name": "20260825050934_drop_user_hr_duplicate_fields",
+      "checksum": "f37fb06051d34e795bc0d21ac8fa7b0f0023a8d2dc10334f79c5b88c39334c61"
+    },
+    {
+      "name": "20260826050000_cash_closure_journal_source_type",
+      "checksum": "a82eceafcdb8d3afb120b83d63cc45e48bf4dbf84c6bdeb87f96b784b7601f7b"
+    },
+    {
+      "name": "20260826132613_employee_payment_method",
+      "checksum": "12154a38f9b54e6a7ce98de0c82928f2d14fb94f0dc0c4b7c405e4d527273a0e"
+    },
+    {
+      "name": "20260827100000_receivables",
+      "checksum": "9cebedc2c6980008ddd5fd354f930a55f7698479ac82485a6f15681cfd2208c3"
+    },
+    {
+      "name": "20260827100001_sale_payment_journal_source_type",
+      "checksum": "6186b0663054b47a41ce09b1e69cd8f248c81e2fb60d1f6fdb5043a51b0ba19b"
+    },
+    {
+      "name": "20260827200000_receivables_adjustments",
+      "checksum": "cccfdf22fa70db9429525343183062a5c80377d5ccd6a593dd9e98e9a0ea7fc8"
+    },
+    {
+      "name": "20260910120000_company_modules",
+      "checksum": "5d749d7d83ad82899172e81f1bf4432b4ea8da7d164891faaef9c50b82b8941f"
+    },
+    {
+      "name": "20260914190000_user_company_experience_profile",
+      "checksum": "9d34fdfbce2e2f905b1b349fd68ac0532b9f371c0a3cb79d6508939fddc637dc"
+    },
+    {
+      "name": "20260923150000_order_delivery_details",
+      "checksum": "9faa145db881501ab6b8be4e26d20849d00172fe670be3d3608226541412996c"
+    },
+    {
+      "name": "20260924100000_order_deliveries",
+      "checksum": "fee3d10751b00ca7db3700ff2489819a96bcec281891e7c55cfcf13f85a1a884"
+    },
+    {
+      "name": "20260924150000_users_administration",
+      "checksum": "4e84fcd58ca524e26bf6584d8e89abc4bf02c6c4a7852133b6fda55105c6be4b"
+    },
+    {
+      "name": "20260928140000_branches_operational_state",
+      "checksum": "588171ce69f652a8967b0310c5bb8e8d21eff74e37cc783e35ffbe59fa3bbe40"
+    },
+    {
+      "name": "20260930120000_returns_settlement",
+      "checksum": "30ceab33de1423e26cf1f57f4b722db9eaf2661e1c780316e19faedf5c2d88d7"
+    },
+    {
+      "name": "20261001190000_commercial_payment_terms",
+      "checksum": "9c3435c597815d1a36a1f0faff50a2d8420518f7df051a0a4ec4933749232944"
+    },
+    {
+      "name": "20261005120000_hr_employee_documents",
+      "checksum": "0b978919f8c91be2b8135305b97f34376c4b7a5051b0442742a082ee1b083aa2"
+    },
+    {
+      "name": "20261008120000_contact_images",
+      "checksum": "59c9cdacadd1a8586b4739066c7c6b4a916c72983a6cebd62316c8b9fb3bee87"
+    },
+    {
+      "name": "202610100001_catalog_service_kind",
+      "checksum": "ea2e18cbbb2bc9fcf0dd06efb4de5c88b8552bad49ec2a3a594ec5ca3157559d"
+    },
+    {
+      "name": "202610100002_service_commercial_quantities",
+      "checksum": "ee6040d2f29d3520f2764a4aa93026a5f93e08890e4af77d2b076d79eaf4e026"
+    },
+    {
+      "name": "202610120001_promotion_coupon_design",
+      "checksum": "df8d354aff8fc820bca8bb4da155271c01d90076a2489a35363a0726c0623ee2"
+    },
+    {
+      "name": "202610120002_appointments_core",
+      "checksum": "85cc27af77ff9ceb7f0d2938c5ba71b7be339967854e310bc82e6801c79d403c"
+    },
+    {
+      "name": "202610120003_appointments_flexible",
+      "checksum": "455cd0e2bae1c69dad329b289df831b00ab50269254287cb0ed928288830b335"
+    },
+    {
+      "name": "202610120004_appointments_unified_services",
+      "checksum": "cc42c759775c8163ef3c221a808f302c8426e8546468a5d1f8812f6e7959efa4"
+    },
+    {
+      "name": "202610130001_appointments_commercial",
+      "checksum": "82a0cc3c63e956b8739533d12f2f729702ab921bc7eaf116d23d7dd76f4f64a8"
+    },
+    {
+      "name": "202610140001_sales_drafts_and_external_invoices",
+      "checksum": "7ea9637e3326140df5fd86c3c044b51894707e13732fe346013aeb0adc833c5a"
+    },
+    {
+      "name": "202610140002_sales_history_access",
+      "checksum": "dd7d35ad57c7c28c58cc528c5ff6b649bf0880bec37988d895ef9ae08589037b"
+    },
+    {
+      "name": "202610140003_barcode_print_preparations",
+      "checksum": "abddb6ccfeaf2ad86e1b510db2dd7c26c1278a3ee38c033b2a9fb9e434cc8bec"
+    },
+    {
+      "name": "202610140004_supplier_payments",
+      "checksum": "6ee894dd03cd4e7028123b9e33dad7d648a99b8ab46d356d9b4916b338bfbb7e"
+    },
+    {
+      "name": "202610150001_company_roles",
+      "checksum": "4b38781253adad1485867ded0fdd83787ce6bcded17c90e93e57b1a51c7ad425"
+    }
+  ]
+}
