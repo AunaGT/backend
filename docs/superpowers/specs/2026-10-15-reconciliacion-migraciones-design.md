@@ -1,7 +1,7 @@
 # Reconciliación de migraciones de Auna sin pérdida de datos
 
 Fecha: 15 de octubre de 2026.
-Estado: diseño escrito para revisión; no ejecutado.
+Estado: diseño aprobado para planificar mediante «continua»; ejecución pendiente de revisión del plan.
 
 ## 1. Objetivo y autorización
 
@@ -9,7 +9,7 @@ Desbloquear el despliegue de métodos de pago por empresa y dejar una cadena de 
 
 El usuario aprobó el enfoque de una nueva línea de base, el archivo auditable del historial anterior y un esquema temporal vacío **en la misma Supabase** para ensayar la instalación. No aprobó crear otra instancia, clonar datos de negocio, resetear la base ni ejecutar la semilla general sobre los datos existentes. Se conserva la ejecución directa en las mismas carpetas.
 
-Este documento concreta ese enfoque y requiere revisión antes del plan de implementación. No cambia por sí solo la prohibición vigente de desplegar con el historial divergente.
+Este documento concreta ese enfoque y fue presentado al usuario antes del plan de implementación. Su aprobación permite escribir el plan, no cambia por sí sola la prohibición vigente de desplegar con el historial divergente.
 
 ## 2. Diagnóstico comprobado
 
