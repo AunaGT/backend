@@ -9,6 +9,7 @@
  */
 
 const { DEFAULT_RETURN_POLICY } = require('../modules/returns/domain')
+const {EXPIRY_ALERT_POLICY_KEY,DEFAULT_EXPIRY_ALERT_POLICY}=require('./expiryAlertPolicy')
 
 /**
  * Configuración inicial de una empresa. Sin esto una empresa recién creada
@@ -59,6 +60,7 @@ function defaultCompanySettings(company = {}) {
     ['sales_show_fiscal_fields', 'true', 'string'],
     ['sales_show_channels', 'true', 'string'],
     ['returns.policy', JSON.stringify(DEFAULT_RETURN_POLICY), 'json'],
+    [EXPIRY_ALERT_POLICY_KEY,JSON.stringify(DEFAULT_EXPIRY_ALERT_POLICY),'json'],
   ]
 }
 

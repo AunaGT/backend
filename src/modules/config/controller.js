@@ -12,6 +12,7 @@ const { prisma, prismaTransaction } = require('../../models/prisma')
 const { normalizeReturnPolicy, validateReturnPolicyInput } = require('../returns/domain')
 const {settingRevisions,assertExpectedRevisions,setSettingsActor,writeSettings}=require('../../services/settingsRevision')
 const {GENERAL_SETTING_KEYS,historyKeys}=require('./settingsKeys')
+const {EXPIRY_ALERT_POLICY_KEY,DEFAULT_EXPIRY_ALERT_POLICY,validateExpiryAlertPolicy,expiryPolicyFromStored}=require('../../services/expiryAlertPolicy')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
 const { fetchLogoForHttp } = require('../../utils/pdfBranding')
@@ -44,6 +45,7 @@ exports.getAll = async (req, res, next) => {
       }
     }
     settings['returns.policy'] = normalizeReturnPolicy(settings['returns.policy'])
+    settings[EXPIRY_ALERT_POLICY_KEY]=settings[EXPIRY_ALERT_POLICY_KEY]===undefined?{...DEFAULT_EXPIRY_ALERT_POLICY}:expiryPolicyFromStored(settings[EXPIRY_ALERT_POLICY_KEY])
     settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
     res.json(settings)
   } catch (e) {
@@ -322,6 +324,7 @@ exports.update = async (req, res, next) => {
       try { payload['returns.policy'] = validateReturnPolicyInput(payload['returns.policy']) }
       catch (error) { if (error.status === 400) return res.status(400).json({ message: error.message }); throw error }
     }
+    if(payload[EXPIRY_ALERT_POLICY_KEY]!==undefined)payload[EXPIRY_ALERT_POLICY_KEY]=validateExpiryAlertPolicy(payload[EXPIRY_ALERT_POLICY_KEY])
 
     const allowedKeys = new Set([
       'currency_code',
@@ -353,9 +356,10 @@ exports.update = async (req, res, next) => {
       'sales_show_channels',
       'inventory_services_enabled',
       'returns.policy',
+      EXPIRY_ALERT_POLICY_KEY,
     ])
     if(Object.keys(payload).some(key=>!allowedKeys.has(key)))return res.status(400).json({message:'La solicitud contiene una configuración no admitida.'})
-    const changes=Object.fromEntries(Object.entries(payload).map(([key,value])=>[key,{value:typeof value==='object'?JSON.stringify(value):String(value),type:['cash_closure_denominations','returns.policy'].includes(key)?'json':'string'}]))
+    const changes=Object.fromEntries(Object.entries(payload).map(([key,value])=>[key,{value:typeof value==='object'?JSON.stringify(value):String(value),type:['cash_closure_denominations','returns.policy',EXPIRY_ALERT_POLICY_KEY].includes(key)?'json':'string'}]))
     assertExpectedRevisions(changes,body?.expectedRevisions)
 
     // La identidad de la empresa vive en dos lados: la fila Company (selector,
@@ -390,7 +394,12 @@ exports.update = async (req, res, next) => {
       }
     }
     settings['returns.policy']=normalizeReturnPolicy(settings['returns.policy'])
+    if(settings[EXPIRY_ALERT_POLICY_KEY]===undefined)settings[EXPIRY_ALERT_POLICY_KEY]={...DEFAULT_EXPIRY_ALERT_POLICY}
     settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
+    if(Object.hasOwn(payload,EXPIRY_ALERT_POLICY_KEY)){
+      const result=await require('../../services/lots').syncLotExpiryAlerts(prisma,{force:true,companyId:req.companyId})
+      if(!result?.ok)settings.warning='Los cambios se guardaron, pero no se pudieron actualizar las alertas de vencimiento. Se reintentará al consultar Alertas.'
+    }
     res.json(settings)
   } catch (e) {
     if(e.status)return res.status(e.status).json({message:e.message})

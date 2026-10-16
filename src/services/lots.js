@@ -25,6 +25,7 @@
 
 const crypto = require('crypto')
 const { prisma } = require('../models/prisma')
+const {getExpiryAlertPolicy}=require('./expiryAlertPolicy')
 
 /** Código de lote legible cuando el usuario no ingresa uno: L-YYMMDD-XXXX (sufijo aleatorio). */
 function generateLotCode(date = new Date()) {
@@ -305,13 +306,12 @@ async function restoreLotsFEFO(tx, stockMap, branchId) {
   }
 }
 
-const LOT_ALERT_WINDOW_DAYS = 30
 const LOT_ALERT_SYNC_THROTTLE_MS = 10 * 60 * 1000 // 10 min; se dispara al listar alertas (serverless, sin cron)
-let lastLotAlertSyncAt = 0
+const lastLotAlertSyncAt = new Map()
 
 /**
  * Sincroniza alertas de tipo "Vencimiento": una alerta activa por producto con
- * lotes por vencer (<= LOT_ALERT_WINDOW_DAYS) o ya vencidos; resuelve la alerta
+ * lotes por vencer según política empresarial o ya vencidos; resuelve la alerta
  * si el producto deja de calificar. Advisory: nunca lanza, y se auto-throttlea
  * porque puede dispararse en cada GET /alerts (no hay cron en serverless).
  * @param {object} tx cliente Prisma
@@ -320,8 +320,9 @@ let lastLotAlertSyncAt = 0
 async function syncLotExpiryAlerts(tx, opts = {}) {
   const client = tx || prisma
   const now = Date.now()
-  if (!opts.force && now - lastLotAlertSyncAt < LOT_ALERT_SYNC_THROTTLE_MS) return
-  lastLotAlertSyncAt = now
+  const throttleKey=opts.companyId||'*'
+  if (!opts.force && now - (lastLotAlertSyncAt.get(throttleKey)||0) < LOT_ALERT_SYNC_THROTTLE_MS) return {ok:true,skipped:true}
+  lastLotAlertSyncAt.set(throttleKey,now)
 
   try {
     const [statusActive, statusResolved, alertType, priorities] = await Promise.all([
@@ -330,14 +331,19 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
       client.alertType.findFirst({ where: { name: 'Vencimiento' } }),
       client.alertPriority.findMany(),
     ])
-    if (!statusActive || !statusResolved || !alertType) return
+    if (!statusActive || !statusResolved || !alertType) {lastLotAlertSyncAt.delete(throttleKey);return{ok:false}}
     const priorityByName = Object.fromEntries(priorities.map((p) => [p.name, p]))
 
     const today = new Date(new Date().toISOString().slice(0, 10))
-    const limit = new Date(today.getTime() + LOT_ALERT_WINDOW_DAYS * 86400000)
+    const companies=await client.company.findMany({where:opts.companyId?{id:opts.companyId}:{},select:{id:true}})
+    let failures=0
+    for(const company of companies){
+    try{
+    const policy=await getExpiryAlertPolicy(client,company.id)
+    const limit = new Date(today.getTime() + policy.warningDays * 86400000)
 
     const lots = await client.productLot.findMany({
-      where: { qty_remaining: { gt: 0 }, expiry_date: { lte: limit } },
+      where: { qty_remaining: { gt: 0 }, expiry_date: { lte: limit },branch:{company_id:company.id},product:{company_id:company.id,kind:{not:'SERVICE'}} },
       select: {
         product_id: true, branch_id: true, lot_code: true, expiry_date: true, qty_remaining: true,
         product: { select: { name: true } },
@@ -353,7 +359,7 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
 
     // Resolver alertas de "Vencimiento" cuyo (producto, sucursal) ya no califica
     const activeExpiryAlerts = await client.alert.findMany({
-      where: { type_id: alertType.id, status_id: statusActive.id, resolved: 0 },
+      where: { type_id: alertType.id, status_id: statusActive.id, resolved: 0,branch:{company_id:company.id} },
       select: { id: true, product_id: true, branch_id: true },
     })
     const toResolve = activeExpiryAlerts
@@ -361,12 +367,12 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
       .map((a) => a.id)
     if (toResolve.length > 0) {
       await client.alert.updateMany({
-        where: { id: { in: toResolve } },
+        where: { id: { in: toResolve },branch:{company_id:company.id} },
         data: { status_id: statusResolved.id, resolved: 1 },
       })
     }
 
-    if (qualifyingKeys.length === 0) return
+    if (qualifyingKeys.length === 0) continue
 
     const existingByKey = new Map(
       activeExpiryAlerts.map((a) => [keyOf(a.product_id, a.branch_id), a.id])
@@ -381,7 +387,7 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
       const nearest = productLots[0] // ya viene ordenado por expiry_date asc
       const days = Math.round((new Date(nearest.expiry_date).getTime() - today.getTime()) / 86400000)
       const expired = days < 0
-      const priorityName = expired ? 'Crítica' : days <= 7 ? 'Alta' : 'Media'
+      const priorityName = expired ? 'Crítica' : days <= policy.highPriorityDays ? 'Alta' : 'Media'
       const priority = priorityByName[priorityName]
       const extra = productLots.length > 1 ? ` (+${productLots.length - 1} lote${productLots.length > 2 ? 's' : ''} más)` : ''
       // Dónde está lo que vence: sin esto hay que buscarlo anaquel por anaquel.
@@ -415,8 +421,14 @@ async function syncLotExpiryAlerts(tx, opts = {}) {
     const ops = [...updates]
     if (createData.length > 0) ops.push(client.alert.createMany({ data: createData, skipDuplicates: true }))
     await Promise.all(ops)
+    }catch(error){failures++;console.error('[lots] No se sincronizó una empresa:',error.message)}
+    }
+    if(failures)lastLotAlertSyncAt.delete(throttleKey)
+    return{ok:failures===0}
   } catch (e) {
+    lastLotAlertSyncAt.delete(throttleKey)
     console.error('[lots] syncLotExpiryAlerts (advisory) falló:', e.message)
+    return{ok:false}
   }
 }
 
