@@ -3,6 +3,7 @@ const {Prisma}=require('@prisma/client')
 const {lockedOrder,deliver,invoice}=require('./fulfillment')
 const {validateSnapshot}=require('../sales/engagementSale')
 const {resolveEffectiveModules}=require('../platform/registry')
+const {isV2,D}=require('../../services/units/commercial')
 function fail(code,message,status=409){throw Object.assign(new Error(message),{code,status})}
 function request(scope,id,body={}){return {companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId},params:{id},body}}
 async function lockEngagementOrder(tx,scope,orderId){return lockedOrder(tx,request(scope,orderId),{separateOnly:false})}
@@ -15,12 +16,13 @@ async function invoiceEngagementOrder(tx,scope,{orderId,source,idempotencyKey,se
   if(order.fulfillment_mode!=='SEPARATE')fail('SOURCE_REVIEW_REQUIRED','Este pedido conserva el flujo anterior; revisa su facturación existente')
   validateSnapshot(source)
   if(order.customer_contact_id!==source.customer_id||!order.total.eq(source.agreed_total)||order.lines.length!==source.lines.length)fail('SOURCE_REVIEW_REQUIRED','El pedido cambió respecto de lo contratado')
-  if(await tx.commercialDocumentSale.count({where:{document_id:order.id}})||order.lines.some(l=>l.qty_invoiced.gt(0)))fail('SOURCE_REVIEW_REQUIRED','El pedido ya tiene facturación; revisa sus ventas existentes')
+  if(await tx.commercialDocumentSale.count({where:{document_id:order.id}})||order.lines.some(l=>D(isV2(l)?l.base_invoiced||0:l.qty_invoiced).gt(0)))fail('SOURCE_REVIEW_REQUIRED','El pedido ya tiene facturación; revisa sus ventas existentes')
   const services=[]
   for(const line of order.lines){
     const original=source.lines.find(l=>l.sort_order===line.sort_order&&l.product_id===line.product_id)
     if(!original||line.item_kind!==original.item_kind||!line.qty.eq(original.qty)||!line.unit_price.eq(original.unit_price)||!line.line_total.eq(original.line_total))fail('SOURCE_REVIEW_REQUIRED','Las partidas del pedido cambiaron')
-    if(line.qty_fulfilled.lt(line.qty)){
+    if(isV2(line)&&(!isV2(original)||!D(line.base_qty).eq(original.base_qty)||JSON.stringify(line.unit_snapshot)!==JSON.stringify(original.unit_snapshot)))fail('SOURCE_REVIEW_REQUIRED','La unidad del pedido cambió respecto de lo contratado')
+    if(isV2(line)?D(line.base_fulfilled||0).lt(line.base_qty):line.qty_fulfilled.lt(line.qty)){
       if(line.item_kind!=='SERVICE')fail('GOODS_DELIVERY_REQUIRED','Entrega los bienes desde Pedidos antes de facturar esta contratación')
       const performed=original.schedules.filter(s=>s.state!=='RELEASED'&&s.state!=='CANCELLED'&&(s.booking?s.booking.status==='COMPLETED':s.session.status==='COMPLETED'&&s.session.commercial_completion_confirmed_at)).reduce((sum,s)=>sum.add(s.quantity),new Prisma.Decimal(0))
       if(performed.lt(line.qty))fail('SERVICE_DELIVERY_REQUIRED','Confirma la prestación de todos los servicios antes de facturar el pedido')

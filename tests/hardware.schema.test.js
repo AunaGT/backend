@@ -1,0 +1,10 @@
+const test=require('node:test'),assert=require('node:assert/strict')
+const {Prisma}=require('@prisma/client')
+test('generated client preserves scoped references and diagnostics replay identity',()=>{
+  const models=new Map(Prisma.dmmf.datamodel.models.map(m=>[m.name,m]))
+  for(const name of ['HardwareWorkstation','HardwareDevice','HardwareAssignment','HardwareTestRun','HardwareAuditEvent'])assert.ok(models.has(name),`${name} missing from generated client`)
+  const assignment=models.get('HardwareAssignment')
+  assert.deepEqual(assignment.fields.find(f=>f.name==='device').relationFromFields,['company_id','branch_id','device_id'])
+  assert.deepEqual(assignment.fields.find(f=>f.name==='workstation').relationToFields,['company_id','branch_id','id'])
+  assert.ok(models.get('HardwareTestRun').uniqueFields.some(f=>f.join(',')==='company_id,actor_id,request_key'))
+})

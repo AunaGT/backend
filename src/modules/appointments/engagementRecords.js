@@ -7,6 +7,7 @@ async function createEngagementRecord(tx,scope,{source,quoteId,requestKey,inputH
     commercial_snapshot:origin?{...source,origin}:source,resolution_pending:!!order?.documentSales?.length,created_by:scope.userId,
     lines:{create:source.lines.map(l=>({source_document_id:quoteId||null,source_line_id:l.id||null,product_id:l.productId,item_kind:l.itemKind,
       item_name:l.itemName,unit_label:l.unitLabel,quantity_decimals:l.quantityDecimals,qty:l.quantity,unit_price:l.unitPrice,line_total:l.lineTotal,
+      ...(l.unitMetadataVersion===2?{unit_metadata_version:2,unit_snapshot:l.unitSnapshot,base_qty:l.baseQty,base_unit_cost:l.baseUnitCost}:{}),
       service_schedule_snapshot:l.serviceConditions??Prisma.DbNull,sort_order:l.sortOrder}))}},include:{lines:true}})
   await tx.appointmentEngagementHistory.create({data:{company_id:scope.companyId,branch_id:scope.branchId,customer_id:row.customer_id,
     engagement_id:row.id,actor_id:scope.userId,action:'CREATED',request_key:requestKey,input_hash:inputHash,...(origin?{after:{origin}}:{})}})

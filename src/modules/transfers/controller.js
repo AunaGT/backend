@@ -23,6 +23,8 @@ const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { consumeLotsFEFO, recreateLotsFromSnapshot } = require('../../services/lots')
 const { assertBranchLocations, dispatchedByRef, defaultLocationId } = require('../../services/stockLocations')
 const { buildTransferWhere } = require('./domain')
+const { parseQuantity } = require('../../services/units/quantity')
+const { decimal, physicalQuantity, storageQuantity, lockPhysicalProducts, physicalSnapshot } = require('../../services/units/physical')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías: sin esto
 // el envío fallaba "a veces" y funcionaba al reintentar (conexión ya caliente).
@@ -121,11 +123,11 @@ exports.create = async (req, res, next) => {
     const qtyByProduct = new Map()
     for (const it of items) {
       const pid = String(it.product_id || '')
-      const qty = Number(it.qty || 0)
-      if (!pid || !Number.isInteger(qty) || qty <= 0) {
+      const qty = parseQuantity(it.qty)
+      if (!pid) {
         return res.status(400).json({ message: 'Cada item debe tener product_id y qty entero > 0' })
       }
-      qtyByProduct.set(pid, (qtyByProduct.get(pid) || 0) + qty)
+      qtyByProduct.set(pid, parseQuantity(decimal(qtyByProduct.get(pid)).add(qty)).toFixed())
     }
     const productIds = [...qtyByProduct.keys()]
 
@@ -140,6 +142,7 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
+      const lockedProducts = await lockPhysicalProducts(tx, productIds, fromBranchId)
       const products = await tx.product.findMany({
         where: { id: { in: productIds }, deleted: false, company_id: req.companyId },
         select: { id: true, name: true, kind: true, stock_assembled: true },
@@ -160,7 +163,11 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
-      const lines = productIds.map((pid) => ({ product_id: pid, qty: qtyByProduct.get(pid) }))
+      const lines = []
+      for (const pid of productIds) {
+        const product = lockedProducts.get(pid)
+        lines.push({product_id:pid,qty:physicalQuantity(qtyByProduct.get(pid),product).toFixed(),unit_snapshot:await physicalSnapshot(tx,product)})
+      }
       await assertLinesAvailable(tx, lines, { branchId: fromBranchId, companyId:req.companyId })
 
       const branch = await tx.branch.findUnique({
@@ -177,7 +184,7 @@ exports.create = async (req, res, next) => {
           created_by: req.user.sub,
           notes: notes != null ? String(notes).trim() || null : null,
           lines: {
-            create: lines.map((l) => ({ product_id: l.product_id, qty_sent: l.qty })),
+            create: lines.map((l) => ({ product_id: l.product_id, qty_sent: storageQuantity(l.qty), ...(l.unit_snapshot ? {unit_snapshot:l.unit_snapshot} : {}) })),
           },
         },
         include: TRANSFER_INCLUDE,
@@ -260,14 +267,17 @@ exports.receive = async (req, res, next) => {
         err.status = 409
         throw err
       }
+      await lockPhysicalProducts(tx,transfer.lines.map(line=>line.product_id),branchId)
 
       const receivedByLine = new Map()
       const locationByLine = new Map()
       if (Array.isArray(linesRaw) && linesRaw.length > 0) {
         for (const l of linesRaw) {
           const lineId = String(l.line_id || '')
-          const qty = Number(l.qty_received)
-          if (!lineId || !Number.isInteger(qty) || qty < 0) {
+          const line = transfer.lines.find(row=>row.id===lineId)
+          if (!line || receivedByLine.has(lineId)) throw Object.assign(new Error('Línea de traslado inválida o duplicada'), {status:400})
+          const qty = parseQuantity(l.qty_received, {allowZero:true,decimals:line.unit_snapshot?.baseUnit?.decimals ?? 0}).toFixed()
+          if (!lineId) {
             const err = new Error('Cada línea debe tener line_id y qty_received entero >= 0')
             err.status = 400
             throw err
@@ -284,20 +294,20 @@ exports.receive = async (req, res, next) => {
       let receivingLocation = null
       for (const line of transfer.lines) {
         const qty = receivedByLine.has(line.id) ? receivedByLine.get(line.id) : line.qty_sent
-        if (qty > line.qty_sent) {
+        if (decimal(qty).gt(line.qty_sent)) {
           const err = new Error('No se puede recibir más de lo enviado')
           err.status = 400
           throw err
         }
         await tx.stockTransferLine.update({
           where: { id: line.id },
-          data: { qty_received: qty },
+          data: { qty_received: storageQuantity(qty) },
         })
-        if (qty > 0) {
+        if (decimal(qty).gt(0)) {
           const target = locationByLine.get(line.id) || (toLocationId ? String(toLocationId) : '')
           if (!byLocation.has(target)) byLocation.set(target, new Map())
           const map = byLocation.get(target)
-          map.set(String(line.product_id), (map.get(String(line.product_id)) || 0) + qty)
+          map.set(String(line.product_id), decimal(map.get(String(line.product_id))).add(qty).toFixed())
           // Los lotes que viajaron aterrizan donde aterrizó la mercancía.
           if (!target && !receivingLocation) {
             receivingLocation = await defaultLocationId(tx, branchId, { receiving: true })
@@ -312,6 +322,7 @@ exports.receive = async (req, res, next) => {
         const updated = await restoreStockMap(tx, stockMap, branchId, {
           reason: 'TRANSFER_IN', refType: 'transfer', refId: String(transfer.id),
           userId: req.user?.sub || null, locationId: target || undefined,
+          unitSnapshots:new Map(transfer.lines.filter(line=>line.unit_snapshot).map(line=>[String(line.product_id),line.unit_snapshot])),
         })
         await ensureStockAlertsBatch(tx, updated, branchId)
       }
@@ -355,6 +366,10 @@ exports.cancel = async (req, res, next) => {
         throw err
       }
 
+      const claim = await tx.stockTransfer.updateMany({where:{id:transfer.id,status:'EN_TRANSITO'},data:{status:'CANCELADA',cancelled_at:new Date()}})
+      if (claim.count !== 1) throw Object.assign(new Error('El traslado ya fue recibido o cancelado'), {status:409})
+      await lockPhysicalProducts(tx,transfer.lines.map(line=>line.product_id),transfer.from_branch_id)
+
       // Cada unidad vuelve al anaquel del que salió, según el libro. Traslados
       // viejos (sin libro por ubicación) vuelven a la ubicación por defecto.
       const dispatched = await dispatchedByRef(tx, {
@@ -369,7 +384,7 @@ exports.cancel = async (req, res, next) => {
         for (const d of back) {
           if (!byLocation.has(d.location_id)) byLocation.set(d.location_id, new Map())
           const map = byLocation.get(d.location_id)
-          map.set(productId, (map.get(productId) || 0) + d.qty)
+          map.set(productId, decimal(map.get(productId)).add(d.qty).toFixed())
         }
         // Los lotes que salieron vuelven al origen, cada uno a su anaquel (el
         // snapshot ya trae de dónde salió).
@@ -381,6 +396,7 @@ exports.cancel = async (req, res, next) => {
         const updated = await restoreStockMap(tx, stockMap, transfer.from_branch_id, {
           reason: 'TRANSFER_CANCEL', refType: 'transfer', refId: String(transfer.id),
           userId: req.user?.sub || null, locationId: locationId || undefined,
+          unitSnapshots:new Map(transfer.lines.filter(line=>line.unit_snapshot).map(line=>[String(line.product_id),line.unit_snapshot])),
         })
         await ensureStockAlertsBatch(tx, updated, transfer.from_branch_id)
       }
@@ -422,7 +438,7 @@ exports.inTransitReport = async (req, res, next) => {
           })
         }
         const row = byProduct.get(key)
-        row.qty += line.qty_sent
+        row.qty = decimal(row.qty).add(line.qty_sent).toFixed()
         row.transfers.push({
           transfer_id: t.id,
           reference: t.reference,
@@ -435,7 +451,7 @@ exports.inTransitReport = async (req, res, next) => {
     }
 
     res.json({
-      products: [...byProduct.values()].sort((a, b) => b.qty - a.qty),
+      products: [...byProduct.values()].sort((a, b) => decimal(b.qty).cmp(a.qty)),
       totalTransfers: transfers.length,
     })
   } catch (e) { next(e) }

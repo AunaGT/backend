@@ -1,13 +1,13 @@
 const { createReport, column: c, section: s, metric: m, chart } = require('../reportModel')
-const salesColumns = label => [c(label[0], label[1]), c('ventas', 'Tickets', 'integer'), c('unidades', 'Unidades físicas', 'integer'), c('revenue', 'Ingreso neto', 'money')]
+const salesColumns = label => [c(label[0], label[1]), c('ventas', 'Tickets', 'integer'), c('revenue', 'Ingreso neto', 'money')]
 function buildSalesReport(data, meta) {
   return createReport(meta, { id: 'sales', title: 'Reporte de ventas',
     summary: [m('gross', 'Ventas brutas', data.totalRevenueGross, 'money'), m('returns', 'Devoluciones', data.totalReturned, 'money'),
       m('net', 'Ventas netas', data.totalRevenue, 'money'), m('cost', 'Costo de mercancía vendida', data.totalCost, 'money'), m('profit', 'Margen bruto', data.totalProfit, 'money'),
-      m('units', 'Unidades físicas vendidas', data.unidadesTotales), m('tickets', 'Tickets', data.tickets), m('average', 'Ticket promedio', data.ticketPromedio, 'money')],
+      ...(data.unitsComparable!==false?[m('units','Unidades físicas vendidas',data.unidadesTotales)]:[]), m('tickets', 'Tickets', data.tickets), m('average', 'Ticket promedio', data.ticketPromedio, 'money')],
     sections: [s('by-branch', 'Ventas por sucursal', salesColumns(['branch', 'Sucursal']), data.salesByBranch),
-      s('top-products', 'Top 10 partidas por ingreso bruto', [c('name', 'Bien o servicio'), c('unit','Unidad'),c('ventas', 'Cantidad', 'decimal',4), c('revenue', 'Ingreso bruto', 'money')], data.topProducts),
-      ...(data.quantitiesByUnit ? [s('quantities','Cantidades por tipo y unidad',[c('type','Tipo'),c('unit','Unidad'),c('quantity','Cantidad','decimal',4)],data.quantitiesByUnit)] : []),
+      s('top-products', 'Top 10 partidas por ingreso bruto', [c('name', 'Bien o servicio'), c('unit','Unidad'),c('ventas', 'Cantidad', 'decimal',data.quantityDecimals??6), c('revenue', 'Ingreso bruto', 'money')], data.topProducts),
+      ...(data.quantitiesByUnit ? [s('quantities','Cantidades por tipo y unidad',[c('type','Tipo'),c('unit','Unidad'),c('quantity','Cantidad','decimal',data.quantityDecimals??6)],data.quantitiesByUnit)] : []),
       s('by-category', 'Ingresos brutos por categoría', [c('category', 'Categoría'), c('revenue', 'Ingreso bruto', 'money')], data.categories),
       s('by-method', 'Ventas por método de pago', salesColumns(['method', 'Método']), data.salesByMethod),
       s('by-period', data.useDaily ? 'Ventas por día' : 'Ventas por mes', salesColumns(['periodo', 'Período']), data.salesByPeriod),
@@ -26,9 +26,9 @@ function buildFinancialReport(data, meta) {
       ...(attributable ? [m('purchases', 'Compras registradas · empresa', data.purchasesPeriod, 'money')] : [])],
     sections: [s('concepts', 'Resultados del período', [c('concept', 'Concepto'), c('amount', 'Monto', 'money')], concepts),
       s('by-category', 'Rentabilidad bruta por categoría', [c('category', 'Categoría'), c('revenue', 'Ingreso bruto', 'money'), c('cost', 'Costo', 'money'), c('profit', 'Margen', 'money'), c('marginPct', 'Margen %', 'percent')], data.categoryProfitability),
-      ...(attributable ? [s('purchases-by-supplier', 'Compras registradas por proveedor · empresa', [c('supplier', 'Proveedor'), c('lines', 'Líneas', 'integer'), c('units', 'Unidades', 'integer'), c('amount', 'Monto', 'money')], data.purchasesBySupplier)] : []),
-      s('stock-by-branch', 'Inventario actual por sucursal', [c('branch', 'Sucursal'), c('skus', 'Productos', 'integer'), c('units', 'Unidades', 'integer'), c('value', 'Valor', 'money')], data.byBranch || []),
-      s('stock-by-warehouse', 'Inventario actual por almacén', [c('warehouse', 'Almacén'), c('skus', 'Productos', 'integer'), c('units', 'Unidades', 'integer'), c('value', 'Valor', 'money')], data.byWarehouse || [])],
+      ...(attributable ? [s('purchases-by-supplier', 'Compras registradas por proveedor · empresa', [c('supplier', 'Proveedor'), c('lines', 'Líneas', 'integer'), c('amount', 'Monto', 'money')], data.purchasesBySupplier)] : []),
+      s('stock-by-branch', 'Inventario actual por sucursal', [c('branch', 'Sucursal'), c('skus', 'Productos', 'integer'), c('value', 'Valor', 'money')], data.byBranch || []),
+      s('stock-by-warehouse', 'Inventario actual por almacén', [c('warehouse', 'Almacén'), c('skus', 'Productos', 'integer'), c('value', 'Valor', 'money')], data.byWarehouse || [])],
     charts: [chart('concepts', 'Ventas, costo y margen', concepts.filter(r => ['Ventas netas', 'Costo de mercancía vendida', 'Margen bruto'].includes(r.concept)), 'concept', 'amount')],
     notes: ['No es un estado financiero contable completo. El inventario es actual, no un cierre histórico.',
       ...(data.serviceLines ? ['El ingreso de servicios no incluye costeo de prestación; el margen mostrado no es utilidad neta de servicios.'] : []),

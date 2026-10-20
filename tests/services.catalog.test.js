@@ -104,3 +104,16 @@ test('commercial history is scoped, paginated and remains readable with services
     assert.equal(res.body.totalItems,1)
   })
 })
+test('commercial history accepts bounded page sizes and applies the same size to offsets and totals', async () => {
+  let lookup
+  const prisma = { product: { findFirst: async () => ({ id: 's' }) }, saleItem: { count: async () => 250, findMany: async args => { lookup = args; return [] } } }
+  await withMocks({ [model]: { prisma } }, target, async controller => {
+    for (const [input, expected] of [['25', 25], ['100', 100], ['999', 100], ['-1', 10], ['2.5', 10], ['bad', 10]]) {
+      const res = jsonResponse()
+      await controller.commercialHistory({ companyId: 'A', branchId: 'B', params: { id: 's' }, query: { page: '2', pageSize: input } }, res, error => { throw error })
+      assert.equal(lookup.take, expected); assert.equal(lookup.skip, expected)
+      assert.equal(res.body.pageSize, expected); assert.equal(res.body.totalPages, Math.ceil(250 / expected))
+      assert.equal(lookup.where.sale.AND[1].branch.company_id, 'A')
+    }
+  })
+})

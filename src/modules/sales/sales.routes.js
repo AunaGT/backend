@@ -86,6 +86,7 @@ const router = Router()
  *                 nextPage: { type: integer, nullable: true }
  */
 router.get('/', Auth, hasPermission('sales.view'), Sales.list)
+router.get('/checkout-attempts/:key', Auth, hasPermission('sales.create'), Sales.checkoutAttempt)
 
 /**
  * @openapi

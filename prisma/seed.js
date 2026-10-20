@@ -100,6 +100,7 @@ async function main() {
   console.log('Creando permisos del sistema...')
   
   const permissions = [
+    ...require('../src/modules/config/hardware/seed').permissions,
     // Usuarios y Roles
     { code: 'users.view', name: 'Ver usuarios', description: 'Puede listar y ver usuarios' },
     { code: 'users.create', name: 'Crear usuarios', description: 'Puede crear nuevos usuarios' },
@@ -373,6 +374,7 @@ async function main() {
     { denomination: 0.1, type: 'Moneda' }, { denomination: 0.05, type: 'Moneda' }
   ])
   const defaultSettings = [
+    { key: 'inventory_units_enabled', value: 'false', type: 'string', description: 'Unidades y presentaciones de inventario' },
     { key: 'currency_code', value: 'GTQ', type: 'string', description: 'Código de moneda principal' },
     { key: 'currency_name', value: 'Quetzal', type: 'string', description: 'Nombre de la moneda' },
     { key: 'timezone', value: 'America/Guatemala', type: 'string', description: 'Zona horaria del sistema' },
@@ -403,6 +405,8 @@ async function main() {
     })
   }
   console.log('  Valores por defecto de configuración listos')
+  const {seedStandardUnits}=require('../src/modules/inventory/units')
+  if(prisma.measureUnit)for(const company of await prisma.company.findMany({select:{id:true}}))await seedStandardUnits(prisma,company.id)
 
   // ========================================
   // 7b. Caja registradora por defecto (apertura de caja / multi-caja futuro)

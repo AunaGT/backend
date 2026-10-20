@@ -27,7 +27,7 @@ function createReport(meta, content) {
   unique(sections); unique(summary); unique(charts)
   const projected = sections.map(section => {
     unique(section.columns)
-    for (const c of section.columns) if (!TYPES.has(c.type) || (c.quantityDecimals!=null && (!Number.isInteger(c.quantityDecimals) || c.quantityDecimals<0 || c.quantityDecimals>4))) throw reportError(500, 'Tipo o precisión de columna inválido', 'INVALID_REPORT_DATA')
+    for (const c of section.columns) if (!TYPES.has(c.type) || (c.quantityDecimals!=null && (!Number.isInteger(c.quantityDecimals) || c.quantityDecimals<0 || c.quantityDecimals>6))) throw reportError(500, 'Tipo o precisión de columna inválido', 'INVALID_REPORT_DATA')
     const project = row => Object.fromEntries(section.columns.filter(c => Object.hasOwn(row, c.id)).map(c => [c.id, validCell(row[c.id])]))
     return { id: section.id, title: section.title, columns: section.columns.map(c => ({ id: c.id, label: c.label, type: c.type, align: c.align,...(c.quantityDecimals!=null ? {quantityDecimals:c.quantityDecimals} : {}) })),
       rows: section.rows.map(row => Object.fromEntries(section.columns.map(c => [c.id, validCell(row[c.id] ?? null)]))), totals: section.totals ? project(section.totals) : null }

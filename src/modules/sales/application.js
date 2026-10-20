@@ -10,6 +10,9 @@ const { allocateNetLineTotals } = require('../../services/saleLineTotals')
 const { Prisma } = require('@prisma/client')
 const { commercialQuantity,lineSnapshot,assertServicesEnabled } = require('../../services/catalogItemRules')
 const { validMoney } = require('../../utils/importValidation')
+const Units=require('../inventory/units')
+const {resolveCommercialLines}=require('../../services/units/saleLines')
+const {isV2,unitFields,D}=require('../../services/units/commercial')
 
 function fail(message, status = 400) {
   throw Object.assign(new Error(message), { status })
@@ -47,8 +50,28 @@ async function resolvePricedSaleItems(tx, {
   approvedSnapshots = [],
   allowPriceOverride = false,
   availability = getAvailabilityBatchWithKits,
+  permissions=[],isAdmin=false,actorId=null,
 }) {
   if (!Array.isArray(items) || items.length === 0) fail('Selecciona al menos un producto de reemplazo')
+  if(!approvedSnapshots.length&&!allowPriceOverride&&items.some(raw=>raw.unit_price!=null||raw.price!=null))fail('El precio enviado por el navegador no está autorizado')
+  if(approvedSnapshots.some(isV2)||await Units.unitsEnabled(tx,companyId)){
+    const tier=await resolvePriceTierForContext(tx,{customerContactId,salesChannel,companyId})
+    const resolved=await resolveCommercialLines(tx,{companyId,branchId,permissions,isAdmin,actorId},approvedSnapshots.length?approvedSnapshots:items,
+      {tier,approved:approvedSnapshots.length>0,allowOverride:allowPriceOverride,authorization:'RETURN_REPLACEMENT'})
+    if(!approvedSnapshots.length&&pricing==='ORIGINAL_SALE_PRICE')for(let index=0;index<resolved.length;index++){
+      const line=resolved[index],requested=items[index]
+      const candidates=originalSaleItems.filter(source=>source.product_id===line.product_id)
+      const source=requested.original_sale_item_id!=null?candidates.find(source=>Number(source.id)===Number(requested.original_sale_item_id)):candidates.length===1?candidates[0]:null
+      if(!source&&candidates.length)fail('Selecciona la partida original para conservar su precio',409)
+      if(source){
+        const net=D(source.net_total??D(source.price).mul(source.qty)),originalBase=isV2(source)?source.base_qty:source.qty
+        line.unit_price=net.div(originalBase).mul(line.base_qty??line.qty).div(line.qty).toDecimalPlaces(18,Prisma.Decimal.ROUND_HALF_UP).toFixed()
+        line.line_total=require('../../services/units/quantity').lineTotal(line.qty,line.unit_price)
+      }
+    }
+    await require('../../services/stockAvailability').assertLinesAvailable(tx,resolved,{companyId,branchId})
+    return resolved
+  }
   const ids = [...new Set(items.map(raw=>String(raw?.product_id || '')))]
   for (const raw of items) {
     const id = String(raw?.product_id || '')
@@ -128,6 +151,14 @@ function checkedLineTotal(qty,price) {
 }
 
 async function moveSaleStock(tx, items, branchId, ctx) {
+  if(items.some(isV2)||await Units.unitsEnabled(tx,ctx.companyId)){
+    const {updated,snapshots}=await require('../../services/units/commercialPhysical').dispatchCommercialLines(tx,items,branchId,{...ctx,groupId:randomUUID()})
+    if(ctx.refType==='sale'){
+      await require('../../services/units/commercialPhysical').persistSalePhysicalSnapshots(tx,ctx.refId,items,snapshots)
+    }
+    await ensureStockAlertsBatch(tx,updated,branchId)
+    return updated
+  }
   const stockMap = await expandLinesToStockMap(tx, items, {companyId:ctx.companyId,allowArchivedServices:ctx.allowArchivedServices===true})
   if (!stockMap.size) return []
   const groupId = randomUUID()
@@ -151,6 +182,8 @@ async function insertSaleRecord(tx, { saleData, items, userId }) {
       qty: item.qty,
       price: item.unit_price,
       unit_cost: item.unit_cost ?? null,
+      ...unitFields(item),
+      ...(isV2(item)?{base_returned:'0'}:{}),
       net_total: netTotals[index],
       ...(item.item_kind ? {item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals} : {}),
     })),
@@ -173,6 +206,7 @@ async function createReplacementSale(tx, {
   userId,
   pricing = 'CURRENT_PRICE',
   cashRegisterSessionId = null,
+  permissions=[],isAdmin=false,
 }, deps = {}) {
   if (returnRecord.replacement_sale_id) {
     const previous = await tx.sale.findUnique({ where: { id: returnRecord.replacement_sale_id } })
@@ -196,6 +230,7 @@ async function createReplacementSale(tx, {
     originalSaleItems: returnRecord.sale.sale_items,
     approvedSnapshots: returnRecord.replacement_items || [],
     availability: deps.availability || getAvailabilityBatchWithKits,
+    permissions,isAdmin,actorId:userId,
   })
   const total = items.reduce((sum,item)=>sum.add(String(item.line_total)),new Prisma.Decimal(0)).toNumber()
   const status = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
@@ -226,7 +261,8 @@ async function createReplacementSale(tx, {
       status_id: status.id,
       cash_register_session_id: cashRegisterSessionId,
       idempotency_key: `exchange:${returnRecord.id}`.slice(0, 64),
-      items: items.filter(item=>item.item_kind!=='SERVICE').reduce((sum,item)=>sum+Number(item.qty),0),
+      items: items.some(isV2)?items.length:items.filter(item=>item.item_kind!=='SERVICE').reduce((sum,item)=>sum+Number(item.qty),0),
+      ...(items.some(isV2)?{unit_metadata_version:2}:{}),
       subtotal: total,
       discount_total: 0,
       total,

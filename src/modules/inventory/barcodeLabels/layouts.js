@@ -1,5 +1,6 @@
 const {assertAccess,authorizedScope,productWhere,has,error}=require('./access')
 const {parseLayoutInput,parseLabelDesign,parsePaperSettings,createLabelTemplate,createShelfLabelTemplate,defaultPaper,fail}=require('./validation')
+const Units=require('../units'),{resolveLabelSelection}=require('./unitSelection')
 const KEY='inventory.barcode_label_layout'
 const {setSettingsActor}=require('../../../services/settingsRevision')
 const keyFor=purpose=>purpose==='shelf'?'inventory.shelf_price_label_layout':KEY
@@ -37,6 +38,14 @@ async function listBarcodeCandidates(db,scope,q={},purpose='barcode'){
   if(q.category&&q.category!=='all')where.category={name:{equals:String(q.category),mode:'insensitive'}}
   if(q.supplier)where.supplier_id=validId(q.supplier,'supplier')
   const [totalItems,rows]=await Promise.all([db.product.count({where}),db.product.findMany({where,select:{id:true,name:true,barcode:true,price:true,brand:true,size:true,...(purpose==='shelf'?{price_wholesale:true,price_promotion:true,promotion_valid_until:true}:{})},orderBy:[{name:'asc'},{id:'asc'}],skip:(page-1)*pageSize,take:pageSize})])
-  return{items:rows.map(p=>({...p,price:p.price.toString(),barcode:p.barcode?.trim()?p.barcode:null,...(purpose==='shelf'?{shelfPrices:require('./shelfPrices').shelfPricesForProduct(p,['LIST','WHOLESALE','PROMOTION']).prices,priceWholesale:p.price_wholesale?.toString()||null,pricePromotion:p.price_promotion?.toString()||null,promotionValidUntil:p.promotion_valid_until?new Date(p.promotion_valid_until).toISOString():null}:{})})),totalItems,totalPages:Math.max(1,Math.ceil(totalItems/pageSize)),page}
+  const enabled=await Units.unitsEnabled(db,scope.companyId),options=new Map()
+  if(enabled)for(const p of rows){
+    const config=await db.product.findFirst({where:{id:p.id,company_id:scope.companyId,deleted:false},select:{base_unit_id:true,unit_metadata_version:true,unit_revision:true}})
+    if(!Units.advancedProduct(config))continue
+    const presentations=await db.productPresentation.findMany({where:{company_id:scope.companyId,product_id:p.id,active:true,sale_enabled:true},orderBy:{name:'asc'}}),selected=[]
+    for(const presentation_id of [null,...presentations.map(p=>p.id)]){const option=await resolveLabelSelection(db,scope,p,{presentation_id,unit_revision:config.unit_revision},true);selected.push({...option,...(purpose==='shelf'?{shelfPrices:require('./shelfPrices').shelfPricesForProduct(option,['LIST','WHOLESALE','PROMOTION']).prices}:{})})}
+    options.set(p.id,{unit_revision:config.unit_revision,unitOptions:selected})
+  }
+  return{items:rows.map(p=>({...p,...options.get(p.id),price:p.price.toString(),barcode:p.barcode?.trim()?p.barcode:null,...(purpose==='shelf'?{shelfPrices:require('./shelfPrices').shelfPricesForProduct(p,['LIST','WHOLESALE','PROMOTION']).prices,priceWholesale:p.price_wholesale?.toString()||null,pricePromotion:p.price_promotion?.toString()||null,promotionValidUntil:p.promotion_valid_until?new Date(p.promotion_valid_until).toISOString():null}:{})})),totalItems,totalPages:Math.max(1,Math.ceil(totalItems/pageSize)),page}
 }
 module.exports={readBarcodeLayout,saveBarcodeLayout,listBarcodeCandidates}

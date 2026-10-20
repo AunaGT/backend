@@ -1,4 +1,5 @@
 const { toCents, fromCents, checked, fail } = require("./money");
+const { parseQuantity, lineTotal } = require('../../../services/units/quantity');
 function balanceOf(row) {
   let total = 0,
     paid = 0,
@@ -9,9 +10,9 @@ function balanceOf(row) {
       row.total_amount !== undefined
         ? toCents(row.total_amount)
         : (row.items || []).reduce((n, i) => {
-            if (!Number.isInteger(i.quantity) || i.quantity < 0)
-              fail("Cantidad inválida");
-            return checked(n + checked(i.quantity * toCents(i.unit_cost)));
+            const qty = parseQuantity(i.quantity, {allowZero:true});
+            const amount = i.line_total ?? (qty.isZero() ? '0.00' : lineTotal(qty, i.unit_cost));
+            return checked(n + toCents(amount));
           }, 0);
     paid =
       row.documented_paid !== undefined

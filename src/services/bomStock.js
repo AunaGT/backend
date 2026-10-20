@@ -3,6 +3,8 @@
  */
 
 const { Prisma } = require('@prisma/client')
+const { parseQuantity } = require('./units/quantity')
+const { Decimal, decimal, physicalQuantity, storageQuantity, lockPhysicalProducts } = require('./units/physical')
 const { prisma } = require('../models/prisma')
 const { parseCatalogKind, commercialQuantity, assertPhysicalItem, assertServicesEnabled } = require('./catalogItemRules')
 
@@ -15,7 +17,7 @@ const BOM_INCLUDE = {
     orderBy: { sort_order: 'asc' },
     include: {
       component_product: {
-        select: { id: true, name: true, kind: true, deleted: true, available_for_sale: true },
+        select: { id: true, name: true, kind: true, quantity_decimals:true, deleted: true, available_for_sale: true },
       },
     },
   },
@@ -30,7 +32,7 @@ function normalizeBomInput(raw) {
   return raw
     .map((row, idx) => ({
       component_product_id: String(row.component_product_id || row.product_id || '').trim(),
-      qty_per_unit: Math.max(1, Math.floor(Number(row.qty_per_unit ?? row.qty ?? 1))),
+      qty_per_unit: storageQuantity(parseQuantity(row.qty_per_unit ?? row.qty ?? 1)),
       sort_order: Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : idx,
     }))
     .filter((row) => row.component_product_id)
@@ -57,7 +59,7 @@ async function loadProductsWithBom(tx, productIds, { companyId,allowArchivedServ
         select: {
           component_product_id: true,
           qty_per_unit: true,
-          component_product: { select: { id: true, name: true, kind: true, deleted: true } },
+          component_product: { select: { id: true, name: true, kind: true, quantity_decimals:true, deleted: true } },
         },
       },
     },
@@ -76,9 +78,9 @@ function computeKitAvailableFromBom(bomLines, availabilityMap) {
   let min = Infinity
   for (const line of bomLines) {
     const compId = String(line.component_product_id)
-    const need = Math.max(1, Number(line.qty_per_unit || 1))
-    const available = Number(availabilityMap[compId]?.available ?? 0)
-    min = Math.min(min, Math.floor(available / need))
+    const need = parseQuantity(line.qty_per_unit ?? 1)
+    const available = decimal(availabilityMap[compId]?.available)
+    min = Math.min(min, available.div(need).floor().toNumber())
   }
   return Number.isFinite(min) ? Math.max(0, min) : 0
 }
@@ -153,9 +155,11 @@ async function expandLinesToStockMap(tx, lines, { companyId,allowArchivedService
       err.status = 400
       throw err
     }
-    const exactQty = commercialQuantity(line.qty,product.kind==='SERVICE' && line.item_kind==='SERVICE' ? line : product)
-    if (product.kind === 'SERVICE') continue
-    const qty = exactQty.toNumber()
+    if (product.kind === 'SERVICE') {
+      commercialQuantity(line.qty, line.item_kind === 'SERVICE' ? line : product)
+      continue
+    }
+    const qty = physicalQuantity(line.base_qty ?? line.qty, product)
 
     if (product.kind === 'KIT' && !product.stock_assembled) {
       if (!product.kit_components.length) {
@@ -176,11 +180,11 @@ async function expandLinesToStockMap(tx, lines, { companyId,allowArchivedService
           throw err
         }
         const compId = String(comp.component_product_id)
-        const compQty = qty * Math.max(1, Number(comp.qty_per_unit || 1))
-        out.set(compId, (out.get(compId) || 0) + compQty)
+        const compQty = physicalQuantity(qty.mul(parseQuantity(comp.qty_per_unit ?? 1)),comp.component_product)
+        out.set(compId, storageQuantity(parseQuantity(decimal(out.get(compId)).add(compQty))))
       }
     } else {
-      out.set(pid, (out.get(pid) || 0) + qty)
+      out.set(pid, storageQuantity(parseQuantity(decimal(out.get(pid)).add(qty))))
     }
   }
   return out
@@ -188,6 +192,16 @@ async function expandLinesToStockMap(tx, lines, { companyId,allowArchivedService
 
 async function stockMapToLines(stockMap) {
   return Array.from(stockMap.entries()).map(([product_id, qty]) => ({ product_id, qty }))
+}
+
+async function stockMapFromMovements(tx, {refType,refId,reason,groupId}) {
+  const rows = await tx.stockMovement.findMany({where:groupId?{group_id:String(groupId)}:{ref_type:String(refType),ref_id:String(refId),reason},select:{product_id:true,qty:true}})
+  const out = new Map()
+  for (const row of rows) {
+    const qty = decimal(row.qty)
+    if (qty.lt(0)) out.set(String(row.product_id),storageQuantity(decimal(out.get(String(row.product_id))).sub(qty)))
+  }
+  return out
 }
 
 /**
@@ -203,14 +217,19 @@ async function applyStockDelta(tx, stockMap, branchId, sign, ctx = {}) {
   const client = dbClient(tx)
   const { requireBranchId, ensureBranchStockRows } = require('./stockAvailability')
   const { applyBranchDelta } = require('./stockLocations')
-  const entries = Array.from(stockMap.entries()).filter(([, qty]) => Number(qty) > 0)
+  const entries = Array.from(stockMap.entries()).map(([id, qty]) => [id, parseQuantity(qty, {allowZero:true})]).filter(([, qty]) => qty.gt(0)).sort(([a],[b]) => String(a).localeCompare(String(b)))
   if (entries.length === 0) return []
   const b = requireBranchId(branchId)
   await ensureBranchStockRows(client, entries.map(([id]) => id), b)
   // El mismo delta, repartido por ubicación (y anotado en el kardex).
   await applyBranchDelta(client, entries, b, sign, ctx)
+  return applyStockMirrorDelta(client,entries.map(([id,qty])=>[id,qty.mul(sign)]),b)
+}
+
+async function applyStockMirrorDelta(client,entries,b) {
+  if(!entries.length)return []
   const values = Prisma.join(
-    entries.map(([id, qty]) => Prisma.sql`(${id}::uuid, ${sign * Number(qty)}::int)`)
+    entries.map(([id, qty]) => Prisma.sql`(${id}::uuid, ${qty.toFixed()}::numeric)`)
   )
   return client.$queryRaw`
     WITH v(id, qty) AS (VALUES ${values}),
@@ -232,6 +251,23 @@ async function applyStockDelta(tx, stockMap, branchId, sign, ctx = {}) {
   `
 }
 
+// Count locations are one server-derived operation: only its final net reaches mirrors.
+async function applyCountStockDeltas(tx,deltas,branchId,ctx) {
+  if(!deltas.length)return []
+  const {requireBranchId,ensureBranchStockRows}=require('./stockAvailability')
+  const {assertBranchLocations,applyLocationDeltas}=require('./stockLocations')
+  const b=requireBranchId(branchId),ids=[...new Set(deltas.map(row=>String(row.product_id)))].sort()
+  const products=await lockPhysicalProducts(tx,ids,b)
+  const rows=deltas.map(row=>({...row,qty:physicalQuantity(row.qty,products.get(String(row.product_id)),{signed:true,allowZero:true}).toFixed()}))
+  const net=new Map()
+  for(const row of rows)net.set(String(row.product_id),decimal(net.get(String(row.product_id))).add(row.qty))
+  await ensureBranchStockRows(tx,ids,b)
+  await require('./units/physical').assertStockDeltaBounds(tx,products,b,[...net],1)
+  await assertBranchLocations(tx,b,rows.map(row=>row.location_id))
+  await applyLocationDeltas(tx,rows,{...ctx,branchId:b})
+  return applyStockMirrorDelta(tx,[...net].filter(([,qty])=>!qty.isZero()),b)
+}
+
 async function deductStockMap(tx, stockMap, branchId, ctx) {
   return applyStockDelta(tx, stockMap, branchId, -1, ctx)
 }
@@ -244,11 +280,12 @@ async function restoreStockMap(tx, stockMap, branchId, ctx) {
  * Cuánto se descuenta de cada componente para armar `qty` unidades de un kit.
  */
 function buildComponentDeductionMap(bomLines, qty) {
+  const kits = parseQuantity(qty, { decimals: 0 })
   const map = new Map()
   for (const line of bomLines) {
     const compId = String(line.component_product_id)
-    const need = Math.max(1, Number(line.qty_per_unit || 1)) * qty
-    map.set(compId, (map.get(compId) || 0) + need)
+    const need = parseQuantity(parseQuantity(line.qty_per_unit ?? 1).mul(kits))
+    map.set(compId, storageQuantity(parseQuantity(decimal(map.get(compId)).add(need))))
   }
   return map
 }
@@ -259,11 +296,12 @@ function buildComponentDeductionMap(bomLines, qty) {
  * (stock_assembled = true). Si se pasa `requestedQty` se arma esa cantidad
  * (limitada al máximo disponible); si no, el máximo.
  */
-async function assembleKit(tx, kitProductId, requestedQty, branchId) {
+async function assembleKit(tx, kitProductId, requestedQty, branchId, { actorId = null } = {}) {
+  const desiredQty=requestedQty===undefined?undefined:parseQuantity(requestedQty,{decimals:0}).toNumber()
   const client = dbClient(tx)
   const { requireBranchId } = require('./stockAvailability')
   const b = requireBranchId(branchId)
-  const kit = await client.product.findFirst({
+  let kit = await client.product.findFirst({
     where: { id: kitProductId, deleted: false },
     select: {
       id: true,
@@ -291,6 +329,9 @@ async function assembleKit(tx, kitProductId, requestedQty, branchId) {
   }
 
   const componentIds = kit.kit_components.map((c) => String(c.component_product_id))
+  const lockedProducts=await lockPhysicalProducts(client, [String(kitProductId),...componentIds], b)
+  kit=await client.product.findFirst({where:{id:kitProductId,deleted:false},select:{id:true,name:true,kind:true,kit_components:{select:{component_product_id:true,qty_per_unit:true}}}})
+  if(!kit||kit.kind!=='KIT'||!kit.kit_components.length||kit.kit_components.some(c=>!componentIds.includes(String(c.component_product_id))))throw Object.assign(new Error('La configuración del kit cambió. Recarga el producto.'),{status:409})
   const { getAvailabilityBatch } = require('./stockAvailability')
   const availabilityMap = await getAvailabilityBatch(componentIds, tx, { branchId: b })
   const maxQty = computeKitAvailableFromBom(kit.kit_components, availabilityMap)
@@ -301,7 +342,7 @@ async function assembleKit(tx, kitProductId, requestedQty, branchId) {
   }
   let qty = maxQty
   if (requestedQty !== undefined) {
-    qty = Number(requestedQty)
+    qty = desiredQty
     if (!Number.isInteger(qty) || qty <= 0) {
       const err = new Error('La cantidad a armar debe ser un entero mayor a 0')
       err.status = 400
@@ -314,20 +355,40 @@ async function assembleKit(tx, kitProductId, requestedQty, branchId) {
     }
   }
 
-  const kitCtx = { reason: 'KIT_ASSEMBLE', refType: 'product', refId: String(kitProductId) }
   const deductionMap = buildComponentDeductionMap(kit.kit_components, qty)
+  const assemblyValuation=new Map()
+  let value=decimal(0)
+  for(const [id,quantity] of deductionMap){
+    const component=lockedProducts.get(id)
+    const unitCost=parseQuantity(component.cost??0,{decimals:12,allowZero:true,max:'999999999999.999999999999'}).toFixed(12)
+    value=value.add(decimal(quantity).mul(unitCost))
+    assemblyValuation.set(id,{role:'COMPONENT',qty:String(quantity),unitCost,tracksExpiry:!!component.tracks_expiry})
+  }
+  const kitProduct=lockedProducts.get(String(kitProductId))
+  const batchCost=parseQuantity(value.div(qty).toDecimalPlaces(12),{decimals:12,allowZero:true,max:'999999999999.999999999999'}).toFixed(12)
+  const kitCost=require('./kitAssemblies').creditedCost(kitProduct,qty,value)
+  assemblyValuation.set(String(kitProductId),{role:'KIT',qty:String(qty),unitCost:batchCost,value:value.toFixed(),tracksExpiry:!!kitProduct.tracks_expiry})
+  const kitCtx = { reason: 'KIT_ASSEMBLE', refType: 'product', refId: String(kitProductId),groupId:require('crypto').randomUUID(),consumeLots:true,assemblyValuation,userId:actorId }
   await deductStockMap(tx, deductionMap, b, kitCtx)
 
   // Stock propio del kit en esta sucursal (+ espejo global en products.stock)
-  const [kitRow] = await restoreStockMap(tx, new Map([[String(kitProductId), qty]]), b, kitCtx)
+  const locationId=await require('./stockLocations').defaultLocationId(client,b,{receiving:true})
+  const assemblyLots=new Map()
+  if(kitProduct.tracks_expiry){
+    const lot={lot_code:require('./lots').generateLotCode(),expiry_date:null,unit_cost:batchCost,supplier_id:null,location_id:locationId,qty:String(qty)}
+    await client.productLot.create({data:{product_id:String(kitProductId),branch_id:b,location_id:locationId,lot_code:lot.lot_code,qty_received:qty,qty_remaining:qty,unit_cost:batchCost}})
+    assemblyLots.set(String(kitProductId),[lot])
+  }
+  const [kitRow] = await restoreStockMap(tx, new Map([[String(kitProductId), qty]]), b, {...kitCtx,locationId,assemblyLots})
   const product = await client.product.update({
     where: { id: kitProductId },
-    data: { stock_assembled: true },
-    select: { id: true, name: true, stock: true, min_stock: true, stock_assembled: true },
+    data: { stock_assembled: true,cost:kitCost },
+    select: { id: true, name: true, stock: true, min_stock: true, stock_assembled: true,cost:true },
   })
 
   return {
     qty,
+    assembly_group_id:kitCtx.groupId,
     product: {
       ...product,
       // stock/min de la sucursal donde se armó (para alertas y respuesta)
@@ -375,7 +436,7 @@ async function validateBomComponents(tx, kitProductId, components) {
   const componentIds = rows.map((r) => r.component_product_id)
   const products = await dbClient(tx).product.findMany({
     where: { id: { in: componentIds }, deleted: false, company_id: kit.company_id },
-    select: { id: true, name: true, kind: true },
+    select: { id: true, name: true, kind: true, quantity_decimals:true },
   })
   const prodMap = new Map(products.map((p) => [String(p.id), p]))
 
@@ -392,12 +453,14 @@ async function validateBomComponents(tx, kitProductId, components) {
       err.status = 400
       throw err
     }
+    physicalQuantity(row.qty_per_unit,p)
   }
   return rows
 }
 
 async function replaceProductBom(tx, kitProductId, components) {
   const client = dbClient(tx)
+  await client.$executeRaw`SELECT id FROM products WHERE id=${String(kitProductId)}::uuid FOR UPDATE`
   const rows = await validateBomComponents(tx, kitProductId, components)
   await client.productBomLine.deleteMany({ where: { kit_product_id: kitProductId } })
   if (rows.length === 0) return []
@@ -427,8 +490,10 @@ module.exports = {
   getAvailabilityBatchWithKits,
   expandLinesToStockMap,
   stockMapToLines,
+  stockMapFromMovements,
   deductStockMap,
   restoreStockMap,
+  applyCountStockDeltas,
   buildComponentDeductionMap,
   assembleKit,
   validateBomComponents,

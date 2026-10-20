@@ -12,6 +12,7 @@
  */
 
 const { prisma } = require('../models/prisma')
+const { decimal, storageQuantity } = require('./units/physical')
 
 /**
  * @param {string} companyId
@@ -31,7 +32,7 @@ async function inTransitByProduct(companyId, { branchIds = [], client = prisma }
   })
   const map = new Map()
   for (const l of lines) {
-    map.set(l.product_id, (map.get(l.product_id) || 0) + l.qty_sent)
+    map.set(l.product_id, storageQuantity(decimal(map.get(l.product_id)).add(l.qty_sent)))
   }
   return map
 }
@@ -42,15 +43,15 @@ async function inTransitByProduct(companyId, { branchIds = [], client = prisma }
  */
 async function inTransitTotals(companyId, products, opts = {}) {
   const map = await inTransitByProduct(companyId, opts)
-  if (map.size === 0) return { units: 0, value: 0, byProduct: map }
-  const costById = new Map(products.map((p) => [p.id, Number(p.cost || 0)]))
-  let units = 0
-  let value = 0
+  if (map.size === 0) return { units: 0, value: decimal(0), byProduct: map }
+  const costById = new Map(products.map((p) => [p.id, decimal(p.cost)]))
+  let units = decimal(0)
+  let value = decimal(0)
   for (const [productId, qty] of map) {
-    units += qty
-    value += qty * (costById.get(productId) ?? 0)
+    units = units.add(qty)
+    value = value.add(decimal(qty).mul(costById.get(productId) ?? 0))
   }
-  return { units, value, byProduct: map }
+  return { units: storageQuantity(units), value, byProduct: map }
 }
 
 module.exports = { inTransitByProduct, inTransitTotals }

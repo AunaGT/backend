@@ -7,9 +7,21 @@
 const { prisma } = require('../../models/prisma')
 const { prismaTransaction } = require('../../models/prisma')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
+const { parseQuantity } = require('../../services/units/quantity')
+const { decimal, physicalQuantity, storageQuantity, lockPhysicalProducts, physicalSnapshot } = require('../../services/units/physical')
 
 function userId(req) {
   return req.user?.sub || req.user?.id
+}
+
+function countedDifference(line) {
+  return line.qty_counted==null?null:storageQuantity(decimal(line.qty_counted).sub(line.stock_snapshot))
+}
+
+function countedValue(line) {
+  if(line.qty_counted==null)return null
+  const amount=decimal(line.qty_counted).sub(line.stock_snapshot).mul(line.product.cost).toFixed(2)
+  return line.unit_snapshot?.version===2?amount:Number(amount)
 }
 
 const MIN_REASON_LEN = 5
@@ -24,6 +36,8 @@ const LINE_INCLUDE = {
       image_url: true,
       stock: true,
       cost: true,
+      kind: true,
+      quantity_decimals: true,
       category: { select: { id: true, name: true } },
     },
   },
@@ -260,8 +274,9 @@ async function applyStockTransaction(tx, sessionId, branchId) {
   }
 
   const { ensureBranchStockRows } = require('../../services/stockAvailability')
-  const { deductStockMap, restoreStockMap } = require('../../services/bomStock')
+  const { applyCountStockDeltas } = require('../../services/bomStock')
   const productIds = [...new Set(lines.map((l) => l.product_id))]
+  await lockPhysicalProducts(tx,productIds,branchId)
   await ensureBranchStockRows(tx, productIds, branchId)
 
   // Lo contado se compara contra lo que hay AHORA en esa ubicación, no contra
@@ -273,18 +288,15 @@ async function applyStockTransaction(tx, sessionId, branchId) {
     },
     select: { product_id: true, location_id: true, stock: true },
   })
-  const stockAt = new Map(current.map((r) => [`${r.product_id}|${r.location_id}`, Number(r.stock)]))
+  const stockAt = new Map(current.map((r) => [`${r.product_id}|${r.location_id}`, decimal(r.stock)]))
 
-  const ups = new Map() // location_id → Map(product_id, unidades que faltan)
-  const downs = new Map()
+  const deltas=[]
   for (const L of lines) {
     const isVirtualKit = L.product.kind === 'KIT' && !L.product.stock_assembled
-    const target = isVirtualKit ? 0 : Number(L.qty_counted)
-    const delta = target - (stockAt.get(`${L.product_id}|${L.location_id}`) ?? 0)
-    if (delta === 0) continue
-    const bucket = delta > 0 ? ups : downs
-    if (!bucket.has(L.location_id)) bucket.set(L.location_id, new Map())
-    bucket.get(L.location_id).set(String(L.product_id), Math.abs(delta))
+    const target = decimal(isVirtualKit ? 0 : L.qty_counted)
+    const delta = target.sub(stockAt.get(`${L.product_id}|${L.location_id}`) ?? 0)
+    if (delta.isZero()) continue
+    deltas.push({product_id:String(L.product_id),location_id:L.location_id,qty:delta.toFixed()})
   }
 
   // El grupo hace que el cierre del conteo sea UN asiento contable, no uno por
@@ -292,19 +304,15 @@ async function applyStockTransaction(tx, sessionId, branchId) {
   const countCtx = {
     reason: 'COUNT_ADJUST', refType: 'inventory_count', refId: String(sessionId),
     groupId: require('crypto').randomUUID(),
+    unitSnapshots:new Map(lines.filter(line=>line.unit_snapshot).map(line=>[String(line.product_id),line.unit_snapshot])),
   }
-  for (const [location_id, map] of ups) {
-    await restoreStockMap(tx, map, branchId, { ...countCtx, locationId: location_id })
-  }
-  for (const [location_id, map] of downs) {
-    await deductStockMap(tx, map, branchId, { ...countCtx, locationId: location_id })
-  }
+  await applyCountStockDeltas(tx,deltas,branchId,countCtx)
 
   // El estado del producto mira el total de la sucursal ya ajustado.
   const virtualKits = new Set(
     lines.filter((L) => L.product.kind === 'KIT' && !L.product.stock_assembled).map((L) => L.product_id)
   )
-  const minByProduct = new Map(lines.map((L) => [L.product_id, Number(L.product.min_stock) || 0]))
+  const minByProduct = new Map(lines.map((L) => [L.product_id, decimal(L.product.min_stock)]))
   const after = await tx.productStock.findMany({
     where: { branch_id: branchId, product_id: { in: productIds } },
     select: { product_id: true, stock: true },
@@ -313,10 +321,10 @@ async function applyStockTransaction(tx, sessionId, branchId) {
     after
       .filter((r) => !virtualKits.has(r.product_id))
       .map((r) => {
-        const stock = Number(r.stock)
+        const stock = decimal(r.stock)
         let status_id = idDisponible
-        if (stock === 0 && idAgotado) status_id = idAgotado
-        else if (stock < (minByProduct.get(r.product_id) || 0) && idBajo) status_id = idBajo
+        if (stock.isZero() && idAgotado) status_id = idAgotado
+        else if (stock.lt(minByProduct.get(r.product_id) || 0) && idBajo) status_id = idBajo
         return tx.product.update({ where: { id: r.product_id }, data: { status_id } })
       })
   )
@@ -448,11 +456,11 @@ exports.getById = async (req, res, next) => {
       totals: {
         sumStockSnapshot: sumSnap._sum.stock_snapshot ?? 0,
         valueDeltaApprox: valueDelta,
-        unchangedLines: linesWithDiff.filter(L => L.qty_counted === L.stock_snapshot).length,
-        differenceLines: linesWithDiff.filter(L => L.qty_counted !== L.stock_snapshot).length,
-        notFoundLines: linesWithDiff.filter(L => L.qty_counted === 0 && L.stock_snapshot > 0).length,
+        unchangedLines: linesWithDiff.filter(L => decimal(L.qty_counted).eq(L.stock_snapshot)).length,
+        differenceLines: linesWithDiff.filter(L => !decimal(L.qty_counted).eq(L.stock_snapshot)).length,
+        notFoundLines: linesWithDiff.filter(L => decimal(L.qty_counted).isZero() && decimal(L.stock_snapshot).gt(0)).length,
         mismatchLines: scopeDoubleCount(session.scope_json)
-          ? linesWithDiff.filter(L => L.qty_counted !== L.qty_counted_secondary).length : 0,
+          ? linesWithDiff.filter(L => !decimal(L.qty_counted).eq(L.qty_counted_secondary)).length : 0,
       },
     })
   } catch (e) {
@@ -516,16 +524,14 @@ exports.listLines = async (req, res, next) => {
     const data = lines.map((L) => ({
       ...L,
       difference:
-        L.qty_counted != null ? L.qty_counted - L.stock_snapshot : null,
+        countedDifference(L),
       valueDifference:
-        L.qty_counted != null
-          ? (L.qty_counted - L.stock_snapshot) * Number(L.product.cost)
-          : null,
+        countedValue(L),
       countMismatch:
         dc &&
         L.qty_counted != null &&
         L.qty_counted_secondary != null &&
-        L.qty_counted !== L.qty_counted_secondary,
+        !decimal(L.qty_counted).eq(L.qty_counted_secondary),
     }))
 
     res.json({ data, total, take, skip })
@@ -623,7 +629,9 @@ exports.start = async (req, res, next) => {
     // es un hallazgo del conteo.
     const locations = await countScopeLocations(session)
     const fallback = (locations.find((l) => l.is_default && l.warehouse.is_default) || locations[0]).id
-    const stocks = await prisma.productStockLocation.findMany({
+    await prismaTransaction.$transaction(async tx=>{
+    const locked=await lockPhysicalProducts(tx,products.map(p=>p.id),session.branch_id)
+    const stocks = await tx.productStockLocation.findMany({
       where: {
         product_id: { in: products.map((p) => p.id) },
         location_id: { in: locations.map((l) => l.id) },
@@ -636,24 +644,27 @@ exports.start = async (req, res, next) => {
       if (!byProduct.has(s.product_id)) byProduct.set(s.product_id, [])
       byProduct.get(s.product_id).push(s)
     }
+    const snapshots=new Map()
+    for(const [pid,p] of locked) snapshots.set(pid,await physicalSnapshot(tx,p))
     const lineData = products.flatMap((p) => {
       const rows = byProduct.get(p.id) || []
-      if (!rows.length) return [{ session_id: id, product_id: p.id, location_id: fallback, stock_snapshot: 0 }]
+      const unitFields=snapshots.get(p.id)?{unit_snapshot:snapshots.get(p.id)}:{}
+      if (!rows.length) return [{ session_id: id, product_id: p.id, location_id: fallback, stock_snapshot: 0,...unitFields }]
       return rows.map((r) => ({
         session_id: id,
         product_id: p.id,
         location_id: r.location_id,
-        stock_snapshot: Number(r.stock),
+        stock_snapshot: storageQuantity(r.stock),
+        ...unitFields,
       }))
     })
 
-    await prisma.$transaction([
-      prisma.inventoryCountLine.createMany({ data: lineData }),
-      prisma.inventoryCountSession.update({
+      await tx.inventoryCountLine.createMany({ data: lineData })
+      await tx.inventoryCountSession.update({
         where: { id },
         data: { status: 'IN_PROGRESS', started_at: new Date() },
-      }),
-    ])
+      })
+    },INVENTORY_APPROVE_TX_OPTIONS)
 
     const updated = await prisma.inventoryCountSession.findFirst({
       where: { id, branch: { company_id: req.companyId } },
@@ -689,7 +700,7 @@ exports.updateLine = async (req, res, next) => {
     const qty2Raw = req.body?.qty_counted_secondary
     for (const value of [qtyRaw, qty2Raw]) {
       if (value === undefined) continue
-      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+      try { parseQuantity(value, {allowZero:true}) } catch {
         return res.status(400).json({ message: 'La cantidad debe ser un número entero igual o mayor a cero.' })
       }
     }
@@ -714,17 +725,13 @@ exports.updateLine = async (req, res, next) => {
           doubleCount &&
           updatedNote.qty_counted != null &&
           updatedNote.qty_counted_secondary != null &&
-          updatedNote.qty_counted !== updatedNote.qty_counted_secondary
+          !decimal(updatedNote.qty_counted).eq(updatedNote.qty_counted_secondary)
         return res.json({
           ...updatedNote,
           difference:
-            updatedNote.qty_counted != null
-              ? updatedNote.qty_counted - updatedNote.stock_snapshot
-              : null,
+            countedDifference(updatedNote),
           valueDifference:
-            updatedNote.qty_counted != null
-              ? (updatedNote.qty_counted - updatedNote.stock_snapshot) * Number(updatedNote.product.cost)
-              : null,
+            countedValue(updatedNote),
           countMismatch: mismatch,
         })
       }
@@ -735,15 +742,15 @@ exports.updateLine = async (req, res, next) => {
       return res.status(400).json({ message: 'Esta sesión no tiene doble conteo activado' })
     }
 
-    const qtyInt = hasPrimary ? Math.max(0, Math.floor(Number(qtyRaw))) : undefined
-    const qty2Int = hasSecondary ? Math.max(0, Math.floor(Number(qty2Raw))) : undefined
-
     const line = await prisma.inventoryCountLine.findFirst({
       where: { id: lineId, session_id: id },
       include: LINE_INCLUDE,
     })
     if (!line) return res.status(404).json({ message: 'Línea no encontrada' })
 
+    const rules = line.unit_snapshot?.baseUnit ? {...line.product,quantity_decimals:line.unit_snapshot.baseUnit.decimals} : line.product
+    const qtyInt = hasPrimary ? storageQuantity(physicalQuantity(qtyRaw, rules, {allowZero:true})) : undefined
+    const qty2Int = hasSecondary ? storageQuantity(physicalQuantity(qty2Raw, rules, {allowZero:true})) : undefined
     const data = {}
     if (qtyInt !== undefined) {
       data.qty_counted = qtyInt
@@ -767,16 +774,14 @@ exports.updateLine = async (req, res, next) => {
       doubleCount &&
       updated.qty_counted != null &&
       updated.qty_counted_secondary != null &&
-      updated.qty_counted !== updated.qty_counted_secondary
+      !decimal(updated.qty_counted).eq(updated.qty_counted_secondary)
 
     res.json({
       ...updated,
       difference:
-        updated.qty_counted != null ? updated.qty_counted - updated.stock_snapshot : null,
+        countedDifference(updated),
       valueDifference:
-        updated.qty_counted != null
-          ? (updated.qty_counted - updated.stock_snapshot) * Number(updated.product.cost)
-          : null,
+        countedValue(updated),
       countMismatch: mismatch,
     })
   } catch (e) {
@@ -831,7 +836,7 @@ exports.submit = async (req, res, next) => {
           product: { select: { name: true } },
         },
       })
-      const bad = both.filter((L) => L.qty_counted !== L.qty_counted_secondary)
+      const bad = both.filter((L) => !decimal(L.qty_counted).eq(L.qty_counted_secondary))
       if (bad.length) {
         const names = bad
           .slice(0, 5)

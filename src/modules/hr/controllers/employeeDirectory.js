@@ -8,7 +8,7 @@ exports.list = async (req, res, next) => {
     if (!Object.hasOwn(PURPOSES, purpose)) fail(400, 'Indica un propósito válido para buscar empleados')
     if (!PURPOSES[purpose].some(code => hasPerm(req.user, code))) fail(403, 'Sin permiso para esta búsqueda de empleados')
     const integer = (value, fallback) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback
-    const pageSize = Math.min(32, integer(req.query.pageSize, 10))
+    const pageSize = Math.min(purpose === 'attendance' ? 100 : 32, integer(req.query.pageSize, 10))
     const where = { company_id, ...branchWhere(req), ...(purpose !== 'attendance' ? { status: 'ACTIVO' } : {}) }
     if (req.query.excludeId && purpose === 'supervisor') where.id = { not: toUuid(req.query.excludeId, 'Empleado no válido') }
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : ''

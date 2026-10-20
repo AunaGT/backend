@@ -18,6 +18,7 @@ async function readSettingsRevisions(db,companyId,keys) {
 // The caller owns the transaction: a conflict in any key must roll back them all.
 async function writeSettings(tx,{companyId,changes,expectedRevisions}) {
   assertExpectedRevisions(changes,expectedRevisions)
+  if(Object.hasOwn(changes,'inventory_units_enabled'))await require('../modules/inventory/units').assertUnitsSettingChange(tx,companyId,changes.inventory_units_enabled.value)
   for(const key of Object.keys(changes).sort()) {
     const data=changes[key],revision=expectedRevisions[key]
     if(revision===0) {

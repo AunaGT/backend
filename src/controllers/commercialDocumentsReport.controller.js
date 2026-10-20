@@ -4,13 +4,14 @@
 
 const { prisma } = require('../models/prisma')
 const { getAvailabilityBatch } = require('../services/stockAvailability')
+const {D,baseUnit,dimension,attachBaseUnits,quantityTotal}=require('../modules/reports/quantities')
 const { requireBranch, branchWhere } = require('../middlewares/tenant')
 
 exports.committedStockReport = async (req, res, next) => {
   try {
     const branchId = requireBranch(req)
     const activeReservations = await prisma.stockReservation.findMany({
-      where: { status: 'ACTIVE', branch_id: branchId },
+      where: { status: 'ACTIVE', branch_id: branchId,product:{company_id:req.companyId} },
       include: {
         product: { select: { id: true, name: true, barcode: true, stock: true } },
         document: {
@@ -35,16 +36,16 @@ exports.committedStockReport = async (req, res, next) => {
           product_id: pid,
           name: r.product?.name || pid,
           barcode: r.product?.barcode || null,
-          stock: Number(r.product?.stock ?? 0),
+          stock: String(r.product?.stock ?? 0),
           reserved: 0,
           reservations: [],
         })
       }
       const row = byProduct.get(pid)
-      row.reserved += r.qty
+      row.reserved = D(row.reserved).add(D(r.qty)).toFixed()
       row.reservations.push({
         reservation_id: r.id,
-        qty: r.qty,
+        qty: String(r.qty),
         document_id: r.document_id,
         reference: r.document?.reference,
         doc_type: r.document?.doc_type,
@@ -57,11 +58,12 @@ exports.committedStockReport = async (req, res, next) => {
     const productIds = [...byProduct.keys()]
     const availability = await getAvailabilityBatch(productIds, null, { branchId })
 
+    await attachBaseUnits(prisma,req.companyId,[...byProduct.values()],'product_id')
     const products = [...byProduct.values()].map((p) => ({
-      ...p,
-      available: availability[p.product_id]?.available ?? Math.max(0, p.stock - p.reserved),
+      ...p,unit_label:baseUnit(p),
+      available: String(availability[p.product_id]?.available ?? (D(p.stock).sub(D(p.reserved)).gt(0)?D(p.stock).sub(D(p.reserved)).toFixed():'0')),
     }))
-    products.sort((a, b) => b.reserved - a.reserved)
+    products.sort((a, b) => D(b.reserved).cmp(D(a.reserved)))
 
     const openOrders = await prisma.commercialDocument.findMany({
       where: {
@@ -102,7 +104,7 @@ exports.committedStockReport = async (req, res, next) => {
       take: 100,
     })
 
-    const totalReservedQty = products.reduce((acc, p) => acc + p.reserved, 0)
+    const totalReservedQty = quantityTotal(products.map(p=>({...p,dimension:dimension(p)})),'reserved')
 
     res.json({
       summary: {

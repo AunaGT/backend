@@ -1,11 +1,12 @@
 const { createReport, column: c, section: s, metric: m, chart } = require('../reportModel')
+const {D,exact,baseUnit}=require('../quantities')
 const iso = value => value ? new Date(value).toISOString() : null
 function buildAlertsReport(data, meta) {
-  const cols = [c('product', 'Producto'), c('category', 'Categoría'), c('stock', 'Existencia', 'integer'), c('location', 'Ubicación'), c('minimum', 'Mínimo', 'integer'), c('gap', 'Faltante', 'integer'), c('value', 'Costo de reposición', 'money'), c('supplier', 'Proveedor')]
-  const project = rows => rows.map(p => ({ product: p.name, category: p.category?.name || 'Sin categoría', stock: Number(p.stock), location: data.whereIs?.get(p.id) || null,
-    minimum: Number(p.min_stock), gap: Math.max(0, Number(p.min_stock) - Number(p.stock)), value: Math.max(0, Number(p.min_stock) - Number(p.stock)) * Number(p.cost), supplier: p.supplier?.name || null }))
+  const cols = [c('product', 'Producto'), c('category', 'Categoría'), c('unit','Unidad base'),c('stock', 'Existencia', 'decimal',6), c('location', 'Ubicación'), c('minimum', 'Mínimo', 'decimal',6), c('gap', 'Faltante', 'decimal',6), c('value', 'Costo de reposición', 'money'), c('supplier', 'Proveedor')]
+  const project = rows => rows.map(p => ({ product: p.name, category: p.category?.name || 'Sin categoría', unit:baseUnit(p),stock:exact(p.stock), location: data.whereIs?.get(p.id) || null,
+    minimum:exact(p.min_stock),gap:D(p.min_stock).sub(D(p.stock)).gt(0)?D(p.min_stock).sub(D(p.stock)).toFixed():'0',value:D(p.min_stock).sub(D(p.stock)).gt(0)?D(p.min_stock).sub(D(p.stock)).mul(D(p.cost)).toDecimalPlaces(2).toNumber():0, supplier: p.supplier?.name || null }))
   return createReport(meta, { id: 'alerts', title: 'Pendientes y alertas',
-    summary: [m('at-risk', 'Productos bajo mínimo', data.summary.atRiskCount), m('critical', 'Sin existencia', data.summary.criticalCount), m('gap', 'Unidades faltantes', data.summary.reorderGapUnits), m('cost', 'Costo de reposición', data.summary.reorderGapValue, 'money'), m('open', 'Alertas abiertas', data.summary.openSystemAlerts)],
+    summary: [m('at-risk', 'Productos bajo mínimo', data.summary.atRiskCount), m('critical', 'Sin existencia', data.summary.criticalCount), m('cost', 'Costo de reposición', data.summary.reorderGapValue, 'money'), m('open', 'Alertas abiertas', data.summary.openSystemAlerts)],
     sections: [s('action-list', 'Reposición priorizada', cols, project(data.actionList)), s('critical', 'Productos sin existencia', cols, project(data.critical)),
       s('by-category', 'Productos en riesgo por categoría', [c('category', 'Categoría'), c('enRiesgo', 'Bajo mínimo', 'integer'), c('sinStock', 'Sin existencia', 'integer'), c('bajoConStock', 'Con existencia bajo mínimo', 'integer')], data.categoryBreakdown),
       s('system-alerts', 'Alertas abiertas del sistema', [c('date', 'Fecha', 'datetime'), c('title', 'Alerta'), c('product', 'Producto'), c('type', 'Tipo'), c('priority', 'Prioridad'), c('status', 'Estado'), c('assignedTo', 'Asignado a')],

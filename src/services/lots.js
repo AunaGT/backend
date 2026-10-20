@@ -24,6 +24,8 @@
 // con 25P02, revirtiendo igual la venta, pero con un error incomprensible.
 
 const crypto = require('crypto')
+const { Decimal, decimal, storageQuantity } = require('./units/physical')
+const { parseQuantity } = require('./units/quantity')
 const { prisma } = require('../models/prisma')
 const {getExpiryAlertPolicy}=require('./expiryAlertPolicy')
 
@@ -45,18 +47,18 @@ function generateLotCode(date = new Date()) {
  */
 function planConsume(lots, qty) {
   const plan = []
-  let left = Number(qty) || 0
+  let left = parseQuantity(qty, {allowZero:true})
   for (const lot of lots) {
-    if (left <= 0) break
-    const take = Math.min(left, Number(lot.qty_remaining) || 0)
-    if (take > 0) {
-      plan.push({ lotId: lot.id, take })
-      left -= take
+    if (left.lte(0)) break
+    const take = Decimal.min(left, decimal(lot.qty_remaining))
+    if (take.gt(0)) {
+      plan.push({ lotId: lot.id, take: storageQuantity(take) })
+      left = left.sub(take)
     }
   }
   // `short` > 0 = los lotes no cubren lo que sale. Para un producto con caducidad
   // eso es un error; para el resto es stock sin lote y se consume de menos.
-  return { plan, short: left }
+  return { plan, short: storageQuantity(left) }
 }
 
 /**
@@ -68,14 +70,14 @@ function planConsume(lots, qty) {
  */
 function planRestore(lots, qty) {
   const plan = []
-  let left = Number(qty) || 0
+  let left = parseQuantity(qty, {allowZero:true})
   for (const lot of lots) {
-    if (left <= 0) break
-    const room = (Number(lot.qty_received) || 0) - (Number(lot.qty_remaining) || 0)
-    const give = Math.min(left, Math.max(0, room))
-    if (give > 0) {
-      plan.push({ lotId: lot.id, give })
-      left -= give
+    if (left.lte(0)) break
+    const room = decimal(lot.qty_received).sub(decimal(lot.qty_remaining))
+    const give = Decimal.min(left, Decimal.max(0, room))
+    if (give.gt(0)) {
+      plan.push({ lotId: lot.id, give: storageQuantity(give) })
+      left = left.sub(give)
     }
   }
   return plan
@@ -137,32 +139,33 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
             // Lotes de ese anaquel; los que no tienen ubicación conocida tapan el hueco.
             lots: productLots.filter((l) => !l.location_id || l.location_id === d.location_id),
             qty: d.qty,
+            locationId:d.location_id,
           }))
         : [{ lots: productLots, qty }]
 
-      let short = 0
+      let short = decimal(0)
       for (const chunk of plan) {
         const { plan: takes, short: falta } = planConsume(chunk.lots.slice().sort(fefoSort), chunk.qty)
-        short += falta
+        short = short.add(falta)
         for (const { lotId, take } of takes) {
           await client.productLot.update({
             where: { id: lotId },
             data: { qty_remaining: { decrement: take } },
           })
           const lot = byId.get(lotId)
-          lot.qty_remaining -= take // el siguiente anaquel ya no lo vuelve a contar
+          lot.qty_remaining = decimal(lot.qty_remaining).sub(take).toFixed()
           if (!consumed.has(productId)) consumed.set(productId, [])
           consumed.get(productId).push({
             lot_code: lot.lot_code,
             expiry_date: lot.expiry_date ? lot.expiry_date.toISOString().slice(0, 10) : null,
-            unit_cost: lot.unit_cost != null ? Number(lot.unit_cost) : null,
+            unit_cost: lot.unit_cost != null ? decimal(lot.unit_cost).toFixed() : null,
             supplier_id: lot.supplier_id,
-            location_id: lot.location_id,
+            location_id: lot.location_id || chunk.locationId || null,
             qty: take,
           })
         }
       }
-      if (short > 0 && tracked.has(productId)) {
+      if (short.gt(0) && tracked.has(productId)) {
         const prod = await client.product.findUnique({ where: { id: productId }, select: { name: true } })
         const err = new Error(
           `${prod?.name || 'El producto'} controla caducidad y faltan ${short} unidad(es) con lote asignado. ` +
@@ -187,11 +190,11 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
  */
 async function ensureLotForIncrease(tx, { productId, branchId, locationId, qty }) {
   const client = tx || prisma
-  const cantidad = Number(qty) || 0
-  if (cantidad <= 0 || !branchId) return null
+  const cantidad = storageQuantity(parseQuantity(qty, {allowZero:true}))
+  if (decimal(cantidad).lte(0) || !branchId) return null
   const product = await client.product.findUnique({
     where: { id: String(productId) },
-    select: { tracks_expiry: true,kind:true },
+    select: { tracks_expiry: true,kind:true,cost:true },
   })
   require('./catalogItemRules').assertPhysicalItem(product)
   if (!product?.tracks_expiry) return null
@@ -203,6 +206,7 @@ async function ensureLotForIncrease(tx, { productId, branchId, locationId, qty }
       lot_code: `AJUSTE-${generateLotCode().slice(2)}`,
       qty_received: cantidad,
       qty_remaining: cantidad,
+      unit_cost:product.cost==null?null:decimal(product.cost).toFixed(),
     },
   })
 }
@@ -220,12 +224,12 @@ async function recreateLotsFromSnapshot(tx, productId, branchId, snapshot, qty, 
     // caducidad eso no puede pasar: consumeLotsFEFO ya habría fallado en el origen.
     if (!branchId || !Array.isArray(snapshot) || snapshot.length === 0) return
     const client = tx || prisma
-    let left = Number(qty) || 0
+    let left = parseQuantity(qty, {allowZero:true})
     for (const lot of snapshot) {
-      if (left <= 0) break
-      const take = Math.min(left, Number(lot.qty) || 0)
-      if (take <= 0) continue
-      left -= take
+      if (left.lte(0)) break
+      const take = storageQuantity(Decimal.min(left, decimal(lot.qty)))
+      if (decimal(take).lte(0)) continue
+      left = left.sub(take)
       await client.productLot.create({
         data: {
           product_id: productId,
@@ -279,26 +283,26 @@ async function restoreLotsFEFO(tx, stockMap, branchId) {
       const productLots = lots
         .filter((l) => l.product_id === productId)
         .sort((a, b) => fefoSort(b, a)) // más nuevos primero
-      let left = Number(qty) || 0
+      let left = parseQuantity(qty, {allowZero:true})
       for (const { lotId, give } of planRestore(productLots, qty)) {
         await client.productLot.update({
           where: { id: lotId },
           data: { qty_remaining: { increment: give } },
         })
-        left -= give
+        left = left.sub(give)
       }
       // Si los lotes originales ya no tienen espacio, lo devuelto quedaría sin lote.
       // A un producto con caducidad no se le puede rechazar la devolución por eso,
       // pero tampoco puede perder la trazabilidad: se abre un lote de retorno.
       // Va sin caducidad porque genuinamente no se sabe cuál era.
-      if (left > 0 && tracked.has(productId)) {
+      if (left.gt(0) && tracked.has(productId)) {
         await client.productLot.create({
           data: {
             product_id: productId,
             branch_id: branchId,
             lot_code: `DEV-${generateLotCode().slice(2)}`,
-            qty_received: left,
-            qty_remaining: left,
+            qty_received: storageQuantity(left),
+            qty_remaining: storageQuantity(left),
           },
         })
       }

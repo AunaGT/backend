@@ -32,10 +32,9 @@ test('crea productos independientes con concurrencia limitada y avance confirmad
   let active = 0
   let maximum = 0
   const progress = []
-  require.cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: { prisma: {
-    product: { create: async () => { active++; maximum = Math.max(maximum, active); await new Promise(resolve => setTimeout(resolve, 5)); active--; return { id: `p-${maximum}` } } },
-    productStock: { create: async () => {} },
-  } } }
+  const prisma={product:{create:async()=>{active++;maximum=Math.max(maximum,active);await new Promise(resolve=>setTimeout(resolve,5));active--;return{id:`p-${maximum}`}}},productStock:{create:async()=>{}}}
+  prisma.$transaction=async run=>run(prisma)
+  require.cache[prismaPath] = { id: prismaPath, filename: prismaPath, loaded: true, exports: {prisma,prismaTransaction:prisma} }
   require.cache[stockPath] = { id: stockPath, filename: stockPath, loaded: true, exports: { applyBranchDelta: async () => {} } }
   delete require.cache[servicePath]
   try {

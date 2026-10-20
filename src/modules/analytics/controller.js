@@ -11,6 +11,8 @@
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
 const { readCompanyModules } = require('../platform/service')
+const {D,saleLineCost,lineRevenue,purchaseAmount,baseUnit}=require('../reports/quantities')
+const Units=require('../inventory/units')
 const { resolveAnalyticsSections } = require('./sections')
 
 const number = (v) => {
@@ -75,7 +77,7 @@ exports.summary = async (req, res, next) => {
           status:{name:require('../sales/commercialState').CONFIRMED_SALE_STATUS},
         },
       },
-      include: { sale: true, product: { include: { category: true } } },
+      include: { sale: true, product: { include: { category: true } },return_items:{where:{return:{status:{name:'Completada'}}}} },
     })
 
     // Cargar todas las ventas del período para calcular devoluciones
@@ -123,18 +125,18 @@ exports.summary = async (req, res, next) => {
     for (const si of saleItems) {
       const d = new Date(si.sale.date)
       const month = d.getUTCMonth() + 1
-      const revenue = number(si.price) * number(si.qty)
-      const cost = number(si.qty) * number(si.product?.cost)
+      const revenue = lineRevenue(si).toDecimalPlaces(2,4).toNumber()
+      const cost = saleLineCost(si).toDecimalPlaces(2,4).toNumber()
 
       costByMonth.set(month, (costByMonth.get(month) || 0) + cost)
       totalCost += cost
-      totalUnits += number(si.qty)
+      totalUnits += 1
 
-      const pId = si.product_id
+      const pId = si.product_id+':'+(si.unit_snapshot?.baseUnit?.id??si.unit_label??'unidades')
       const pName = si.product?.name || 'Producto'
       const pCat = si.product?.category?.name || 'Sin categoría'
-      const pEntry = productAgg.get(pId) || { id: pId, name: pName, category: pCat, ventas: 0, revenue: 0 }
-      pEntry.ventas += number(si.qty)
+      const pEntry = productAgg.get(pId) || { id: pId, name: pName, category: pCat, unit:si.item_kind==='SERVICE'?si.unit_label:si.unit_snapshot?.baseUnit?.label??si.unit_label??'unidades',ventas:'0', revenue: 0 }
+      pEntry.ventas = D(pEntry.ventas).add(D(si.base_qty??si.qty)).toFixed()
       pEntry.revenue += revenue
       productAgg.set(pId, pEntry)
 
@@ -181,7 +183,7 @@ exports.summary = async (req, res, next) => {
     const topProducts = Array.from(productAgg.values())
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5)
-      .map(p => ({ id: p.id, name: p.name, category: p.category, ventas: p.ventas, revenue: Number(p.revenue.toFixed(2)) }))
+      .map(p => ({ id: p.id, name: p.name, category: p.category, ventas: p.ventas,unit:p.unit, revenue: Number(p.revenue.toFixed(2)) }))
 
     // Calcular revenue ajustado (restando devoluciones) desde sale.total
     const adjustedRevenue = totalRevenueGross - totalReturns
@@ -211,7 +213,7 @@ exports.summary = async (req, res, next) => {
     if (availableSections.inventory) {
       if (req.branchId) {
         const rows = await prisma.productStock.findMany({
-          where: { branch_id: req.branchId, product: { deleted: false } },
+          where: { branch_id: req.branchId, product: { deleted: false,company_id:req.companyId,kind:{not:'SERVICE'} } },
           select: {
             stock: true, min_stock: true,
             product: { select: { name: true, cost: true, price: true, category: { select: { name: true } } } },
@@ -223,7 +225,7 @@ exports.summary = async (req, res, next) => {
         }))
       } else {
         products = await prisma.product.findMany({
-          where: { deleted: false, company_id: req.companyId },
+          where: { deleted: false, company_id: req.companyId,kind:{not:'SERVICE'} },
           select: { name: true, stock: true, min_stock: true, cost: true, price: true, category: { select: { name: true } } },
         })
       }
@@ -232,14 +234,14 @@ exports.summary = async (req, res, next) => {
     const stockByCategory = new Map() // name -> { value, units }
     for (const p of products) {
       const stock = number(p.stock)
-      const value = stock * number(p.cost)
+      const value = D(p.stock).mul(D(p.cost)).toDecimalPlaces(2,4).toNumber()
       stockValue += value
-      retailValue += stock * number(p.price)
+      retailValue += D(p.stock).mul(D(p.price)).toDecimalPlaces(2,4).toNumber()
       if (stock <= 0) outOfStockCount += 1
       else if (stock <= number(p.min_stock)) lowStockCount += 1
       const cat = p.category?.name || 'Sin categoría'
       const row = stockByCategory.get(cat) || { value: 0, units: 0 }
-      row.value += value; row.units += stock
+      row.value += value; row.units += 1
       stockByCategory.set(cat, row)
     }
     const inventoryByCategory = Array.from(stockByCategory.entries())
@@ -262,7 +264,7 @@ exports.summary = async (req, res, next) => {
           payment_status: true,
           source: true,
           supplier: { select: { name: true } },
-          items: { select: { quantity: true, unit_cost: true } },
+          items: { select: { quantity: true, unit_cost: true,...(await Units.unitsEnabled(prisma,req.companyId)?{line_total:true,unit_metadata_version:true,base_qty:true,base_unit_cost:true}:{}) } },
           paymentEntries: { select: { amount: true } },
         },
       })
@@ -273,10 +275,10 @@ exports.summary = async (req, res, next) => {
     let purchasesTotal = 0, payablePending = 0, payableCount = 0
     let initialInventoryTotal = 0, initialInventoryUnits = 0, initialInventoryCount = 0
     for (const inc of incoming) {
-      const total = inc.items.reduce((s, it) => s + number(it.quantity) * number(it.unit_cost), 0)
+      const total = inc.items.reduce((s, it) => s + purchaseAmount(it).toDecimalPlaces(2,4).toNumber(), 0)
       if (inc.source === 'INITIAL') {
         initialInventoryTotal += total
-        initialInventoryUnits += inc.items.reduce((s, it) => s + number(it.quantity), 0)
+        initialInventoryUnits += inc.items.length
         initialInventoryCount += 1
         continue
       }
@@ -318,7 +320,7 @@ exports.summary = async (req, res, next) => {
         totalCost: Number(number(totalCost).toFixed(2)),
         totalProfit: Number((adjustedRevenue - number(totalCost)).toFixed(2)), // Profit neto
         productsCount,
-        stockRotation: totalUnits, // simple proxy: total units sold
+        stockRotation: totalUnits, // Count of sale lines, never a sum of incompatible units.
       },
       monthly,
       topProducts,

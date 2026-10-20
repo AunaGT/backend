@@ -44,6 +44,7 @@ exports.getAll = async (req, res, next) => {
         settings[row.key] = row.value
       }
     }
+    settings.inventory_units_enabled??='false'
     settings['returns.policy'] = normalizeReturnPolicy(settings['returns.policy'])
     settings[EXPIRY_ALERT_POLICY_KEY]=settings[EXPIRY_ALERT_POLICY_KEY]===undefined?{...DEFAULT_EXPIRY_ALERT_POLICY}:expiryPolicyFromStored(settings[EXPIRY_ALERT_POLICY_KEY])
     settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
@@ -59,7 +60,7 @@ exports.getAll = async (req, res, next) => {
  */
 exports.getPublic = async (req, res, next) => {
   try {
-    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate', 'default_experience_profile', 'sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled', 'fel_enabled']
+    const keys = ['timezone', 'currency_code', 'currency_name', 'company_name', 'company_logo_url', 'date_format', 'locale', 'cash_closure_max_diff_pct', 'vat_affiliation', 'iva_rate', 'default_experience_profile', 'sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled', 'inventory_units_enabled', 'fel_enabled']
     const rows = await prisma.systemSetting.findMany({
       where: { key: { in: keys }, company_id: req.companyId }
     })
@@ -79,6 +80,7 @@ exports.getPublic = async (req, res, next) => {
       sales_show_fiscal_fields: 'true',
       sales_show_channels: 'true',
       inventory_services_enabled: 'false',
+      inventory_units_enabled: 'false',
       fel_enabled:'false'
     }
     for (const row of rows) {
@@ -202,8 +204,7 @@ function logoRevision(req){
   return value
 }
 async function cleanupLogo(url){
-  try{if(await removePublicObject(url,COMPANY_LOGO_BUCKET)===false)throw Error('No eliminado')}
-  catch{return 'No se pudo limpiar un archivo de logo en Storage. La referencia confirmada se conserva.'}
+  return require('./hardware/printing/branding').cleanupPrintLogo(prismaTransaction,url,value=>removePublicObject(value,COMPANY_LOGO_BUCKET))
 }
 async function saveLogoReference(req,value,expected){
   return prismaTransaction.$transaction(async tx=>{
@@ -315,7 +316,7 @@ exports.update = async (req, res, next) => {
     ) {
       return res.status(400).json({ message: 'default_experience_profile no es válido' })
     }
-    for (const boolKey of ['sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled', 'fel_enabled']) {
+    for (const boolKey of ['sales_allow_credit', 'sales_show_fiscal_fields', 'sales_show_channels', 'inventory_services_enabled', 'inventory_units_enabled', 'fel_enabled']) {
       if (payload[boolKey] !== undefined && !['true', 'false'].includes(String(payload[boolKey]).toLowerCase())) {
         return res.status(400).json({ message: `${boolKey} debe ser true o false` })
       }
@@ -355,6 +356,7 @@ exports.update = async (req, res, next) => {
       'sales_show_fiscal_fields',
       'sales_show_channels',
       'inventory_services_enabled',
+      'inventory_units_enabled',
       'returns.policy',
       EXPIRY_ALERT_POLICY_KEY,
     ])
@@ -393,6 +395,7 @@ exports.update = async (req, res, next) => {
         settings[row.key] = row.value
       }
     }
+    settings.inventory_units_enabled??='false'
     settings['returns.policy']=normalizeReturnPolicy(settings['returns.policy'])
     if(settings[EXPIRY_ALERT_POLICY_KEY]===undefined)settings[EXPIRY_ALERT_POLICY_KEY]={...DEFAULT_EXPIRY_ALERT_POLICY}
     settings._revisions=settingRevisions(rows.filter(row=>GENERAL_SETTING_KEYS.includes(row.key)),GENERAL_SETTING_KEYS)
@@ -402,7 +405,7 @@ exports.update = async (req, res, next) => {
     }
     res.json(settings)
   } catch (e) {
-    if(e.status)return res.status(e.status).json({message:e.message})
+    if(e.status)return res.status(e.status).json({message:e.message,...(e.code?{code:e.code}:{})})
     next(e)
   }
 }

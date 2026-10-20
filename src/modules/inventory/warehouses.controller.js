@@ -51,10 +51,9 @@ async function ownLocation(req, id) {
   })
 }
 
-/** Unidades guardadas en una ubicación (o en todo un almacén). */
+/** Cualquier saldo físico impide retirar su ubicación, sin sumar dimensiones. */
 async function unitsIn(where) {
-  const agg = await prisma.productStockLocation.aggregate({ where, _sum: { stock: true } })
-  return Number(agg._sum.stock || 0)
+  return prisma.productStockLocation.count({where:{...where,stock:{not:0}}})
 }
 
 // GET /api/warehouses
@@ -87,10 +86,11 @@ exports.list = async (req, res, next) => {
       for (const l of w.locations) l.is_sales = l.id === branch?.sales_location_id
     }
     const locationIds = rows.flatMap((warehouse) => warehouse.locations.map((location) => location.id))
+    const countLines=await require('./units').unitsEnabled(prisma,req.companyId)
     const totals = locationIds.length ? await prisma.productStockLocation.groupBy({
-      by: ['location_id'], where: { location_id: { in: locationIds } }, _sum: { stock: true },
+      by: ['location_id'], where: { location_id: { in: locationIds },...(countLines?{stock:{not:0},product:{company_id:req.companyId,deleted:false,kind:{not:'SERVICE'}}}:{}) }, ...(countLines?{_count:{product_id:true}}:{_sum: { stock: true }}),
     }) : []
-    res.json(withStockUnits(rows, totals))
+    res.json(withStockUnits(rows, totals,{countLines}))
   } catch (e) { next(e) }
 }
 

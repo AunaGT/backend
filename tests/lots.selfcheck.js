@@ -12,21 +12,21 @@ const lots = [
 assert.deepStrictEqual(lots.map(l => l.id), ['d', 'b', 'a', 'c'], 'orden FEFO')
 
 // planConsume: agota el más próximo a vencer primero y sigue con el siguiente
-assert.deepStrictEqual(planConsume(lots, 8), [
+assert.deepStrictEqual(planConsume(lots, 8), {plan:[
   { lotId: 'd', take: 5 },
   { lotId: 'b', take: 3 },
-], 'consume cruzando lotes')
+],short:0}, 'consume cruzando lotes')
 
 // planConsume: pedir más de lo loteado se topa (stock viejo sin lote)
 assert.deepStrictEqual(
-  planConsume(lots, 100).reduce((s, p) => s + p.take, 0),
+  planConsume(lots, 100).plan.reduce((s, p) => s + p.take, 0),
   25,
   'consume topa en lo disponible'
 )
 
 // planConsume: qty 0 o lotes vacíos → plan vacío
-assert.deepStrictEqual(planConsume(lots, 0), [])
-assert.deepStrictEqual(planConsume([], 5), [])
+assert.deepStrictEqual(planConsume(lots, 0), {plan:[],short:0})
+assert.deepStrictEqual(planConsume([], 5), {plan:[],short:5})
 
 // planRestore: devuelve al lote con espacio, más nuevos primero (inverso del consumo)
 const consumed = [

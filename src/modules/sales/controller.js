@@ -36,6 +36,11 @@ const { createSaleRecordAndStock } = require('./application')
 const { contactImageDtos } = require('../contacts/imageStorage')
 const { commercialQuantity,lineSnapshot,assertServicesEnabled } = require('../../services/catalogItemRules')
 const {confirmedSaleWhere,CONFIRMED_SALE_STATUS,saleCommercialView}=require('./commercialState')
+const {checkoutKey,checkoutHash,assertCheckoutReplay,lockCheckoutAttempt,lookupCheckoutAttempt}=require('./checkoutAttempts')
+const Units=require('../inventory/units')
+const {resolveCommercialLines}=require('../../services/units/saleLines')
+const {isV2,unitFields}=require('../../services/units/commercial')
+const {assertLinesAvailable}=require('../../services/stockAvailability')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -411,7 +416,12 @@ exports.getById = async (req, res, next) => {
   }
 }
 
+exports.checkoutAttempt=async(req,res,next)=>{
+  try{res.json(await lookupCheckoutAttempt(prisma,req,req.params.key))}catch(error){next(error)}
+}
+
 exports.create = async (req, res, next) => {
+  let committedSaleId=null
   try {
     if(['settlement_source','settlement','engagement_id'].some(key=>Object.hasOwn(req.body||{},key)))return res.status(400).json({code:'INVALID_SETTLEMENT',message:'La liquidación de una contratación solo se genera desde Agenda'})
     const user = req.user
@@ -433,8 +443,8 @@ exports.create = async (req, res, next) => {
 
     // Clave del intento de cobro: la manda el POS (cabecera o cuerpo) y se
     // repite tal cual al reintentar. Sin ella todo funciona como antes.
-    const idempotencyKey = String(req.get?.('Idempotency-Key') || idempotencyKeyRaw || '')
-      .trim().slice(0, 64) || null
+    const idempotencyKey = checkoutKey(req)
+    const attemptHash = idempotencyKey ? checkoutHash('SALE',req.body) : null
 
     let totalItems = 0
 
@@ -458,10 +468,15 @@ exports.create = async (req, res, next) => {
         where: { branch_id: branchId, idempotency_key: idempotencyKey },
         include: SALE_DETAIL_INCLUDE,
       })
-      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user,req.branchId))
+      if (yaExiste) return res.status(200).json(await saleDetailDto(assertCheckoutReplay(yaExiste,req,attemptHash), req.companyId, req.user,req.branchId))
     }
 
     const created = await prismaTransaction.$transaction(async (tx) => {
+      if(idempotencyKey){
+        await lockCheckoutAttempt(tx,branchId,idempotencyKey)
+        const previous=await tx.sale.findFirst({where:{branch_id:branchId,idempotency_key:idempotencyKey}})
+        if(previous)return assertCheckoutReplay(previous,req,attemptHash)
+      }
       let cashSessionIdForSale = null
       const isAdmin = String(user.role?.name || user.role_name || '').toLowerCase() === 'admin'
       const branch = await tx.branch.findUnique({
@@ -498,6 +513,9 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
+      const advanced=await Units.unitsEnabled(tx,req.companyId)
+      const advancedLines=advanced?await resolveCommercialLines(tx,{companyId:req.companyId,branchId,actorId:user.sub,permissions:user.permissions||[],isAdmin},items,
+        {tier:await resolvePriceTierForContext(tx,{companyId:req.companyId,customerContactId,salesChannel})}):null
       // 1) Validación de stock: no permitir solicitar más que el stock disponible por producto
       // EXCEPTO para productos autorizados por administrador
       const qtyByProduct = new Map()
@@ -531,20 +549,22 @@ exports.create = async (req, res, next) => {
       })
       const prodMap = new Map(products.map(p => [String(p.id), p]))
       qtyByProduct.clear()
-      for (const item of items) {
+      for (const [index,item] of items.entries()) {
         const pid=String(item.product_id)
         const product=prodMap.get(pid)
         if (!product) throw Object.assign(new Error(`Producto no encontrado: ${pid}`),{status:400})
-        const qty=commercialQuantity(item.qty,product)
+        const qty=advanced?new Prisma.Decimal(advancedLines[index].base_qty??advancedLines[index].qty):commercialQuantity(item.qty,product)
         const aggregate=(qtyByProduct.get(pid) || new Prisma.Decimal(0)).add(qty)
-        commercialQuantity(aggregate,product)
+        if(!advanced)commercialQuantity(aggregate,product)
         qtyByProduct.set(pid,aggregate)
         if (product.kind!=='SERVICE') totalItems+=qty.toNumber()
       }
+      if(advancedLines?.some(isV2))totalItems=advancedLines.length
       if (totalItems>2147483647) throw Object.assign(new Error('Cantidad física total fuera de rango'),{status:400})
       if (products.some(p=>p.kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
       const physicalIds=productIds.filter(id=>prodMap.get(id).kind!=='SERVICE')
-      const availabilityMap = physicalIds.length ? await getAvailabilityBatchWithKits(physicalIds, tx, branchId, {companyId:req.companyId}) : {}
+      if(advanced)await assertLinesAvailable(tx,advancedLines,{branchId,companyId:req.companyId,skipProductIds:[...adminAuthorizedSet]})
+      const availabilityMap = !advanced&&physicalIds.length ? await getAvailabilityBatchWithKits(physicalIds, tx, branchId, {companyId:req.companyId}) : {}
       // Verifica existencia y stock suficiente por producto (considera cantidades sumadas si hay repetidos)
       for (const pid of productIds) {
         const p = prodMap.get(pid)
@@ -559,7 +579,7 @@ exports.create = async (req, res, next) => {
           err.status = 400
           throw err
         }
-        if (p.kind==='SERVICE') continue
+        if (p.kind==='SERVICE'||advanced) continue
 
         // Omitir validación de stock si fue autorizado por administrador
         if (adminAuthorizedSet.has(pid)) {
@@ -599,7 +619,7 @@ exports.create = async (req, res, next) => {
         companyId:req.companyId,
       })
       const priceNow = new Date()
-      const resolvedItems = items.map((it) => {
+      const resolvedItems = advanced?advancedLines.map(it=>({...it,price:it.unit_price})):items.map((it) => {
         const p = prodMap.get(String(it.product_id))
         const unit = resolveUnitPriceFromProduct(p, priceTier, priceNow)
         return { ...it, qty:commercialQuantity(it.qty,p).toString(),price: unit,...lineSnapshot(p) }
@@ -639,10 +659,11 @@ exports.create = async (req, res, next) => {
         const { applyMultiplePromotions } = require('../../services/promotionCalculator')
         const now = new Date()
 
-        const itemsWithCategory = resolvedItems.map((it) => ({
+        let itemsWithCategory = resolvedItems.map((it) => ({
           ...it,
           category_id: prodMap.get(String(it.product_id))?.category_id,
         }))
+        if(advanced)itemsWithCategory=await require('../../services/units/promotionReference').withPromotionBaseUnits(tx,itemsWithCategory,req.companyId)
 
         const promotionCodeRows = await tx.promotionCode.findMany({
           where: {
@@ -859,11 +880,13 @@ exports.create = async (req, res, next) => {
         items: resolvedItems.map((item) => ({
           product_id: item.product_id,
           qty: item.qty,
-          unit_price: Number(item.price),
-          unit_cost: item.item_kind==='SERVICE' ? 0 : prodMap.get(String(item.product_id))?.cost ?? null,
+          unit_price: advanced?item.price:Number(item.price),
+          unit_cost: advanced?item.unit_cost:item.item_kind==='SERVICE' ? 0 : prodMap.get(String(item.product_id))?.cost ?? null,
+          ...unitFields(item),
           item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals,
         })),
         saleData: {
+          ...(resolvedItems.some(isV2)?{unit_metadata_version:2}:{}),
           branch_id: branchId,
           customer: saleData.customer,
           customer_nit: saleData.customer_nit,
@@ -885,12 +908,14 @@ exports.create = async (req, res, next) => {
           status_id: completadaStatus.id,
           cash_register_session_id: cashSessionIdForSale || undefined,
           idempotency_key: idempotencyKey,
+          idempotency_hash: attemptHash,
           payment_status: salePaymentStatus,
           due_date: creditDueDate,
         },
       })
 
       await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
+      if(!paymentMethod.is_credit&&paymentMethod.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,require('../config/hardware/drawer/events').requestHardwareScope(req),{origin:'POS_SALE',sourceId:sale.id})
       // 3) Guardar promociones con descuento efectivo e incrementar solo esos códigos
       if (promotionRowsToRecord.length > 0) {
         for (const row of promotionRowsToRecord) {
@@ -932,6 +957,7 @@ exports.create = async (req, res, next) => {
       maxWait: 10000
     })
 
+    committedSaleId=created.id
     const fullSale = await prisma.sale.findFirst({
       where: { id: created.id },
       include: SALE_DETAIL_INCLUDE
@@ -939,6 +965,7 @@ exports.create = async (req, res, next) => {
 
     res.status(201).json(await saleDetailDto(fullSale || created, req.companyId, req.user,req.branchId))
   } catch (e) {
+    if(committedSaleId)return res.status(202).json({id:committedSaleId,checkout_state:'CONFIRMED',document_pending:true})
     // Dos envíos a la vez con la misma clave: uno gana el índice único y el
     // otro devuelve la venta que quedó, no un error al cajero.
     if (e && e.code === 'P2002' && String(e.meta?.target || '').includes('idempotency')) {
@@ -950,7 +977,9 @@ exports.create = async (req, res, next) => {
             include: SALE_DETAIL_INCLUDE,
           })
         : null
-      if (yaExiste) return res.status(200).json(await saleDetailDto(yaExiste, req.companyId, req.user,req.branchId))
+      if (yaExiste) {
+        try{return res.status(200).json(await saleDetailDto(assertCheckoutReplay(yaExiste,req,checkoutHash('SALE',req.body)), req.companyId, req.user,req.branchId))}catch(replayError){return next(replayError)}
+      }
     }
     if (e && e.message === 'CASH_SESSION_REQUIRED') {
       return res.status(403).json({
@@ -970,6 +999,7 @@ exports.create = async (req, res, next) => {
         message: 'No hay caja configurada. Ejecute migraciones y seed.'
       })
     }
+    if(e.status>=400&&e.status<500&&!['CHECKOUT_CONFLICT','LEGACY_ATTEMPT_REQUIRES_RECOVERY'].includes(e.code))e.checkoutRejected=true
     next(e)
   }
 }
@@ -1013,6 +1043,7 @@ exports.updateStatus = async (req, res, next) => {
     // Usar limitador de concurrencia para evitar sobrecarga
     const result = await salesOperationLimiter.run(async () => {
       return await prismaTransaction.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT s.id FROM sales s JOIN branches b ON b.id=s.branch_id WHERE (s.id::text=${String(id)} OR s.reference=${String(id)}) AND b.company_id=${req.companyId}::uuid FOR UPDATE OF s`
         // Cargar venta actual con su status e items (por id o por reference)
         const current = await tx.sale.findFirst({
           where: { ...where, branch: { company_id: req.companyId } },
@@ -1020,7 +1051,7 @@ exports.updateStatus = async (req, res, next) => {
           // vista, cancelar devolvía la venta completa y duplicaba lo devuelto.
           include: {
             status: true,
-            sale_items: { include: { return_items: { select: { qty_returned: true } } } },
+            sale_items: { include: { return_items: { include:{return:{select:{status:{select:{name:true}}}}} } } },
             cashRegisterSession: { select: { status: true } },
             paymentEntries: { select: { amount: true } },
             orderLink: { select: { document: { select: { fulfillment_mode: true } } } },
@@ -1108,25 +1139,8 @@ exports.updateStatus = async (req, res, next) => {
 
           // Solo se devuelve lo que el cliente todavía tiene: lo ya devuelto
           // volvió al inventario cuando se aprobó la devolución.
-          const porDevolver = current.sale_items
-            .map((si) => {
-              const devuelto = (si.return_items || []).reduce((n,r)=>n.add(String(r.qty_returned || 0)),new Prisma.Decimal(0))
-              return { ...si,qty:Prisma.Decimal.max(0,new Prisma.Decimal(String(si.qty)).sub(devuelto)) }
-            })
-            .filter((l) => l.qty.gt(0))
-          const stockMap = await expandLinesToStockMap(tx, porDevolver, {companyId:req.companyId,allowArchivedServices:true})
-          const updatedProducts = await restoreStockMap(tx, stockMap, saleBranchId, {
-            reason: 'SALE_RETURN', refType: 'sale', refId: String(current.id), userId: req.user?.sub || null,
-          })
-          await restoreLotsFEFO(tx, stockMap, saleBranchId) // devuelve cantidad a los lotes
-
-          updatedProducts.forEach(p => {
-            console.log(`[STOCK REVERT] ${p.name}: stock restaurado = ${p.stock}`)
-          })
-
-          // Actualizar alertas de stock (puede resolver alertas si el stock volvió a niveles normales)
-          await ensureStockAlertsBatch(tx, updatedProducts, saleBranchId)
-          console.log(`[STOCK REVERT] Alertas de stock actualizadas después de reversión`)
+          const updatedProducts=await require('../../services/units/commercialPhysical').cancelSalePhysical(tx,current,saleBranchId,{reason:'SALE_RETURN',refType:'sale',refId:String(current.id),userId:req.user?.sub||null})
+          await ensureStockAlertsBatch(tx,updatedProducts,saleBranchId)
         }
 
         // Actualizar estado de la venta (siempre por id interno)

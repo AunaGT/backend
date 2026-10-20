@@ -524,6 +524,7 @@ exports.createPayment = async (req, res, next) => {
         userId: uid,
         manualApplications,
         allowAdvance: body.allow_advance === true,
+        hardware:method.settlement_kind==='CASH'?{origin:'RECEIVABLE_RECEIPT',scope:require('../config/hardware/drawer/events').requestHardwareScope(req)}:undefined,
       })
 
       return tx.customerPayment.findUnique({

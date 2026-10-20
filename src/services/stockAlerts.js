@@ -9,6 +9,7 @@
  */
 
 const { DateTime } = require('luxon')
+const { decimal, storageQuantity } = require('./units/physical')
 
 // Cache para catálogos (evitar consultas repetitivas)
 let catalogCache = null
@@ -60,7 +61,7 @@ async function ensureStockAlertsBatch(tx, products, branchId) {
     const unhealthyProducts = []
 
     products.forEach(({ id, stock, min_stock }) => {
-      if (stock >= min_stock) {
+      if (decimal(stock).gte(min_stock ?? 0)) {
         healthyProductIds.push(id)
       } else {
         unhealthyProducts.push({ id, stock, min_stock })
@@ -107,26 +108,28 @@ async function ensureStockAlertsBatch(tx, products, branchId) {
     const createData = []
 
     unhealthyProducts.forEach(({ id: productId, stock, min_stock }) => {
+      stock=decimal(stock)
+      min_stock=decimal(min_stock)
       // Calcular prioridad y tipo
       let priorityName = 'Media'
-      if (stock === 0) {
+      if (stock.isZero()) {
         priorityName = 'Crítica'
       } else {
-        const ratio = min_stock > 0 ? (stock / min_stock) : 0
-        if (ratio <= 0.25) priorityName = 'Alta'
-        else if (ratio <= 0.6) priorityName = 'Media'
+        const ratio = min_stock.gt(0) ? stock.div(min_stock) : decimal(0)
+        if (ratio.lte('0.25')) priorityName = 'Alta'
+        else if (ratio.lte('0.6')) priorityName = 'Media'
         else priorityName = 'Baja'
       }
-      const typeName = stock === 0 ? 'Sin Stock' : 'Stock Bajo'
+      const typeName = stock.isZero() ? 'Sin Stock' : 'Stock Bajo'
 
       const type = catalogs.alertTypes[typeName]
       const priority = catalogs.alertPriorities[priorityName]
 
       const alertData = {
-        current_stock: stock,
-        min_stock,
-        title: stock === 0 ? 'Producto agotado' : 'Stock bajo',
-        message: stock === 0 ? 'El producto está sin existencias.' : `Stock por debajo del mínimo (${stock}/${min_stock}).`,
+        current_stock: storageQuantity(stock),
+        min_stock: storageQuantity(min_stock),
+        title: stock.isZero() ? 'Producto agotado' : 'Stock bajo',
+        message: stock.isZero() ? 'El producto está sin existencias.' : `Stock por debajo del mínimo (${stock}/${min_stock}).`,
         timestamp,
         priority_id: priority?.id,
         type_id: type?.id,

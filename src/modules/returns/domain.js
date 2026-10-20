@@ -2,6 +2,7 @@ const ACTIVE_RETURN_STATUSES = Object.freeze(['Pendiente', 'Aprobada', 'Completa
 const {Prisma}=require('@prisma/client')
 const {commercialQuantity}=require('../../services/catalogItemRules')
 const { DateTime } = require('luxon')
+const {isV2,partialUnitLine,unitFields}=require('../../services/units/commercial')
 
 const RETURN_RESOLUTIONS = Object.freeze([
   'REFUND_ORIGINAL',
@@ -62,7 +63,8 @@ function normalizeReturnLines(items,originalItems) {
     }
     const original=originalItems?.find(line=>Number(line.id)===saleItemId && line.product_id===productId)
     if (originalItems && !original) throw invalid('Partida no encontrada en la venta')
-    const qty=commercialQuantity(item?.qty_returned,original || {kind:'STANDARD'})
+    const resolved=isV2(original||{})?partialUnitLine(original,item,'qty_returned'):null
+    const qty=resolved?.qty??commercialQuantity(item?.qty_returned,original || {kind:'STANDARD'})
     if (original?.item_kind==='SERVICE') for(const field of ['received_qty','restock_qty','disposition','stock_location_id']) if(item[field]!=null) throw invalid('El servicio no admite recepción ni reposición física')
     if (seen.has(saleItemId)) throw invalid(`Línea repetida: ${saleItemId}`)
     seen.add(saleItemId)
@@ -70,6 +72,7 @@ function normalizeReturnLines(items,originalItems) {
       sale_item_id: saleItemId,
       product_id: productId,
       qty_returned: qty.toString(),
+      ...(resolved?unitFields({...resolved,base_qty:resolved.base_qty.toFixed()}):{}),
       reason: String(item.reason || '').trim() || null,
     }
   })

@@ -7,7 +7,9 @@
 
 const { prisma } = require('../models/prisma')
 const { Prisma } = require('@prisma/client')
+const { Decimal, decimal, physicalQuantity, storageQuantity, lockPhysicalProducts } = require('./units/physical')
 const { assertPhysicalProducts } = require('./catalogItemRules')
+const {isV2,D}=require('./units/commercial')
 
 const ACTIVE = 'ACTIVE'
 
@@ -29,7 +31,7 @@ async function ensureBranchStockRows(tx, productIds, branchId) {
   const b = requireBranchId(branchId)
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return
-  await assertPhysicalProducts(client, ids, b)
+  await lockPhysicalProducts(client, ids, b)
   await client.$executeRaw`
     INSERT INTO product_stocks (id, product_id, branch_id, stock, min_stock)
     SELECT gen_random_uuid(), p.id, ${b}::uuid, 0, 0
@@ -46,7 +48,7 @@ async function sumActiveReservedQty(tx, productId, branchId) {
     where: { product_id: productId, branch_id: b, status: ACTIVE },
     _sum: { qty: true },
   })
-  return Number(agg._sum.qty || 0)
+  return storageQuantity(decimal(agg._sum.qty))
 }
 
 async function getProductStockForUpdate(tx, productId, branchId) {
@@ -71,7 +73,7 @@ async function lockProductsForUpdate(tx, productIds, branchId) {
     FROM products p
     JOIN product_stocks ps ON ps.product_id = p.id AND ps.branch_id = ${b}::uuid
     WHERE p.id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
-    FOR UPDATE OF ps
+    ORDER BY p.id FOR UPDATE OF ps
   `
   for (const row of rows) {
     out.set(String(row.id), row)
@@ -97,9 +99,9 @@ async function getAvailability(productId, tx, branchId) {
     err.status = 404
     throw err
   }
-  const stock = Number(product.branch_stocks[0]?.stock || 0)
+  const stock = storageQuantity(decimal(product.branch_stocks[0]?.stock))
   const reserved = await sumActiveReservedQty(client, productId, b)
-  return { stock, reserved, available: Math.max(0, stock - reserved) }
+  return { stock, reserved, available: storageQuantity(Decimal.max(0, decimal(stock).sub(reserved))) }
 }
 
 /**
@@ -138,7 +140,7 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
   })
   const reservedMap = new Map()
   for (const row of reservedRows) {
-    reservedMap.set(row.product_id, (reservedMap.get(row.product_id) || 0) + Number(row.qty || 0))
+    reservedMap.set(row.product_id, decimal(reservedMap.get(row.product_id)).add(decimal(row.qty)).toFixed())
   }
 
   const locationMap = new Map()
@@ -147,22 +149,22 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
       where: { product_id: { in: ids }, location_id: String(locationId) },
       select: { product_id: true, stock: true },
     })
-    for (const row of rows) locationMap.set(row.product_id, Number(row.stock || 0))
+    for (const row of rows) locationMap.set(row.product_id, decimal(row.stock).toFixed())
   }
 
   const out = {}
   for (const p of products) {
-    const stock = Number(p.branch_stocks[0]?.stock || 0)
-    const reserved = reservedMap.get(p.id) || 0
-    const entry = { stock, reserved, available: Math.max(0, stock - reserved) }
+    const stock = storageQuantity(decimal(p.branch_stocks[0]?.stock))
+    const reserved = storageQuantity(decimal(reservedMap.get(p.id)))
+    const entry = { stock, reserved, available: storageQuantity(Decimal.max(0, decimal(stock).sub(reserved))) }
     if (locationId) {
       // Sin fila en la ubicación son 0, no "desconocido": el producto existe en
       // la sucursal pero no está en el anaquel de venta.
-      const atLocation = locationMap.get(p.id) || 0
+      const atLocation = storageQuantity(decimal(locationMap.get(p.id)))
       // Las reservas son de sucursal, no de ubicación: descontarlas enteras acá
       // subestimaría. El tope real es lo que hay a mano y lo vendible en total.
       entry.location_stock = atLocation
-      entry.location_available = Math.min(atLocation, entry.available)
+      entry.location_available = storageQuantity(Decimal.min(atLocation, entry.available))
     }
     out[p.id] = entry
   }
@@ -174,6 +176,7 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
  * @param {Array<{ product_id: string, qty: number }>} lines
  */
 async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDocumentId, branchId, companyId,allowArchivedServices=false } = {}) {
+  if(lines.some(isV2)||await require('../modules/inventory/units').unitsEnabled(tx,companyId))await require('./units/commercialPhysical').lockCommercialProducts(tx,lines,{companyId,branchId,allowArchivedServices})
   const { expandLinesToStockMap, stockMapToLines } = require('./bomStock')
   const skip = new Set(skipProductIds.map(String))
   const stockMap = await expandLinesToStockMap(tx, lines, {companyId,allowArchivedServices})
@@ -183,7 +186,7 @@ async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDoc
   for (const line of flatLines) {
     const pid = String(line.product_id)
     if (skip.has(pid)) continue
-    byProduct.set(pid, (byProduct.get(pid) || 0) + Number(line.qty || 0))
+    byProduct.set(pid, decimal(byProduct.get(pid)).add(line.qty).toFixed())
   }
 
   const productIds = [...byProduct.keys()]
@@ -200,10 +203,10 @@ async function assertLinesAvailable(tx, lines, { skipProductIds = [], excludeDoc
       err.status = 400
       throw err
     }
-    const available = Number(availabilityMap[productId]?.available ?? 0)
-    if (requested > available) {
-      const reserved = Number(availabilityMap[productId]?.reserved ?? 0)
-      const stock = Number(row.stock ?? 0)
+    const available = decimal(availabilityMap[productId]?.available)
+    if (decimal(requested).gt(available)) {
+      const reserved = decimal(availabilityMap[productId]?.reserved)
+      const stock = decimal(row.stock)
       const err = new Error(
         `Stock insuficiente para ${row.name || productId}. Disponible: ${available}${reserved > 0 ? ` (${stock} físico − ${reserved} reservado)` : ''}, solicitado: ${requested}`
       )
@@ -230,6 +233,7 @@ async function reserveForDocument(tx, {
 }) {
   const b = requireBranchId(branchId)
   const { loadProductsWithBom } = require('./bomStock')
+  if(documentLines.some(isV2)||await require('../modules/inventory/units').unitsEnabled(tx,companyId))await require('./units/commercialPhysical').lockCommercialProducts(tx,documentLines,{companyId,branchId:b,allowArchivedServices})
   const prodMap = await loadProductsWithBom(
     tx,
     documentLines.map((line) => line.product_id),
@@ -253,7 +257,7 @@ async function reserveForDocument(tx, {
           branch_id: b,
           document_id: documentId,
           document_line_id: line.id,
-          qty: line.qty * Math.max(1, Number(comp.qty_per_unit || 1)),
+          qty: storageQuantity(physicalQuantity(line.base_qty ?? line.qty,product).mul(comp.qty_per_unit ?? 1)),
           status: ACTIVE,
           reservation_kind: reservationKind,
           expires_at: expiresAt || null,
@@ -267,7 +271,7 @@ async function reserveForDocument(tx, {
         branch_id: b,
         document_id: documentId,
         document_line_id: line.id,
-        qty: Number(line.qty),
+        qty: storageQuantity(physicalQuantity(line.base_qty ?? line.qty,product)),
         status: ACTIVE,
         reservation_kind: reservationKind,
         expires_at: expiresAt || null,
@@ -309,7 +313,7 @@ async function consumeByDocument(tx, documentId) {
  * @param {Array<{ line_id: string, qty: number }>} consumptions
  */
 async function consumeReservationQty(tx, reservation, consumeQty, now) {
-  if (consumeQty >= reservation.qty) {
+  if (decimal(consumeQty).gte(reservation.qty)) {
     await tx.stockReservation.update({
       where: { id: reservation.id },
       data: { status: 'CONSUMED', consumed_at: now },
@@ -317,7 +321,7 @@ async function consumeReservationQty(tx, reservation, consumeQty, now) {
   } else {
     await tx.stockReservation.update({
       where: { id: reservation.id },
-      data: { qty: reservation.qty - consumeQty },
+      data: { qty: storageQuantity(decimal(reservation.qty).sub(consumeQty)) },
     })
   }
 }
@@ -326,25 +330,25 @@ async function consumePartialByDocument(tx, documentId, consumptions, {companyId
   const { loadProductsWithBom } = require('./bomStock')
   const now = new Date()
 
-  for (const { line_id: lineId, qty } of consumptions) {
+  for (const { line_id: lineId, qty,base_qty:baseQty } of consumptions) {
     if (!lineId) throw Object.assign(new Error('Partida requerida'),{status:400})
 
     const line = await tx.commercialDocumentLine.findUnique({
       where: { id: lineId,document_id:documentId,...(companyId ? {document:{branch:{company_id:companyId}}} : {}) },
-      select: { product_id: true,item_kind:true,quantity_decimals:true,qty:true,qty_fulfilled:true },
     })
     if (!line) {
       const err = new Error(`Línea de pedido no encontrada: ${lineId}`)
       err.status = 400
       throw err
     }
-    const exactQty = require('./catalogItemRules').commercialQuantity(qty,line)
+    const advanced=isV2(line)
+    const exactQty = advanced?require('./units/quantity').parseQuantity(baseQty,{decimals:line.unit_snapshot.baseUnit.decimals}):require('./catalogItemRules').commercialQuantity(qty,line)
     if (line.item_kind==='SERVICE') {
-      if (exactQty.gt(new Prisma.Decimal(String(line.qty)).sub(String(line.qty_fulfilled || 0)))) throw Object.assign(new Error('Cantidad supera pendiente de prestación'),{status:409})
-      await tx.commercialDocumentLine.update({where:{id:lineId},data:{qty_fulfilled:{increment:exactQty}}})
+      if (exactQty.gt(D(advanced?line.base_qty:line.qty).sub(advanced?line.base_fulfilled||0:line.qty_fulfilled||0))) throw Object.assign(new Error('Cantidad supera pendiente de prestación'),{status:409})
+      await tx.commercialDocumentLine.update({where:{id:lineId},data:advanced?{base_fulfilled:{increment:exactQty},qty_fulfilled:D(line.base_fulfilled||0).add(exactQty).mul(line.qty).div(line.base_qty).toDecimalPlaces(6).toFixed()}:{qty_fulfilled:{increment:exactQty}}})
       continue
     }
-    const sellQty=exactQty.toNumber()
+    const sellQty=exactQty
 
     const reservations = await tx.stockReservation.findMany({
       where: { document_id: documentId, document_line_id: lineId, status: ACTIVE },
@@ -355,52 +359,17 @@ async function consumePartialByDocument(tx, documentId, consumptions, {companyId
       throw err
     }
 
-    const prodMap = await loadProductsWithBom(tx, [line.product_id],{companyId})
-    const product = prodMap.get(String(line.product_id))
-
-    if (product?.kind === 'KIT' && !product.stock_assembled) {
-      if (!product.kit_components?.length) {
-        const err = new Error(`El kit "${product.name}" no tiene componentes configurados`)
-        err.status = 400
-        throw err
-      }
-      const byProduct = new Map(reservations.map((r) => [String(r.product_id), r]))
-      for (const comp of product.kit_components) {
-        const compId = String(comp.component_product_id)
-        const needQty = sellQty * Math.max(1, Number(comp.qty_per_unit || 1))
-        const reservation = byProduct.get(compId)
-        if (!reservation) {
-          const err = new Error(`No hay reserva activa del componente ${compId} para la línea ${lineId}`)
-          err.status = 400
-          throw err
-        }
-        if (needQty > reservation.qty) {
-          const err = new Error(
-            `Cantidad a entregar (${needQty}) supera reserva del componente (${reservation.qty})`
-          )
-          err.status = 400
-          throw err
-        }
-        await consumeReservationQty(tx, reservation, needQty, now)
-      }
-    } else {
-      const reservation = reservations[0]
-      if (reservations.length > 1) {
-        const err = new Error(`Reservas inconsistentes para la línea ${lineId}`)
-        err.status = 400
-        throw err
-      }
-      if (sellQty > reservation.qty) {
-        const err = new Error(`Cantidad a entregar (${sellQty}) supera reserva (${reservation.qty})`)
-        err.status = 400
-        throw err
-      }
-      await consumeReservationQty(tx, reservation, sellQty, now)
+    const pending = advanced?D(line.base_qty).sub(line.base_fulfilled??0):decimal(line.qty).sub(line.qty_fulfilled ?? 0)
+    if (sellQty.gt(pending)) throw Object.assign(new Error('Cantidad a entregar supera pendiente reservado'),{status:400})
+    // Las reservas son la asignación física congelada; una edición posterior del BOM no la cambia.
+    for (const reservation of reservations) {
+      const needQty = sellQty.eq(pending) ? decimal(reservation.qty) : require('./units/quantity').parseQuantity(decimal(reservation.qty).mul(sellQty).div(pending),{allowZero:true})
+      await consumeReservationQty(tx, reservation, needQty, now)
     }
 
     await tx.commercialDocumentLine.update({
       where: { id: lineId },
-      data: { qty_fulfilled: { increment: sellQty } },
+      data: advanced?{base_fulfilled:{increment:sellQty},qty_fulfilled:D(line.base_fulfilled||0).add(sellQty).mul(line.qty).div(line.base_qty).toDecimalPlaces(6).toFixed()}:{ qty_fulfilled: { increment: storageQuantity(sellQty) } },
     })
   }
 }

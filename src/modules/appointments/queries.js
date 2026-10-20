@@ -194,14 +194,15 @@ async function getSession(db, scope, id, query = {}) {
   const row = await db.appointmentSession.findFirst({ where: { id, ...appointmentWhere(scope),record_type:'SCHEDULED_SERVICE' }, include:includes.session })
   if (!row) fail(404, 'NOT_FOUND', 'Sesión no encontrada')
   const page = integer(query.page ?? 1, 'page', 1, 1000000, true), waitPage = integer(query.waitPage ?? 1, 'waitPage', 1, 1000000, true)
+  const pageSize = integer(query.pageSize ?? 10, 'pageSize', 1, 100, true)
   const where = { company_id: scope.companyId, session_id: id }
   const q = text(query.q, 'q', 150, false), bookingWhere = { ...where, ...(q ? includes.contact ? { contact: { name: { contains: q, mode: 'insensitive' } } } : {OR:[]} : {}) }
   const [rows, totalItems, waitlist, waitTotal, enriched] = await Promise.all([
-    db.appointmentBooking.findMany({ where: bookingWhere, include: includes.booking, orderBy: [{ created_at: 'asc' }, { id: 'asc' }], take: 10, skip: (page - 1) * 10 }), db.appointmentBooking.count({ where: bookingWhere }),
-    db.appointmentWaitlist.findMany({ where: { ...where, status: 'WAITING' }, select: { id: true, contact_id: true, created_at: true, ...(includes.contact?{contact:{select:{name:true}}}:{}) }, orderBy: [{ created_at: 'asc' }, { id: 'asc' }], take: 10, skip: (waitPage - 1) * 10 }), db.appointmentWaitlist.count({ where: { ...where, status: 'WAITING' } }), addConflicts(db, scope, [row]),
+    db.appointmentBooking.findMany({ where: bookingWhere, include: includes.booking, orderBy: [{ created_at: 'asc' }, { id: 'asc' }], take: pageSize, skip: (page - 1) * pageSize }), db.appointmentBooking.count({ where: bookingWhere }),
+    db.appointmentWaitlist.findMany({ where: { ...where, status: 'WAITING' }, select: { id: true, contact_id: true, created_at: true, ...(includes.contact?{contact:{select:{name:true}}}:{}) }, orderBy: [{ created_at: 'asc' }, { id: 'asc' }], take: pageSize, skip: (waitPage - 1) * pageSize }), db.appointmentWaitlist.count({ where: { ...where, status: 'WAITING' } }), addConflicts(db, scope, [row]),
   ])
-  return { ...presentSession(enriched[0], scope), bookings: { items: await bookingDtos(db, scope, rows), page, pageSize: 10, totalItems },
-    waitlist: { items: waitlist.map(w => ({ id: w.id, contactId: w.contact_id, contactName: w.contact?.name||'', createdAt: w.created_at.toISOString() })), page: waitPage, pageSize: 10, totalItems: waitTotal }, history: await readHistory(db, scope, { session_id: id }) }
+  return { ...presentSession(enriched[0], scope), bookings: { items: await bookingDtos(db, scope, rows), page, pageSize, totalItems },
+    waitlist: { items: waitlist.map(w => ({ id: w.id, contactId: w.contact_id, contactName: w.contact?.name||'', createdAt: w.created_at.toISOString() })), page: waitPage, pageSize, totalItems: waitTotal }, history: await readHistory(db, scope, { session_id: id }) }
 }
 async function listServices(db, scope, query = {}) {
   await assertAppointmentsEnabled(db, scope)

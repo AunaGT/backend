@@ -7,6 +7,7 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
 const { Prisma } = require('@prisma/client')
+const {publicUnitLine}=require('../../services/units/publicLine')
 const { documentPaymentTerms, creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
 const crypto = require('crypto')
@@ -28,7 +29,11 @@ const {
 } = require('../../services/commercialDocumentSearch')
 const { defaultOrderValidUntil } = require('../../services/commercialDocumentSettings')
 const {commercialQuantity,lineSnapshot,assertServicesEnabled}=require('../../services/catalogItemRules')
+const Units=require('../inventory/units')
+const {resolveCommercialLines}=require('../../services/units/saleLines')
+const {isV2,unitFields}=require('../../services/units/commercial')
 const {validMoney}=require('../../utils/importValidation')
+const {checkoutKey,checkoutHash,assertCheckoutReplay,lockCheckoutAttempt}=require('../sales/checkoutAttempts')
 const {
   assertLinesAvailable,
   reserveForDocument,
@@ -152,6 +157,13 @@ async function validateCustomerContact(tx, customerContactId) {
 }
 
 async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) {
+  if(await Units.unitsEnabled(tx,ctx.companyId)){
+    const resolved=await resolveCommercialLines(tx,ctx.scope(),items,{tier:await resolvePriceTierForContext(tx,ctx),allowOverride:true})
+    const lines=resolved.map((line,index)=>{const {unit_cost,...saved}=line;return {...saved,sort_order:index,...(isV2(line)?{base_fulfilled:'0',base_invoiced:'0'}:{})}})
+    const subtotal=lines.reduce((sum,line)=>sum.add(line.line_total),new Prisma.Decimal(0)).toNumber()
+    if(!validMoney(subtotal))throw Object.assign(new Error('Total de pedido fuera de rango'),{status:400})
+    return {lines,subtotal,total:subtotal}
+  }
   if (!Array.isArray(items) || items.length === 0) {
     const err = new Error('Debe incluir al menos un producto')
     err.status = 400
@@ -446,6 +458,7 @@ exports.getPublicByToken = async (req, res, next) => {
     const order = await prisma.commercialDocument.findFirst({
       where: { public_token: token, doc_type: ORDER_DOC_TYPE },
       select: {
+        id:true,
         reference: true,
         status: true,
         created_at: true,
@@ -496,6 +509,7 @@ exports.getPublicByToken = async (req, res, next) => {
 
     const moduleBlock = await getCompanyModuleBlock(order.branch.company_id, 'orders')
     if (moduleBlock) return res.status(403).json(moduleBlock)
+    if(await Units.unitsEnabled(prisma,order.branch.company_id))order.lines=await prisma.commercialDocumentLine.findMany({where:{document_id:order.id},orderBy:{sort_order:'asc'},select:{qty:true,qty_fulfilled:true,item_name:true,item_kind:true,unit_label:true,quantity_decimals:true,unit_price:true,line_total:true,unit_metadata_version:true,unit_snapshot:true,base_qty:true,base_fulfilled:true,base_invoiced:true,product:{select:{name:true,barcode:true}}}})
 
     const companyRows = await prisma.systemSetting.findMany({
       where: {
@@ -506,6 +520,7 @@ exports.getPublicByToken = async (req, res, next) => {
     const company = Object.fromEntries(companyRows.map((row) => [row.key, row.value]))
 
     res.json({
+      ...(order.lines.some(l=>l.unit_metadata_version===2)?{unit_metadata_version:2}:{}),
       reference: order.reference,
       status: order.status,
       created_at: order.created_at,
@@ -534,6 +549,7 @@ exports.getPublicByToken = async (req, res, next) => {
         qty_fulfilled: line.qty_fulfilled || 0,
         unit_price: line.unit_price,
         line_total: line.line_total,
+        ...publicUnitLine(line,{progress:true}),
       })),
       sales: order.documentSales.flatMap(({ sale }) => sale ? [{
         reference: sale.reference,
@@ -575,6 +591,7 @@ exports.create = async (req, res, next) => {
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
+        scope:()=>({...Units.requestUnitScope(req),branchId}),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
@@ -610,6 +627,7 @@ exports.create = async (req, res, next) => {
           notes: notes != null ? String(notes).trim() || null : null,
           created_by: user.sub,
           lines: { create: lines },
+          ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: ORDER_DETAIL_INCLUDE,
       })
@@ -657,6 +675,7 @@ exports.update = async (req, res, next) => {
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
+        scope:()=>({...Units.requestUnitScope(req),branchId:existing.branch_id}),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
@@ -693,6 +712,7 @@ exports.update = async (req, res, next) => {
           notes: notes !== undefined ? (notes != null ? String(notes).trim() || null : null) : undefined,
           valid_until: validUntil,
           lines: { create: lines },
+          ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: ORDER_DETAIL_INCLUDE,
       })
@@ -746,7 +766,7 @@ exports.confirm = async (req, res, next) => {
     if (!user?.sub) return res.status(401).json({ message: 'Usuario no autenticado' })
 
     const where = { ...orderWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
-    const order = await prisma.commercialDocument.findFirst({
+    let order = await prisma.commercialDocument.findFirst({
       where,
       include: { lines: { orderBy: { sort_order: 'asc' } } },
     })
@@ -758,10 +778,13 @@ exports.confirm = async (req, res, next) => {
       return res.status(400).json({ message: 'El pedido debe tener al menos una línea' })
     }
 
-    const lineRows = order.lines
-    if (lineRows.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(prisma,req.companyId)
-
     await prismaTransaction.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT d.id FROM commercial_documents d JOIN branches b ON b.id=d.branch_id WHERE d.id=${order.id}::uuid AND b.company_id=${req.companyId}::uuid FOR UPDATE OF d`
+      order=await tx.commercialDocument.findFirst({where,include:{lines:{orderBy:{sort_order:'asc'}}}})
+      if(!order||order.status!=='DRAFT')throw Object.assign(new Error('El pedido ya no está en borrador'),{status:409})
+      const lineRows=order.lines
+      if(!lineRows?.length)throw Object.assign(new Error('El pedido debe tener al menos una línea'),{status:409})
+      if(lineRows.some(line=>line.item_kind==='SERVICE'))await assertServicesEnabled(tx,req.companyId)
       await assertLinesAvailable(
         tx,
         lineRows.map((l) => ({ ...l,product_id: l.product_id, qty: l.qty })),
@@ -844,6 +867,16 @@ exports.convertToSale = async (req, res, next) => {
     const user = req.user
     if (!user?.sub) return res.status(401).json({ message: 'Usuario no autenticado' })
 
+    const attemptKey=checkoutKey(req)
+    const attemptHash=attemptKey?checkoutHash('ORDER',req.body,req.params.id):null
+    if(attemptKey){
+      const previous=await prisma.sale.findFirst({where:{branch_id:req.branchId,branch:{company_id:req.companyId},idempotency_key:attemptKey},include:{orderLink:true}})
+      if(previous){
+        assertCheckoutReplay(previous,req,attemptHash)
+        return res.json({order:null,sale:previous})
+      }
+    }
+
     const { payment_method_id: paymentMethodIdRaw, amount_received, change: changeRaw, lines: linesRaw, cash_register_id: cashRegisterId } =
       req.body || {}
     const paymentMethodId = Number(paymentMethodIdRaw)
@@ -852,7 +885,7 @@ exports.convertToSale = async (req, res, next) => {
     }
 
     const where = { ...orderWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
-    const order = await prisma.commercialDocument.findFirst({
+    let order = await prisma.commercialDocument.findFirst({
       where,
       include: { lines: { orderBy: { sort_order: 'asc' } } },
     })
@@ -879,6 +912,21 @@ exports.convertToSale = async (req, res, next) => {
     }
 
     const result = await prismaTransaction.$transaction(async (tx) => {
+      await lockCheckoutAttempt(tx,order.branch_id,attemptKey)
+      if(attemptKey){
+        const previous=await tx.sale.findFirst({where:{branch_id:order.branch_id,idempotency_key:attemptKey}})
+        if(previous){assertCheckoutReplay(previous,req,attemptHash);return {order:null,sale:previous}}
+      }
+      await tx.$queryRaw`SELECT id FROM commercial_documents WHERE id=${order.id}::uuid FOR UPDATE`
+      order=await tx.commercialDocument.findFirst({where:{id:order.id,branch_id:req.branchId,branch:{company_id:req.companyId}},include:{lines:{orderBy:{sort_order:'asc'}}}})
+      if(!order||!['CONFIRMED','PARTIALLY_FULFILLED'].includes(order.status))throw Object.assign(new Error('El pedido ya no está pendiente de entrega'),{status:409})
+      order={...order,lines:require('../../services/commercialDocumentFulfillment').netDocumentLines(order)}
+      fulfillments=resolveFulfillmentLines(order.lines,linesRaw)
+      if(!fulfillments.length)throw Object.assign(new Error('No hay líneas pendientes por entregar'),{status:409})
+      const unitMode=fulfillments.some(({line})=>isV2(line))||await Units.unitsEnabled(tx,req.companyId)
+      const stockLines=fulfillments.map(({line,...selection})=>({...line,...selection}))
+      const lineMaps=unitMode?await require('../../services/units/commercialPhysical').reservationStockMaps(tx,order.id,fulfillments,{branchId:order.branch_id}):null
+      const physicalLines=lineMaps?lineMaps.flatMap(map=>[...map].map(([product_id,qty])=>({product_id,qty,base_qty:qty}))):stockLines
       const cashSessionIdForSale = await requireCashSession(tx, user, cashRegisterId, order.branch_id)
 
       const paymentMethod = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:paymentMethodId,purpose:'SALE'})
@@ -890,7 +938,7 @@ exports.convertToSale = async (req, res, next) => {
 
       await assertLinesAvailable(
         tx,
-        fulfillments.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty })),
+        physicalLines,
         { excludeDocumentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true }
       )
 
@@ -901,8 +949,8 @@ exports.convertToSale = async (req, res, next) => {
       // sales.controller.js (antes reetiquetaba la hora de Guatemala como UTC).
       const saleDate = new Date()
 
-      const totalItems = fulfillments.filter(f=>f.line.item_kind!=='SERVICE').reduce((acc, f) => acc + f.qty.toNumber(), 0)
-      const netLineTotals = fulfillments.map(({line,qty}) => partialLineTotal(line,qty,line.qty_fulfilled).toNumber())
+      const totalItems = fulfillments.some(({line})=>isV2(line))?fulfillments.length:fulfillments.filter(f=>f.line.item_kind!=='SERVICE').reduce((acc, f) => acc + f.qty.toNumber(), 0)
+      const netLineTotals = fulfillments.map(({line,qty,base_qty}) => partialLineTotal(line,isV2(line)?base_qty:qty,isV2(line)?line.base_fulfilled:line.qty_fulfilled).toNumber())
       const subtotal = netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0)).toNumber()
       if (totalItems>2147483647 || !validMoney(subtotal)) throw Object.assign(new Error('Factura fuera de rango'),{status:400})
       const total = subtotal
@@ -943,6 +991,7 @@ exports.convertToSale = async (req, res, next) => {
           date: saleDate,
           sold_at: saleDate,
           items: totalItems,
+          ...(fulfillments.some(({line})=>isV2(line))?{unit_metadata_version:2}:{}),
           subtotal,
           discount_total: 0,
           total,
@@ -951,6 +1000,8 @@ exports.convertToSale = async (req, res, next) => {
           status_id: completadaStatus.id,
           created_by: user.sub,
           cash_register_session_id: cashSessionIdForSale || undefined,
+          idempotency_key:attemptKey,
+          idempotency_hash:attemptHash,
         },
       })
 
@@ -962,18 +1013,19 @@ exports.convertToSale = async (req, res, next) => {
         })).map((p) => [String(p.id), p.cost])
       )
       await tx.saleItem.createMany({
-        data: fulfillments.map(({ line, qty }, index) => ({
+        data: fulfillments.map(({ line, qty,...selection }, index) => ({
           sale_id: sale.id,
           product_id: line.product_id,
-          price: line.unit_price,
+          price: isV2(line)?selection.unit_price:line.unit_price,
           unit_cost: line.item_kind==='SERVICE' ? 0 : costos.get(String(line.product_id)) ?? null,
           net_total: netLineTotals[index],
           qty,
           ...lineSnapshot(line),
+          ...(isV2(line)?{...unitFields(selection),unit_label:selection.unit_label,quantity_decimals:selection.quantity_decimals,base_returned:'0'}:{}),
         })),
       })
 
-      const stockMap = await expandLinesToStockMap(
+      const stockMap = unitMode?null:await expandLinesToStockMap(
         tx,
         fulfillments.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty })),
         {companyId:req.companyId,allowArchivedServices:true}
@@ -982,15 +1034,17 @@ exports.convertToSale = async (req, res, next) => {
         reason: 'ORDER_FULFILL', refType: 'commercial_document', refId: String(order.id), userId: user.sub,
         groupId: require('crypto').randomUUID(),
       }
-      const updatedProducts = await deductStockMap(tx, stockMap, order.branch_id, orderStockCtx)
+      const dispatched=unitMode?await require('../../services/units/commercialPhysical').dispatchCommercialLines(tx,stockLines,order.branch_id,{...orderStockCtx,companyId:req.companyId},{lineMaps}):null
+      const updatedProducts = dispatched?.updated??await deductStockMap(tx, stockMap, order.branch_id, orderStockCtx)
+      if(dispatched)await require('../../services/units/commercialPhysical').persistSalePhysicalSnapshots(tx,sale.id,stockLines,dispatched.snapshots)
       // Advisory: descuenta lotes por caducidad, dentro de la ubicación que despachó.
-      if (stockMap.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId: orderStockCtx.groupId }))
+      if (stockMap?.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId: orderStockCtx.groupId }))
       await ensureStockAlertsBatch(tx, updatedProducts, order.branch_id)
 
       await consumePartialByDocument(
         tx,
         order.id,
-        fulfillments.map((f) => ({ line_id: f.line_id, qty: f.qty })),
+        fulfillments.map((f) => ({ line_id: f.line_id, qty: f.qty,...(f.base_qty?{base_qty:f.base_qty}:{}) })),
         {companyId:req.companyId}
       )
 
@@ -998,6 +1052,7 @@ exports.convertToSale = async (req, res, next) => {
         data: { document_id: order.id, sale_id: sale.id },
       })
       await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
+      if(!paymentMethod.is_credit&&paymentMethod.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,require('../config/hardware/drawer/events').requestHardwareScope(req),{origin:'POS_SALE',sourceId:sale.id})
 
       const refreshedLines = await tx.commercialDocumentLine.findMany({
         where: { document_id: order.id },
@@ -1042,6 +1097,7 @@ exports.convertToSale = async (req, res, next) => {
     if (e.message === 'NO_CASH_REGISTER') {
       return res.status(503).json({ message: 'No hay caja registradora configurada' })
     }
+    if(e.status>=400&&e.status<500&&!['CHECKOUT_CONFLICT','LEGACY_ATTEMPT_REQUIRES_RECOVERY'].includes(e.code))e.checkoutRejected=true
     next(e)
   }
 }

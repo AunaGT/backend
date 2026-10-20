@@ -389,6 +389,10 @@ model AppointmentRequest {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  measure_units MeasureUnit[]
+  product_presentations ProductPresentation[]
+  product_barcodes ProductBarcode[]
+  hardwareDrawerPolicy HardwareDrawerPolicy?
   own_payment_methods PaymentMethod[] @relation("CompanyOwnedPaymentMethods")
   payment_method_preferences CompanyPaymentMethod[]
   roles Role[]
@@ -501,6 +505,12 @@ model UserCompany {
 /// Sucursal. Toda entidad transaccional lleva branch_id; la empresa se deriva
 /// de la sucursal.
 model Branch {
+  hardwarePrintJobs HardwarePrintJob[]
+  hardwareDrawerIntents HardwareDrawerIntent[]
+  hardware_workstations HardwareWorkstation[]
+  hardware_devices HardwareDevice[]
+  hardware_tests HardwareTestRun[]
+  hardware_events HardwareAuditEvent[]
   supplier_payments SupplierPayment[]
   barcode_print_preparations BarcodePrintPreparation[]
   appointment_engagements AppointmentEngagement[]
@@ -585,8 +595,8 @@ model ProductStock {
   product    Product @relation(fields: [product_id], references: [id], onDelete: Cascade)
   branch_id  String  @db.Uuid
   branch     Branch  @relation(fields: [branch_id], references: [id], onDelete: Restrict)
-  stock      Int     @default(0)
-  min_stock  Int     @default(0)
+  stock      Decimal     @default(0) @db.Decimal(20, 6)
+  min_stock  Decimal     @default(0) @db.Decimal(20, 6)
 
   @@unique([product_id, branch_id])
   @@index([branch_id])
@@ -664,10 +674,10 @@ model ProductStockLocation {
   product     Product       @relation(fields: [product_id], references: [id], onDelete: Cascade)
   location_id String        @db.Uuid
   location    StockLocation @relation(fields: [location_id], references: [id], onDelete: Restrict)
-  stock       Int           @default(0)
+  stock       Decimal           @default(0) @db.Decimal(20, 6)
   /// Punto de reposición interno (bodega → sala). No sustituye a
   /// product_stocks.min_stock, que sigue siendo el mínimo de compra por sucursal.
-  min_stock   Int           @default(0)
+  min_stock   Decimal           @default(0) @db.Decimal(20, 6)
 
   @@unique([product_id, location_id])
   @@index([location_id])
@@ -692,6 +702,7 @@ enum StockMovementReason {
 
 /// Una fila por (producto, ubicación, delta). Append-only: nunca se edita ni se borra.
 model StockMovement {
+  unit_snapshot Json?
   id          String              @id @default(uuid()) @db.Uuid
   branch_id   String              @db.Uuid
   branch      Branch              @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -700,9 +711,9 @@ model StockMovement {
   product_id  String              @db.Uuid
   product     Product             @relation(fields: [product_id], references: [id], onDelete: Restrict)
   /// Signo incluido: negativo sale, positivo entra.
-  qty         Int
+  qty         Decimal @db.Decimal(20, 6)
   /// Existencia de la ubicación DESPUÉS del movimiento (kardex sin recalcular).
-  balance     Int
+  balance     Decimal @db.Decimal(20, 6)
   reason      StockMovementReason
   /// Documento que lo originó: 'sale' | 'transfer' | 'incoming_merchandise' | ...
   ref_type    String?             @db.VarChar(30)
@@ -756,13 +767,14 @@ model StockTransfer {
 }
 
 model StockTransferLine {
+  unit_snapshot Json?
   id            String        @id @default(uuid()) @db.Uuid
   transfer_id   String        @db.Uuid
   transfer      StockTransfer @relation(fields: [transfer_id], references: [id], onDelete: Cascade)
   product_id    String        @db.Uuid
   product       Product       @relation(fields: [product_id], references: [id], onDelete: Restrict)
-  qty_sent      Int
-  qty_received  Int?
+  qty_sent      Decimal @db.Decimal(20, 6)
+  qty_received  Decimal? @db.Decimal(20, 6)
   /// Lotes consumidos en el origen al enviar: [{ lot_code, expiry_date, unit_cost, supplier_id, qty }].
   /// Al recibir se recrean en el destino; al cancelar se devuelven al origen.
   lots_snapshot Json?
@@ -1063,7 +1075,94 @@ model SupplierPaymentTerm {
   @@map("supplier_payment_terms")
 }
 
+/// Factor relativo a la referencia física de la familia; definiciones usadas se archivan.
+model MeasureUnit {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  code String @db.VarChar(40)
+  family String @db.VarChar(50)
+  name String @db.VarChar(100)
+  label String @db.VarChar(50)
+  factor Decimal @db.Decimal(24, 12)
+  quantity_decimals Int @default(0)
+  is_standard Boolean @default(false)
+  active Boolean @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  products Product[] @relation("ProductBaseUnit")
+  presentations ProductPresentation[]
+
+  @@unique([company_id, code])
+  @@unique([company_id, id])
+  @@index([company_id, family, active])
+  @@map("measure_units")
+}
+
+/// Factor directo a la unidad base; una equivalencia nueva crea sucesora.
+model ProductPresentation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  product_id String @db.Uuid
+  product Product @relation("ProductPresentations", fields: [company_id, product_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  measure_unit_id String? @db.Uuid
+  measure_unit MeasureUnit? @relation(fields: [company_id, measure_unit_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  name String @db.VarChar(100)
+  label String @db.VarChar(50)
+  version Int @default(1)
+  factor Decimal @db.Decimal(24, 12)
+  quantity_decimals Int @default(0)
+  purchase_enabled Boolean @default(true)
+  sale_enabled Boolean @default(true)
+  active Boolean @default(true)
+  successor_id String? @db.Uuid
+  successor ProductPresentation? @relation("PresentationSuccessor", fields: [company_id, product_id, successor_id], references: [company_id, product_id, id], onDelete: Restrict, onUpdate: NoAction)
+  predecessors ProductPresentation[] @relation("PresentationSuccessor")
+  price Decimal? @db.Decimal(16, 6)
+  price_wholesale Decimal? @db.Decimal(16, 6)
+  price_promotion Decimal? @db.Decimal(16, 6)
+  promotion_valid_until DateTime?
+  default_purchase_for Product[] @relation("DefaultPurchasePresentation")
+  default_sale_for Product[] @relation("DefaultSalePresentation")
+  barcodes ProductBarcode[]
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([company_id, product_id, id])
+  @@index([company_id, product_id, active])
+  @@map("product_presentations")
+}
+
+/// Una autoridad de códigos por empresa, conservando ceros iniciales.
+model ProductBarcode {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  product_id String @db.Uuid
+  product Product @relation(fields: [company_id, product_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  presentation_id String? @db.Uuid
+  presentation ProductPresentation? @relation(fields: [company_id, product_id, presentation_id], references: [company_id, product_id, id], onDelete: Restrict, onUpdate: NoAction)
+  code String @db.VarChar(100)
+  active Boolean @default(true)
+  created_at DateTime @default(now())
+
+  @@unique([company_id, code])
+  @@index([company_id, product_id])
+  @@map("product_barcodes")
+}
+
 model Product {
+  unit_metadata_version Int @default(1)
+  base_unit_id String? @db.Uuid
+  base_unit MeasureUnit? @relation("ProductBaseUnit", fields: [company_id, base_unit_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  unit_revision Int @default(1)
+  presentations ProductPresentation[] @relation("ProductPresentations")
+  barcodes ProductBarcode[]
+  default_purchase_presentation_id String? @db.Uuid
+  default_purchase_presentation ProductPresentation? @relation("DefaultPurchasePresentation", fields: [company_id, id, default_purchase_presentation_id], references: [company_id, product_id, id], onDelete: Restrict, onUpdate: NoAction)
+  default_sale_presentation_id String? @db.Uuid
+  default_sale_presentation ProductPresentation? @relation("DefaultSalePresentation", fields: [company_id, id, default_sale_presentation_id], references: [company_id, product_id, id], onDelete: Restrict, onUpdate: NoAction)
   engagement_lines AppointmentEngagementLine[]
   id                         String                    @id @default(uuid()) @db.Uuid
   company_id                 String                    @db.Uuid
@@ -1073,13 +1172,13 @@ model Product {
   category                   ProductCategory           @relation(fields: [category_id], references: [id])
   brand                      String?                   @db.VarChar(100)
   size                       String?                   @db.VarChar(50)
-  stock                      Int                       @default(0)
-  min_stock                  Int                       @default(0)
-  price                      Decimal                   @db.Decimal(12, 2)
-  price_wholesale            Decimal?                  @db.Decimal(12, 2)
-  price_promotion            Decimal?                  @db.Decimal(12, 2)
+  stock                      Decimal                       @default(0) @db.Decimal(20, 6)
+  min_stock                  Decimal                       @default(0) @db.Decimal(20, 6)
+  price                      Decimal @db.Decimal(16, 6)
+  price_wholesale            Decimal? @db.Decimal(16, 6)
+  price_promotion            Decimal? @db.Decimal(16, 6)
   promotion_valid_until      DateTime?
-  cost                       Decimal                   @db.Decimal(12, 2)
+  cost                       Decimal @db.Decimal(24, 12)
   image_url                  String?                   @db.VarChar(500)
   supplier_id                String?                   @db.Uuid
 supplier                   Supplier?                 @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
@@ -1142,10 +1241,10 @@ model ProductLot {
   lot_code                String?        @db.VarChar(60)
   /// Obligatoria vía API si product.tracks_expiry
   expiry_date             DateTime?      @db.Date
-  qty_received            Int
+  qty_received            Decimal @db.Decimal(20, 6)
   /// Restante según consumo FEFO. Con tracks_expiry es obligatorio que cuadre.
-  qty_remaining           Int
-  unit_cost               Decimal?       @db.Decimal(12, 2)
+  qty_remaining           Decimal @db.Decimal(20, 6)
+  unit_cost               Decimal? @db.Decimal(24, 12)
   supplier_id             String?        @db.Uuid
   /// Ingreso de mercancía que originó el lote (auditoría)
   incoming_merchandise_id String?        @db.Uuid
@@ -1165,7 +1264,7 @@ model ProductBomLine {
   kit_product          Product @relation("KitParent", fields: [kit_product_id], references: [id], onDelete: Cascade)
   component_product_id String  @db.Uuid
   component_product    Product @relation("KitComponent", fields: [component_product_id], references: [id], onDelete: Restrict)
-  qty_per_unit         Int     @default(1)
+  qty_per_unit         Decimal     @default(1) @db.Decimal(20, 6)
   sort_order           Int     @default(0)
 
   @@unique([kit_product_id, component_product_id])
@@ -1219,6 +1318,10 @@ model RolePermission {
 }
 
 model User {
+  hardwarePrintJobs HardwarePrintJob[]
+  hardwareDrawerIntents HardwareDrawerIntent[]
+  hardware_tests HardwareTestRun[]
+  hardware_events HardwareAuditEvent[]
   supplier_payments_registered SupplierPayment[] @relation("SupplierPaymentRegisteredBy")
   supplier_payments_cancelled SupplierPayment[] @relation("SupplierPaymentCancelledBy")
   merchandise_entries_cancelled IncomingMerchandisePaymentEntry[] @relation("MerchandiseEntryCancelledBy")
@@ -1346,8 +1449,8 @@ model Alert {
   message       String?
   product_id    String        @db.Uuid
   product       Product       @relation(fields: [product_id], references: [id])
-  current_stock Int?
-  min_stock     Int?
+  current_stock Decimal? @db.Decimal(20, 6)
+  min_stock     Decimal? @db.Decimal(20, 6)
   timestamp     DateTime      @default(now())
   status_id     Int
   status        Status        @relation(fields: [status_id], references: [id])
@@ -1360,6 +1463,7 @@ model Alert {
 }
 
 model Sale {
+  unit_metadata_version Int @default(1)
   settlement_source String @default("LEGACY") @db.VarChar(30)
   appointment_engagement AppointmentEngagement? @relation("EngagementConfirmedSale")
   origin_engagement_id String? @unique(map: "sale_origin_engagement_key") @db.Uuid
@@ -1380,7 +1484,7 @@ origin_engagement AppointmentEngagement? @relation("EngagementSaleOrigin", field
   total             Decimal         @db.Decimal(12, 2)
   total_returned    Decimal         @default(0) @db.Decimal(12, 2)
   adjusted_total    Decimal         @db.Decimal(12, 2)
-  items             Int
+  items             Decimal @db.Decimal(20, 6)
   payment_method_id Int?
 payment_method    PaymentMethod?  @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
   status_id         Int
@@ -1410,6 +1514,7 @@ payment_method    PaymentMethod?  @relation(fields: [payment_method_id], referen
   /// Clave del intento de cobro. Un doble clic o un reintento tras un timeout
   /// repite la misma y devuelve la venta que ya existe en vez de crear otra.
   idempotency_key String? @db.VarChar(64)
+  idempotency_hash String? @db.VarChar(64)
 
   /// Cuentas por cobrar. Solo tiene sentido en ventas al crédito; las de contado
   /// quedan en PAID (el default también deja correcto el histórico, que fue todo
@@ -1469,6 +1574,7 @@ enum StockReservationKind {
 }
 
 model CommercialDocument {
+  unit_metadata_version Int @default(1)
   quoted_engagement AppointmentEngagement? @relation("EngagementQuote")
   ordered_engagement AppointmentEngagement? @relation("EngagementOrder")
   id                  String                   @id @default(uuid()) @db.Uuid
@@ -1518,6 +1624,12 @@ model CommercialDocument {
 }
 
 model CommercialDocumentLine {
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_invoiced Decimal? @db.Decimal(20, 6)
+  base_fulfilled Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
   service_schedule_snapshot Json?
   engagement_lines AppointmentEngagementLine[]
   id            String             @id @default(uuid()) @db.Uuid
@@ -1525,15 +1637,15 @@ model CommercialDocumentLine {
   document      CommercialDocument @relation(fields: [document_id], references: [id], onDelete: Cascade)
   product_id    String             @db.Uuid
   product       Product            @relation(fields: [product_id], references: [id])
-  qty           Decimal            @db.Decimal(12, 4)
-  qty_fulfilled Decimal            @default(0) @db.Decimal(12, 4)
-  qty_invoiced  Decimal            @default(0) @db.Decimal(12, 4)
+  qty           Decimal @db.Decimal(20, 6)
+  qty_fulfilled Decimal            @default(0) @db.Decimal(20, 6)
+  qty_invoiced  Decimal            @default(0) @db.Decimal(20, 6)
   item_name     String             @db.VarChar(150)
   item_kind     ProductKind
   unit_label    String             @db.VarChar(50)
   quantity_decimals Int            @default(0)
   deliveryLines OrderDeliveryLine[]
-  unit_price    Decimal            @db.Decimal(12, 2)
+  unit_price    Decimal @db.Decimal(30, 18)
   line_total    Decimal            @db.Decimal(12, 2)
   sort_order    Int                @default(0)
   reservations  StockReservation[]
@@ -1561,14 +1673,20 @@ document    CommercialDocument @relation(fields: [document_id], references: [id]
 }
 
 model OrderDeliveryLine {
+  physical_snapshot Json?
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
+  base_invoiced Decimal? @db.Decimal(20, 6)
   id               String @id @default(uuid()) @db.Uuid
   delivery_id      String @db.Uuid
 delivery         OrderDelivery @relation(fields: [delivery_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   document_line_id String @db.Uuid
 document_line    CommercialDocumentLine @relation(fields: [document_line_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  qty              Decimal @db.Decimal(12, 4)
-  qty_invoiced     Decimal @default(0) @db.Decimal(12, 4)
-  unit_cost        Decimal? @db.Decimal(12, 2)
+  qty              Decimal @db.Decimal(20, 6)
+  qty_invoiced     Decimal @default(0) @db.Decimal(20, 6)
+  unit_cost        Decimal? @db.Decimal(24, 12)
 
   @@unique([delivery_id, document_line_id])
   @@index([document_line_id])
@@ -1585,7 +1703,7 @@ model StockReservation {
   document         CommercialDocument     @relation(fields: [document_id], references: [id], onDelete: Cascade)
   document_line_id String                 @db.Uuid
   document_line    CommercialDocumentLine @relation(fields: [document_line_id], references: [id], onDelete: Cascade)
-  qty              Int
+  qty              Decimal @db.Decimal(20, 6)
   status           StockReservationStatus @default(ACTIVE)
   reservation_kind StockReservationKind   @default(ORDER)
   expires_at       DateTime?
@@ -1653,19 +1771,25 @@ sale Sale @relation(fields:[branch_id,sale_id],references:[branch_id,id],onDelet
 }
 
 model SaleItem {
+  physical_snapshot Json?
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
+  base_returned Decimal? @db.Decimal(20, 6)
   id           Int          @id @default(autoincrement())
   sale_id      String       @db.Uuid
   sale         Sale         @relation(fields: [sale_id], references: [id])
   product_id   String       @db.Uuid
   product      Product      @relation(fields: [product_id], references: [id])
-  price        Decimal      @db.Decimal(12, 2)
+  price        Decimal @db.Decimal(30, 18)
   /// Costo del producto AL MOMENTO DE VENDER. Sin esto el asiento contable toma
   /// el costo de hoy y editar un costo cambia el CMV de ventas viejas.
   /// Null = venta anterior a este campo; ahí se cae al costo del producto.
-  unit_cost    Decimal?     @db.Decimal(12, 2)
+  unit_cost    Decimal? @db.Decimal(24, 12)
   /// Importe neto de la línea después de descuentos. Null en ventas legacy.
   net_total    Decimal?     @db.Decimal(12, 2)
-  qty          Decimal      @db.Decimal(12, 4)
+  qty          Decimal @db.Decimal(20, 6)
   item_name    String       @db.VarChar(150)
   item_kind    ProductKind
   unit_label   String       @db.VarChar(50)
@@ -1686,14 +1810,19 @@ enum MerchandiseSource {
 }
 
 model PurchaseLog {
+  line_total Decimal? @db.Decimal(12, 2)
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
   id          Int               @id @default(autoincrement())
   product_id  String            @db.Uuid
   product     Product           @relation(fields: [product_id], references: [id])
   supplier_id String            @db.Uuid
   supplier    Supplier          @relation(fields: [supplier_id], references: [id])
-  qty         Int
+  qty         Decimal @db.Decimal(20, 6)
   date        DateTime          @default(now())
-  cost        Decimal           @db.Decimal(12, 2)
+  cost        Decimal @db.Decimal(24, 12)
   source      MerchandiseSource @default(PURCHASE)
 
   @@index([product_id])
@@ -1715,6 +1844,12 @@ model SupplierCategory {
 
 /// Registro de auditoría para ingresos de mercancía
 model IncomingMerchandise {
+  request_company_id String? @db.Uuid
+  request_key String? @db.VarChar(64)
+  request_hash String? @db.VarChar(64)
+  request_result Json?
+  @@unique([request_company_id, registered_by, request_key], map: "incoming_merchandise_request_key")
+  unit_metadata_version Int @default(1)
   legacy_settled_amount Decimal @default(0) @db.Decimal(12, 2)
   payment_revision Int @default(0)
   payment_balance_review_required Boolean @default(false)
@@ -1755,13 +1890,18 @@ model IncomingMerchandise {
 }
 
 model IncomingMerchandiseItem {
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
+  line_total Decimal? @db.Decimal(12, 2)
   id                      String              @id @default(uuid()) @db.Uuid
   incoming_merchandise_id String              @db.Uuid
   incomingMerchandise     IncomingMerchandise @relation(fields: [incoming_merchandise_id], references: [id], onDelete: Cascade)
   product_id              String              @db.Uuid
   product                 Product             @relation(fields: [product_id], references: [id])
-  quantity                Int
-  unit_cost               Decimal             @db.Decimal(12, 2)
+  quantity                Decimal @db.Decimal(20, 6)
+  unit_cost               Decimal @db.Decimal(24, 12)
 
   @@index([incoming_merchandise_id])
   @@index([product_id])
@@ -1911,6 +2051,7 @@ model SalePaymentEntry {
 }
 
 model Return {
+  unit_metadata_version Int @default(1)
   id               String       @id @default(uuid()) @db.Uuid
   reference        String?      @unique @db.VarChar(30)
   sale_id          String       @db.Uuid
@@ -1921,7 +2062,7 @@ model Return {
   total_refund     Decimal      @db.Decimal(12, 2)
   /// EXCHANGE: valor_reemplazo − valor_devuelto. + = cliente paga; − = se le devuelve.
   price_difference Decimal      @default(0) @db.Decimal(12, 2)
-  items_count      Int          @default(0)
+  items_count      Decimal          @default(0) @db.Decimal(20, 6)
   status_id        Int
   status           ReturnStatus @relation(fields: [status_id], references: [id])
   processed_by     String?      @db.Uuid
@@ -1950,6 +2091,12 @@ model Return {
 }
 
 model ReturnItem {
+  physical_snapshot Json?
+  base_received_qty Decimal? @db.Decimal(20, 6)
+  base_restock_qty Decimal? @db.Decimal(20, 6)
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
   id            Int      @id @default(autoincrement())
   return_id     String   @db.Uuid
   return        Return   @relation(fields: [return_id], references: [id])
@@ -1957,11 +2104,11 @@ model ReturnItem {
   sale_item     SaleItem @relation(fields: [sale_item_id], references: [id])
   product_id    String   @db.Uuid
   product       Product  @relation(fields: [product_id], references: [id])
-  qty_returned  Decimal @db.Decimal(12, 4)
+  qty_returned  Decimal @db.Decimal(20, 6)
   refund_amount Decimal  @db.Decimal(12, 2)
   reason        String?  @db.Text
-  received_qty  Int?
-  restock_qty   Int?
+  received_qty  Decimal? @db.Decimal(20, 6)
+  restock_qty   Decimal? @db.Decimal(20, 6)
   disposition   ReturnItemDisposition?
   stock_location_id String?        @db.Uuid
   stock_location    StockLocation? @relation(fields: [stock_location_id], references: [id], onDelete: SetNull)
@@ -1975,17 +2122,21 @@ model ReturnItem {
 
 /// Productos que el cliente se lleva en un cambio (EXCHANGE). Descuentan stock al completar.
 model ReturnReplacementItem {
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
   id         Int     @id @default(autoincrement())
   return_id  String  @db.Uuid
   return     Return  @relation(fields: [return_id], references: [id], onDelete: Cascade)
   product_id String  @db.Uuid
   product    Product @relation(fields: [product_id], references: [id])
-  qty        Decimal @db.Decimal(12, 4)
+  qty        Decimal @db.Decimal(20, 6)
   item_name  String @db.VarChar(150)
   item_kind  ProductKind
   unit_label String @db.VarChar(50)
   quantity_decimals Int @default(0)
-  unit_price Decimal @db.Decimal(12, 2)
+  unit_price Decimal @db.Decimal(30, 18)
   line_total Decimal @db.Decimal(12, 2)
 
   @@index([return_id])
@@ -2021,6 +2172,7 @@ model ReturnSettlement {
 
 /// Punto de cobro físico o lógico (hoy: una caja «Principal» por defecto; preparado para multi-caja).
 model CashRegister {
+  hardware_workstations HardwareWorkstation[]
   id         String   @id @default(uuid()) @db.Uuid
   branch_id  String   @db.Uuid
   branch     Branch   @relation(fields: [branch_id], references: [id], onDelete: Restrict)
@@ -2036,7 +2188,210 @@ model CashRegister {
   assigned_users User[]                @relation("UserAssignedRegister")
 
   @@unique([branch_id, code])
+  @@unique([branch_id, id])
   @@map("cash_registers")
+}
+
+model HardwareWorkstation {
+  drawerIntents HardwareDrawerIntent[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  cash_register_id String? @db.Uuid
+  code String @db.VarChar(40)
+  name String @db.VarChar(120)
+  notes String @default("") @db.VarChar(500)
+  state String @default("DRAFT") @db.VarChar(20)
+  version Int @default(1)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  cashRegister CashRegister? @relation(fields:[branch_id,cash_register_id],references:[branch_id,id],onDelete:Restrict)
+  assignments HardwareAssignment[]
+  tests HardwareTestRun[]
+  @@unique([branch_id,code])
+  @@unique([company_id,branch_id,id])
+  @@index([company_id,branch_id])
+  @@map("hardware_workstations")
+}
+
+model HardwareDevice {
+  drawerIntents HardwareDrawerIntent[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  code String @db.VarChar(40)
+  name String @db.VarChar(120)
+  notes String @default("") @db.VarChar(500)
+  kind String @db.VarChar(30)
+  connection String @db.VarChar(30)
+  state String @default("DRAFT") @db.VarChar(20)
+  profile Json @default("{}")
+  version Int @default(1)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  assignments HardwareAssignment[]
+  tests HardwareTestRun[]
+  @@unique([branch_id,code])
+  @@unique([company_id,branch_id,id])
+  @@index([company_id,branch_id])
+  @@map("hardware_devices")
+}
+
+model HardwareAssignment {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  workstation_id String @db.Uuid
+  device_id String @db.Uuid
+  role String @db.VarChar(20)
+  workstation HardwareWorkstation @relation(fields:[company_id,branch_id,workstation_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  device HardwareDevice @relation(fields:[company_id,branch_id,device_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  @@unique([workstation_id,role])
+  @@index([company_id,branch_id,device_id])
+  @@map("hardware_assignments")
+}
+
+model HardwareTestRun {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  workstation_id String @db.Uuid
+  device_id String @db.Uuid
+  kind String @db.VarChar(30)
+  mode String @db.VarChar(20)
+  outcome String @db.VarChar(30)
+  sample_code String? @db.VarChar(128)
+  created_at DateTime @default(now())
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  actor User @relation(fields:[actor_id],references:[id],onDelete:Restrict)
+  workstation HardwareWorkstation @relation(fields:[company_id,branch_id,workstation_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  device HardwareDevice @relation(fields:[company_id,branch_id,device_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  @@unique([company_id,actor_id,request_key])
+  @@index([company_id,branch_id,created_at])
+  @@map("hardware_test_runs")
+}
+
+model HardwareAuditEvent {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  action String @db.VarChar(50)
+  entity_id String @db.Uuid
+  before Json?
+  after Json?
+  created_at DateTime @default(now())
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  actor User @relation(fields:[actor_id],references:[id],onDelete:Restrict)
+  @@index([company_id,branch_id,created_at])
+  @@map("hardware_audit_events")
+}
+
+model HardwarePrintJob {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  source_kind String @db.VarChar(30)
+  source_id String @db.Uuid
+  snapshot Json
+  route_snapshot Json
+  workstation_id String? @db.Uuid
+  parent_id String? @db.Uuid
+  reason String? @db.VarChar(500)
+  document String @db.VarChar(10)
+  pages Int[]
+  state String @default("CREATED") @db.VarChar(30)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  actor User @relation(fields:[actor_id],references:[id],onDelete:Restrict)
+  parent HardwarePrintJob? @relation("PrintCopies",fields:[company_id,branch_id,actor_id,parent_id],references:[company_id,branch_id,actor_id,id],onDelete:Restrict,onUpdate:NoAction)
+  children HardwarePrintJob[] @relation("PrintCopies")
+  events HardwarePrintEvent[]
+  @@unique([company_id,branch_id,actor_id,id])
+  @@unique([company_id,actor_id,request_key])
+  @@index([company_id,branch_id,created_at])
+  @@map("hardware_print_jobs")
+}
+
+model HardwarePrintEvent {
+  id String @id @default(uuid()) @db.Uuid
+  job_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  event String @db.VarChar(30)
+  error_code String? @db.VarChar(40)
+  created_at DateTime @default(now())
+  job HardwarePrintJob @relation(fields:[company_id,branch_id,actor_id,job_id],references:[company_id,branch_id,actor_id,id],onDelete:Restrict)
+  @@unique([job_id,request_key])
+  @@index([company_id,branch_id,created_at])
+  @@map("hardware_print_events")
+}
+
+model HardwareDrawerPolicy {
+  company_id String @id @db.Uuid
+  version Int @default(1)
+  policy Json
+  updated_at DateTime @updatedAt
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  @@map("hardware_drawer_policies")
+}
+
+model HardwareDrawerIntent {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  origin String @db.VarChar(40)
+  source_type String @db.VarChar(30)
+  source_id String @db.Uuid
+  amount Decimal @db.Decimal(12,2)
+  session_id String @db.Uuid
+  workstation_id String @db.Uuid
+  drawer_id String @db.Uuid
+  route_snapshot Json
+  policy_version Int
+  state String @default("PENDING") @db.VarChar(20)
+  created_at DateTime @default(now())
+  expires_at DateTime
+  claimed_at DateTime?
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict)
+  actor User @relation(fields:[actor_id],references:[id],onDelete:Restrict)
+  workstation HardwareWorkstation @relation(fields:[company_id,branch_id,workstation_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  drawer HardwareDevice @relation(fields:[company_id,branch_id,drawer_id],references:[company_id,branch_id,id],onDelete:Restrict)
+  session CashRegisterSession @relation(fields:[session_id],references:[id],onDelete:Restrict)
+  attempt HardwareDrawerAttempt?
+  @@unique([company_id,source_type,source_id,drawer_id])
+  @@unique([company_id,branch_id,actor_id,id])
+  @@index([company_id,branch_id,created_at])
+  @@map("hardware_drawer_intents")
+}
+
+model HardwareDrawerAttempt {
+  id String @id @default(uuid()) @db.Uuid
+  intent_id String @unique @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  token_hash String @db.VarChar(64)
+  expires_at DateTime
+  outcome String? @db.VarChar(20)
+  created_at DateTime @default(now())
+  intent HardwareDrawerIntent @relation(fields:[company_id,branch_id,actor_id,intent_id],references:[company_id,branch_id,actor_id,id],onDelete:Restrict)
+  @@unique([company_id,branch_id,actor_id,intent_id],map:"drawer_attempt_scoped_identity")
+  @@unique([company_id,actor_id,request_key])
+  @@map("hardware_drawer_attempts")
 }
 
 enum CashRegisterSessionStatus {
@@ -2047,6 +2402,7 @@ enum CashRegisterSessionStatus {
 
 /// Apertura de caja: una sesión OPEN por caja (índice único parcial en migración SQL).
 model CashRegisterSession {
+  drawerIntents HardwareDrawerIntent[]
   customer_payment_refunds CustomerPaymentRefund[]
   id               String       @id @default(uuid()) @db.Uuid
   cash_register_id String       @db.Uuid
@@ -2211,6 +2567,7 @@ model PromotionType {
 }
 
 model Promotion {
+  quantity_reference Json?
   id          String        @id @default(uuid()) @db.Uuid
   company_id  String        @db.Uuid
   company     Company       @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -2227,9 +2584,9 @@ model Promotion {
   // Valores de la promoción
   discount_value      Decimal? @db.Decimal(12, 2) // Para FIXED_AMOUNT
   discount_percentage Decimal? @db.Decimal(5, 2) // Porcentaje (0-100)
-  buy_quantity        Int? // Cantidad a comprar (2x1 = 2)
-  get_quantity        Int? // Cantidad gratis (2x1 = 1)
-  min_quantity        Int? // Cantidad mínima para aplicar
+  buy_quantity        Decimal? @db.Decimal(20, 6) // Cantidad a comprar (2x1 = 2)
+  get_quantity        Decimal? @db.Decimal(20, 6) // Cantidad gratis (2x1 = 1)
+  min_quantity        Decimal? @db.Decimal(20, 6) // Cantidad mínima para aplicar
 
   // Sucursales donde aplica
   /// true = toda la empresa. false = solo las sucursales de `branches`.
@@ -2414,6 +2771,7 @@ model InventoryCountSession {
 }
 
 model InventoryCountLine {
+  unit_snapshot Json?
   id                      String                @id @default(uuid()) @db.Uuid
   session_id              String                @db.Uuid
   session                 InventoryCountSession @relation(fields: [session_id], references: [id], onDelete: Cascade)
@@ -2422,12 +2780,12 @@ model InventoryCountLine {
   /// Se cuenta ubicación por ubicación: un producto en dos anaqueles son dos líneas.
   location_id             String                @db.Uuid
   location                StockLocation         @relation(fields: [location_id], references: [id], onDelete: Restrict)
-  stock_snapshot          Int
-  qty_counted             Int?
+  stock_snapshot          Decimal @db.Decimal(20, 6)
+  qty_counted             Decimal? @db.Decimal(20, 6)
   counted_at              DateTime?
   counted_by_id           String?               @db.Uuid
   countedBy               User?                 @relation("InventoryCountLineCountedBy", fields: [counted_by_id], references: [id])
-  qty_counted_secondary   Int?
+  qty_counted_secondary   Decimal? @db.Decimal(20, 6)
   counted_secondary_at    DateTime?
   counted_secondary_by_id String?               @db.Uuid
   countedSecondaryBy      User?                 @relation("InventoryCountLineSecondaryCountedBy", fields: [counted_secondary_by_id], references: [id])
@@ -3033,6 +3391,10 @@ sale Sale? @relation("EngagementConfirmedSale", fields: [branch_id, id, sale_id]
 }
 
 model AppointmentEngagementLine {
+  unit_metadata_version Int @default(1)
+  unit_snapshot Json?
+  base_qty Decimal? @db.Decimal(20, 6)
+  base_unit_cost Decimal? @db.Decimal(24, 12)
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
   branch_id String @db.Uuid
@@ -3048,8 +3410,8 @@ model AppointmentEngagementLine {
   item_name String @db.VarChar(150)
   unit_label String @db.VarChar(50)
   quantity_decimals Int @default(0)
-  qty Decimal @db.Decimal(12, 4)
-  unit_price Decimal @db.Decimal(12, 2)
+  qty Decimal @db.Decimal(20, 6)
+  unit_price Decimal @db.Decimal(30, 18)
   line_total Decimal @db.Decimal(12, 2)
   service_schedule_snapshot Json?
   sort_order Int @default(0)

@@ -18,3 +18,11 @@ test('propósito inválido o sin permiso no consulta empleados', async () => {
   await assert.rejects(run({ purpose: 'salary' }, ['hr.attendance.view'], {}), e => e.status === 400)
   await assert.rejects(run({ purpose: 'supervisor' }, ['hr.attendance.view'], {}), e => e.status === 403)
 })
+test('asistencia admite páginas de 100 sin ampliar los selectores de empleados', async () => {
+  for (const [purpose, permission, expected] of [['attendance', 'hr.attendance.view', 100], ['supervisor', 'hr.employees.edit', 32]]) {
+    const result = await run({ purpose, page: '2', pageSize: '100' }, [permission], { count: async () => 250, findMany: async args => {
+      assert.equal(args.take, expected); assert.equal(args.skip, expected); return []
+    } })
+    assert.equal(result.pageSize, expected)
+  }
+})

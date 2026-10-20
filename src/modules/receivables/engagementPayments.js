@@ -40,8 +40,10 @@ async function createScopedReceipt(tx,scope,engagement,input){
   if(amount.gt(balance.remaining))fail('PAYMENT_EXCEEDS_BALANCE','El pago supera el saldo pendiente de esta contratación',409)
   if(await tx.customerPaymentRefund.count({where:{engagement_id:engagement.id,status:'REQUESTED'}}))fail('REFUND_PENDING','Resuelve la devolución pendiente antes de recibir otro pago',409)
   const method=await validateScopedMethod(tx,scope,input)
-  return tx.customerPayment.create({data:{branch_id:engagement.branch_id,customer_id:engagement.customer_id,amount,paid_at:new Date(input.paidAt),payment_method_id:method.id,
+  const receipt=await tx.customerPayment.create({data:{branch_id:engagement.branch_id,customer_id:engagement.customer_id,amount,paid_at:new Date(input.paidAt),payment_method_id:method.id,
     cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||null,notes:input.notes||null,registered_by:scope.userId}})
+  if(method.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,{...scope,actorId:scope.userId},{origin:'AGENDA_RECEIPT',sourceId:receipt.id})
+  return receipt
 }
 async function validateScopedMethod(tx,scope,input,purpose='RECEIPT'){
   const method=await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose})

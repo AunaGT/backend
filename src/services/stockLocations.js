@@ -11,6 +11,8 @@
  */
 
 const { Prisma } = require('@prisma/client')
+const { Decimal, decimal, physicalQuantity, storageQuantity, lockPhysicalProducts, physicalSnapshot } = require('./units/physical')
+const { parseQuantity } = require('./units/quantity')
 const { requireBranchId } = require('./stockAvailability')
 
 /** Orden de despacho: almacén, luego ubicación, luego código (desempate estable). */
@@ -121,16 +123,16 @@ async function planDispatch(
 
   const out = []
   for (const [productId, qty] of entries) {
-    let pending = Number(qty)
+    let pending = parseQuantity(qty)
     const available = byProduct.get(String(productId)) || []
     for (const row of adjust ? [...available].reverse() : available) {
-      if (pending <= 0) break
-      const take = Math.min(pending, Number(row.stock))
-      if (take <= 0) continue
-      out.push({ product_id: String(productId), location_id: String(row.location_id), qty: -take })
-      pending -= take
+      if (pending.lte(0)) break
+      const take = Decimal.min(pending, decimal(row.stock))
+      if (take.lte(0)) continue
+      out.push({ product_id: String(productId), location_id: String(row.location_id), qty: take.neg().toFixed() })
+      pending = pending.sub(take)
     }
-    if (pending > 0) {
+    if (pending.gt(0)) {
       // Dos situaciones distintas que antes se trataban igual:
       //
       //  - La sucursal TAMPOCO tiene: es una venta autorizada por encima de la
@@ -140,8 +142,8 @@ async function planDispatch(
       //  - La sucursal sí tiene pero las ubicaciones no lo juntan: ahí los
       //    espejos están descuadrados y hay que gritar, no "arreglarlo" callado.
       const permitido = shortfall?.allowed.get(String(productId)) || 0
-      if (permitido >= pending && shortfall?.locationId) {
-        out.push({ product_id: String(productId), location_id: shortfall.locationId, qty: -pending })
+      if (decimal(permitido).gte(pending) && shortfall?.locationId) {
+        out.push({ product_id: String(productId), location_id: shortfall.locationId, qty: pending.neg().toFixed() })
         shortfall.used.add(String(productId))
         continue
       }
@@ -194,7 +196,7 @@ async function dispatchedByRef(tx, { refType, refId, reason, groupId }) {
   for (const r of rows) {
     const key = String(r.product_id)
     if (!out.has(key)) out.set(key, [])
-    out.get(key).push({ location_id: String(r.location_id), qty: Math.abs(Number(r.qty)) })
+    out.get(key).push({ location_id: String(r.location_id), qty: storageQuantity(decimal(r.qty).abs()) })
   }
   return out
 }
@@ -203,14 +205,14 @@ function aggregate(deltas) {
   const map = new Map()
   for (const d of deltas) {
     const key = `${d.product_id}|${d.location_id}`
-    map.set(key, (map.get(key) || 0) + Number(d.qty || 0))
+    map.set(key, parseQuantity(decimal(map.get(key)).add(parseQuantity(d.qty, {signed:true,allowZero:true})), {signed:true,allowZero:true}).toFixed())
   }
   return [...map.entries()]
     .map(([key, qty]) => {
       const [product_id, location_id] = key.split('|')
       return { product_id, location_id, qty }
     })
-    .filter((d) => d.qty !== 0)
+    .filter((d) => !decimal(d.qty).isZero())
 }
 
 /**
@@ -222,7 +224,13 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
   const rows = aggregate(deltas)
   if (rows.length === 0) return []
   const b = requireBranchId(ctx.branchId)
-  await require('./catalogItemRules').assertPhysicalProducts(tx, rows.map(row=>row.product_id), b)
+  const products = await lockPhysicalProducts(tx, rows.map(row=>row.product_id), b)
+  const snapshots = new Map()
+  for (const [id,product] of products) {
+    let snapshot=ctx.unitSnapshots?.get(id) ?? await physicalSnapshot(tx,product)
+    if(!snapshot&&ctx.assemblyValuation?.has(id)&&await require('../modules/inventory/units').unitsEnabled(tx,product.company_id))snapshot={version:1,factor:'1',unit_label:'unidad'}
+    snapshots.set(id,snapshot)
+  }
 
   const pairs = Prisma.join(
     rows.map((d) => Prisma.sql`(${d.product_id}::uuid, ${d.location_id}::uuid)`)
@@ -233,7 +241,6 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
     FROM (VALUES ${pairs}) AS v(product_id, location_id)
     ON CONFLICT (product_id, location_id) DO NOTHING
   `
-  // Bloqueo en orden fijo (ubicación, producto) en todas las rutas: sin deadlocks cruzados.
   await tx.$executeRaw`
     SELECT 1 FROM product_stock_locations
     WHERE (product_id, location_id) IN (${pairs})
@@ -242,7 +249,7 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
   `
 
   const values = Prisma.join(
-    rows.map((d) => Prisma.sql`(${d.product_id}::uuid, ${d.location_id}::uuid, ${d.qty}::int)`)
+    rows.map((d) => Prisma.sql`(${d.product_id}::uuid, ${d.location_id}::uuid, ${d.qty}::numeric)`)
   )
   const updated = await tx.$queryRaw`
     WITH v(product_id, location_id, qty) AS (VALUES ${values})
@@ -255,7 +262,7 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
 
   const permitidos = ctx.negativosPermitidos || new Set()
   const negative = updated.find(
-    (r) => Number(r.balance) < 0 && !permitidos.has(String(r.product_id))
+    (r) => decimal(r.balance).lt(0) && !permitidos.has(String(r.product_id))
   )
   if (negative) {
     const err = new Error(`Una ubicación quedaría en negativo para el producto ${negative.product_id}`)
@@ -264,20 +271,58 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
     throw err
   }
 
+  const consumedLots = new Map()
+  if (ctx.reason === 'KIT_ASSEMBLE' && ctx.consumeLots === true) {
+    const stockMap = new Map(), byLocation = new Map()
+    for (const row of updated) {
+      if (decimal(row.qty).gte(0)) continue
+      const id = String(row.product_id), qty = decimal(row.qty).abs().toFixed()
+      stockMap.set(id, decimal(stockMap.get(id)).add(qty).toFixed())
+      if (!byLocation.has(id)) byLocation.set(id, [])
+      byLocation.get(id).push({ location_id: String(row.location_id), qty })
+    }
+    if (stockMap.size) {
+      const lots = await require('./lots').consumeLotsFEFO(tx, stockMap, b, byLocation)
+      for (const id of stockMap.keys()) {
+        consumedLots.set(id, lots.get(id) || [])
+        const product = products.get(id)
+        if (!snapshots.get(id) && await require('../modules/inventory/units').unitsEnabled(tx, product.company_id)) {
+          snapshots.set(id, { version: 1, factor: '1', unit_label: 'unidad' })
+        }
+      }
+    }
+  }
+
   await tx.stockMovement.createMany({
-    data: updated.map((r) => ({
-      branch_id: b,
-      location_id: String(r.location_id),
-      product_id: String(r.product_id),
-      qty: Number(r.qty),
-      balance: Number(r.balance),
-      reason: ctx.reason || 'MANUAL_ADJUST',
-      ref_type: ctx.refType || null,
-      ref_id: ctx.refId || null,
-      group_id: ctx.groupId || null,
-      notes: ctx.notes || null,
-      created_by: ctx.userId || null,
-    })),
+    data: updated.map((r) => {
+      const id = String(r.product_id), base = snapshots.get(id)
+      const lots=consumedLots.get(id)??ctx.assemblyLots?.get(id)
+      let snapshot = base && lots ? {
+        ...base,
+        lots: lots
+          .filter(lot => lot.location_id === String(r.location_id))
+          .map(lot => ({ ...lot, qty: decimal(lot.qty).toFixed() })),
+      } : base
+      const valuation=ctx.assemblyValuation?.get(id)
+      if(snapshot&&valuation){
+        const qty=decimal(r.qty).abs()
+        snapshot={...snapshot,lots:snapshot.lots??[],assembly:{version:1,role:valuation.role,base_qty:qty.toFixed(),unit_cost:valuation.unitCost,value:valuation.role==='KIT'?decimal(valuation.value).mul(qty).div(valuation.qty).toFixed():qty.mul(valuation.unitCost).toFixed(),tracks_expiry:valuation.tracksExpiry}}
+      }
+      return {
+        branch_id: b,
+        location_id: String(r.location_id),
+        product_id: String(r.product_id),
+        qty: storageQuantity(r.qty),
+        balance: storageQuantity(r.balance),
+        ...(snapshot ? { unit_snapshot: snapshot } : {}),
+        reason: ctx.reason || 'MANUAL_ADJUST',
+        ref_type: ctx.refType || null,
+        ref_id: ctx.refId || null,
+        group_id: ctx.groupId || null,
+        notes: ctx.notes || null,
+        created_by: ctx.userId || null,
+      }
+    }),
   })
   return updated
 }
@@ -290,7 +335,8 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
 async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
   if (!entries.length) return []
   const b = requireBranchId(branchId)
-  await require('./catalogItemRules').assertPhysicalProducts(tx, entries.map(([id])=>id), b)
+  const products=await lockPhysicalProducts(tx, entries.map(([id])=>id), b)
+  await require('./units/physical').assertStockDeltaBounds(tx,products,b,entries,sign)
   // Lo que se vende sale de la ubicación del punto de venta, y lo devuelto
   // vuelve ahí: el mostrador no despacha desde la bodega que más tenga.
   const pos = !ctx.locationId && SALES_REASONS.has(ctx.reason) ? await salesLocationId(tx, b) : null
@@ -301,7 +347,7 @@ async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
     // de ningún otro lado; si no alcanza, applyLocationDeltas lo rechaza.
     if (ctx.locationId) {
       deltas = entries.map(([id, qty]) => ({
-        product_id: String(id), location_id: ctx.locationId, qty: -Number(qty),
+        product_id: String(id), location_id: ctx.locationId, qty: decimal(qty).neg().toFixed(),
       }))
     } else {
       // Cuánto de cada producto NO tiene ni siquiera la sucursal: eso es lo que
@@ -322,7 +368,7 @@ async function applyBranchDelta(tx, entries, branchId, sign, ctx = {}) {
     deltas = entries.map(([id, qty]) => ({
       product_id: String(id),
       location_id: locationId,
-      qty: Number(qty),
+      qty: decimal(qty).toFixed(),
     }))
     // Entradas que no traen lote propio (ajuste, saldo inicial, carga masiva).
     // Es opt-in a propósito: quien ya crea su lote —ingreso de mercancía,
@@ -355,10 +401,10 @@ async function branchShortfall(tx, branchId, entries) {
     where: { branch_id: b, product_id: { in: ids } },
     select: { product_id: true, stock: true },
   })
-  const enSucursal = new Map(rows.map((r) => [String(r.product_id), Number(r.stock)]))
+  const enSucursal = new Map(rows.map((r) => [String(r.product_id), decimal(r.stock)]))
   for (const [id, qty] of entries) {
-    const falta = Number(qty) - (enSucursal.get(String(id)) ?? 0)
-    if (falta > 0) out.set(String(id), falta)
+    const falta = decimal(qty).sub(enSucursal.get(String(id)) ?? 0)
+    if (falta.gt(0)) out.set(String(id), falta.toFixed())
   }
   return out
 }
@@ -379,9 +425,14 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
     const err = new Error('El origen y el destino son la misma ubicación'); err.status = 400; throw err
   }
 
-  const rows = (lines || [])
-    .map((l) => ({ product_id: String(l.product_id || ''), qty: Math.floor(Number(l.qty || 0)) }))
-    .filter((l) => l.product_id && l.qty > 0)
+  const products = await lockPhysicalProducts(tx, (lines || []).map(l=>String(l.product_id || '')), b)
+  const quantities = new Map()
+  for (const line of lines || []) {
+    const id = String(line.product_id || '')
+    const qty = physicalQuantity(line.qty, products.get(id))
+    quantities.set(id, parseQuantity(decimal(quantities.get(id)).add(qty)).toFixed())
+  }
+  const rows = [...quantities].map(([product_id,qty])=>({product_id,qty}))
   if (rows.length === 0) {
     const err = new Error('Indica al menos un producto con cantidad mayor a 0'); err.status = 400; throw err
   }
@@ -396,8 +447,8 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
   })
   const byProduct = new Map(have.map((h) => [String(h.product_id), h]))
   for (const line of rows) {
-    const current = Number(byProduct.get(line.product_id)?.stock || 0)
-    if (line.qty > current) {
+    const current = decimal(byProduct.get(line.product_id)?.stock)
+    if (decimal(line.qty).gt(current)) {
       const name = byProduct.get(line.product_id)?.product?.name || line.product_id
       const err = new Error(`En el origen solo hay ${current} de ${name}, y se piden ${line.qty}`)
       err.status = 400
@@ -407,7 +458,7 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
 
   const groupId = require('crypto').randomUUID()
   const deltas = rows.flatMap((l) => [
-    { product_id: l.product_id, location_id: String(fromLocationId), qty: -l.qty },
+    { product_id: l.product_id, location_id: String(fromLocationId), qty: decimal(l.qty).neg().toFixed() },
     { product_id: l.product_id, location_id: String(toLocationId), qty: l.qty },
   ])
   await applyLocationDeltas(tx, deltas, {
@@ -423,7 +474,7 @@ async function moveBetweenLocations(tx, { branchId, fromLocationId, toLocationId
   )
   const moved = await consumeLotsFEFO(tx, stockMap, b, byLocation)
   for (const [productId, snapshot] of moved) {
-    const qty = snapshot.reduce((sum, s) => sum + Number(s.qty || 0), 0)
+    const qty = snapshot.reduce((sum, s) => sum.add(decimal(s.qty)), decimal(0)).toFixed()
     await recreateLotsFromSnapshot(tx, productId, b, snapshot, qty, String(toLocationId))
   }
   return groupId
@@ -463,10 +514,10 @@ async function replenishmentSuggestions(tx, branchId) {
     SELECT f.product_id, p.name AS product_name, p.barcode,
            f.location_id, l.code AS location_code, l.name AS location_name,
            w.name AS warehouse_name,
-           f.stock::int, f.min_stock::int, f.missing::int,
+           f.stock, f.min_stock, f.missing,
            g.from_location_id, fl.code AS from_location_code, fw.name AS from_warehouse_name,
-           g.from_stock::int,
-           LEAST(f.missing, COALESCE(g.from_stock, 0))::int AS suggested_qty
+           g.from_stock,
+           LEAST(f.missing, COALESCE(g.from_stock, 0)) AS suggested_qty
     FROM faltantes f
     JOIN products p ON p.id = f.product_id AND p.kind <> 'SERVICE' AND NOT p.deleted
     JOIN stock_locations l ON l.id = f.location_id
@@ -482,13 +533,13 @@ async function replenishmentSuggestions(tx, branchId) {
 async function branchLocationStock(tx, productId, branchId) {
   const b = requireBranchId(branchId)
   const rows = await tx.$queryRaw`
-    SELECT COALESCE(SUM(psl.stock), 0)::int AS total
+    SELECT COALESCE(SUM(psl.stock), 0) AS total
     FROM product_stock_locations psl
     JOIN stock_locations l ON l.id = psl.location_id
     JOIN warehouses w ON w.id = l.warehouse_id
     WHERE w.branch_id = ${b}::uuid AND psl.product_id = ${String(productId)}::uuid
   `
-  return Number(rows[0]?.total || 0)
+  return storageQuantity(decimal(rows[0]?.total))
 }
 
 /** Borra las filas de ubicación del producto en la sucursal (solo si están en 0). */

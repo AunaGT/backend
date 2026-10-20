@@ -14,7 +14,8 @@ test('inicializa ajustes sin agotar el presupuesto en viajes individuales a la b
     upsert: async ({ create }) => write([create]),
     createMany: async ({ data }) => write(data),
   } }, 'company-a', { name: 'Empresa A', tax_id: '123', logo_url: '/logo.png' })
-  assert.equal(rows.size, 26)
+  assert.equal(rows.size, 27)
+  assert.equal(rows.get('inventory_units_enabled').value,'false')
   assert.deepEqual(JSON.parse(rows.get('inventory.expiry_alert_policy').value),{warningDays:30,highPriorityDays:7})
   assert.equal(rows.get('fel_enabled').value,'false')
   assert.deepEqual(rows.get('company_name'), { company_id: 'company-a', key: 'company_name', value: 'Empresa A', type: 'string' })
@@ -47,7 +48,9 @@ test('repetir la inicialización conserva ajustes personalizados y separa empres
   await seedCompanySettings(tx, 'company-a', { name: 'Empresa A' })
   await seedCompanySettings(tx, 'company-a', { name: 'No sobrescribir' })
   await seedCompanySettings(tx, 'company-b', { name: 'Empresa B' })
-  assert.equal(rows.size, 52)
+  assert.equal(rows.size, 54)
+  assert.equal(rows.get('company-a:inventory_units_enabled').value,'false')
+  assert.equal(rows.get('company-b:inventory_units_enabled').value,'false')
   assert.deepEqual(rows.get('company-a:inventory.expiry_alert_policy'),expiry)
   assert.deepEqual(rows.get('company-a:currency_code'), original)
   assert.equal(rows.get('company-a:company_name').value, 'Empresa A')

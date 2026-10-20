@@ -6,6 +6,9 @@ const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivabl
 const { createReplacementSale, exchangeSettlement, resolvePricedSaleItems } = require('../sales/application')
 const { getReturnPolicy } = require('../../services/returnPolicy')
 const {lineSnapshot}=require('../../services/catalogItemRules')
+const {isV2,D,unitFields}=require('../../services/units/commercial')
+const {parseQuantity}=require('../../services/units/quantity')
+const {slicePhysicalSnapshot,restorePhysicalSnapshot}=require('../../services/units/commercialPhysical')
 
 const STOCK_DISPOSITIONS = new Set(['SELLABLE', 'QUARANTINE'])
 const DISPOSITIONS = new Set([...STOCK_DISPOSITIONS, 'SCRAP'])
@@ -60,8 +63,9 @@ function buildCompletionPlan(returnRecord, payload = {}) {
     const raw = byId.get(Number(item.id))
     if (!raw) throw invalid(`Falta clasificar la línea ${item.id}`)
     if (isServiceLine(returnRecord,item)) return {return_item_id:Number(item.id),product_id:String(item.product_id),...serviceDisposition(raw)}
-    const receivedQty = Number(raw.received_qty)
-    if (!Number.isInteger(receivedQty) || receivedQty !== Number(item.qty_returned)) {
+    const advanced=isV2(item)
+    const receivedQty = advanced?parseQuantity(raw.received_qty,{decimals:item.unit_snapshot.presentation?.decimals??item.unit_snapshot.baseUnit.decimals}).toFixed():Number(raw.received_qty)
+    if (advanced?!D(receivedQty).eq(item.qty_returned):!Number.isInteger(receivedQty) || receivedQty !== Number(item.qty_returned)) {
       throw invalid('Para completar, la cantidad recibida debe coincidir con la cantidad aprobada')
     }
     const disposition = String(raw.disposition || '')
@@ -77,6 +81,8 @@ function buildCompletionPlan(returnRecord, payload = {}) {
       restock_qty: disposition === 'SCRAP' ? 0 : receivedQty,
       disposition,
       stock_location_id: disposition === 'SCRAP' ? null : stockLocationId,
+      ...(advanced?{sale_item_id:item.sale_item_id,base_received_qty:String(item.base_qty),base_restock_qty:disposition==='SCRAP'?'0':String(item.base_qty),
+        physical_snapshot:(()=>{const original=item.sale_item??returnRecord.sale.sale_items.find(line=>line.id===item.sale_item_id);return slicePhysicalSnapshot(original.physical_snapshot,original.base_qty,item.base_qty,original.base_returned||0)})()}:{}),
     }
   })
 
@@ -155,7 +161,7 @@ function assertCurrentReturnPolicy(record, policy) {
     : 'La venta o las unidades de esta solicitud ya no son elegibles para devolución.', 409)
 }
 
-async function approveReturn(tx, { id, scope, userId, resolution, lines, companyId, replacements }) {
+async function approveReturn(tx, { id, scope, userId, resolution, lines, companyId, replacements,permissions=[],isAdmin=false }) {
   await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
@@ -190,6 +196,8 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, company
       salesChannel: current.sale.sales_channel,
       pricing: normalizedPolicy.exchangePricing,
       originalSaleItems: current.sale.sale_items,
+      approvedSnapshots:Array.isArray(replacements)&&replacements.length?[]:current.replacement_items||[],
+      permissions,isAdmin,actorId:userId,
     })
   }
 
@@ -205,7 +213,7 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, company
       approved_at: approvedAt,
       type: approvedResolution === 'EXCHANGE' ? 'EXCHANGE' : 'REFUND',
       price_difference: approvedResolution === 'EXCHANGE'
-        ? round2(approvedReplacements.reduce((sum, item) => sum + item.line_total, 0) - Number(current.total_refund))
+        ? round2(approvedReplacements.reduce((sum, item) => sum.add(item.line_total), D(0)).sub(current.total_refund).toNumber())
         : 0,
       version: { increment: 1 },
     },
@@ -229,6 +237,8 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, company
         unit_price: item.unit_price,
         line_total: item.line_total,
         ...lineSnapshot(item),
+        ...unitFields(item),
+        ...(isV2(item)?{unit_label:item.unit_label,quantity_decimals:item.quantity_decimals}:{}),
       })),
     })
   }
@@ -238,11 +248,18 @@ async function approveReturn(tx, { id, scope, userId, resolution, lines, company
 async function restoreDispositionStock(tx, lines, branchId, ctx) {
   const groups = new Map()
   for (const line of lines.filter((item) => item.restock_qty > 0)) {
+    if(line.physical_snapshot){
+      const restored=await restorePhysicalSnapshot(tx,line.physical_snapshot,branchId,{...ctx,locationId:line.stock_location_id})
+      if(!groups.has('__frozen__'))groups.set('__frozen__',[])
+      groups.get('__frozen__').push(...restored)
+      continue
+    }
     if (!groups.has(line.stock_location_id)) groups.set(line.stock_location_id, [])
     groups.get(line.stock_location_id).push({ product_id: line.product_id, qty: line.restock_qty })
   }
   const updated = []
   for (const [locationId, stockLines] of groups) {
+    if(locationId==='__frozen__'){updated.push(...stockLines);continue}
     const stockMap = await expandLinesToStockMap(tx, stockLines)
     updated.push(...await restoreStockMap(tx, stockMap, branchId, { ...ctx, locationId }))
   }
@@ -280,10 +297,10 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
     if (!session) throw invalid('La sesión de caja no está abierta en la sucursal de la venta', 409)
     if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS'&&!actor.isAdmin&&session.opened_by_id!==actor.userId)throw invalid('El reintegro en efectivo requiere tu propio turno autorizado',403)
   }
-  return { paymentMethodId, cashSessionId, externalReference: externalReference?.slice(0, 255) || null }
+  return { paymentMethodId, cashSessionId, externalReference: externalReference?.slice(0, 255) || null,settlementKind:method.settlement_kind }
 }
 
-async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload,isAdmin=false }, deps = {}) {
+async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload,isAdmin=false,permissions=[] }, deps = {}) {
   const key = String(payload?.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
   const beforeLock=await tx.return.findFirst({where:{id,sale:{...scope}},select:{sale:{select:{customer_contact_id:true}}}})
@@ -344,6 +361,20 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
 
   const restoreStock = deps.restoreStock || restoreDispositionStock
   const ensureAlerts = deps.ensureAlerts
+  if(!deps.restoreStock&&current.legacy_stock_moved!==true){
+    const {recoverSalePhysicalLine}=require('../../services/units/commercialPhysical')
+    for(const line of plan.lines){
+      if(line.restock_qty==null||line.physical_snapshot)continue
+      const item=current.return_items.find(item=>Number(item.id)===line.return_item_id)
+      const source=current.sale.sale_items.find(source=>source.id===item.sale_item_id)
+      if(!source)throw invalid('Partida original no encontrada',409)
+      const frozen=await recoverSalePhysicalLine(tx,current.sale,source)
+      const previous=await tx.returnItem.findMany({where:{sale_item_id:source.id,return:{status:{name:'Completada'}}},select:{qty_returned:true}})
+      const consumed=previous.reduce((sum,item)=>sum.add(item.qty_returned),D(0))
+      line.physical_snapshot=slicePhysicalSnapshot(frozen,source.qty,item.qty_returned,consumed)
+    }
+  }
+  const persistPhysical=current.unit_metadata_version===2||await require('../inventory/units').unitsEnabled(tx,companyId)
   const stockResult = current.legacy_stock_moved === true
     ? []
     : await restoreStock(tx, plan.lines, current.sale.branch_id, {
@@ -369,8 +400,11 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
         restock_qty: line.restock_qty,
         disposition: line.disposition,
         stock_location_id: line.stock_location_id,
+        ...(persistPhysical&&line.physical_snapshot?{physical_snapshot:line.physical_snapshot,...(line.base_received_qty!=null?{base_received_qty:line.base_received_qty,base_restock_qty:line.base_restock_qty}:{})}:{}),
       },
     })
+    const returned=current.return_items.find(item=>item.id===line.return_item_id)
+    if(isV2(returned)){const source=current.sale.sale_items.find(item=>item.id===returned.sale_item_id);await tx.saleItem.update({where:{id:source.id},data:{base_returned:D(source.base_returned||0).add(returned.base_qty).toFixed()}})}
   }
 
   let replacement = null
@@ -389,6 +423,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       userId,
       pricing: policy.exchangePricing,
       cashRegisterSessionId: payload.settlement?.cash_register_session_id || null,
+      permissions,isAdmin,
     }, deps.replacementDeps)
     const difference = replacement.difference
     const channel = String(payload.settlement?.channel || 'ORIGINAL').toUpperCase()
@@ -470,6 +505,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       idempotency_key: key,
     },
   })
+  if(settlementKind==='REFUND'&&direct.settlementKind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,{companyId,branchId:current.sale.branch_id,actorId:userId,isAdmin,permissions},{origin:'CASH_RETURN',sourceId:settlement.id})
   if(linkedReceipts&&!isExchange&&receivable.releaseApplications>0)await releaseSaleOverpayment(tx,current.sale.id,receivable.releaseApplications,{returnSettlementId:settlement.id,userId,reason:current.reason||'Corrección de venta'})
   if (!isExchange && receivable.refundable > 0 && receivable.creditOffset > 0) {
     await tx.returnSettlement.create({
@@ -500,7 +536,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
     ...updated,
     _settlement: settlement,
     _effects: {
-      stock_units: plan.lines.reduce((sum, line) => sum + line.restock_qty, 0),
+      stock_units:current.unit_metadata_version===2?plan.lines.length:plan.lines.reduce((sum, line) => sum + line.restock_qty, 0),
       credit_offset: creditOffset,
       refunded,
       customer_credit: customerCredit,

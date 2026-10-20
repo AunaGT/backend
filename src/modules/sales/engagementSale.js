@@ -6,6 +6,9 @@ const {createHash}=require('node:crypto')
 const {assertLinesAvailable,consumeByDocument}=require('../../services/stockAvailability')
 const {nextDocumentReference}=require('../../services/referenceGenerator')
 const {lineSnapshot}=require('../../services/catalogItemRules')
+const {unitFields,isV2,D}=require('../../services/units/commercial')
+const sourceItem=line=>({product_id:line.product_id,qty:line.qty,unit_price:line.unit_price,line_total:line.line_total,...lineSnapshot(line),...unitFields(line),
+  ...(isV2(line)?{unit_label:line.unit_label,quantity_decimals:line.quantity_decimals}:{})})
 function fail(code,message,status=409){throw Object.assign(new Error(message),{code,status})}
 function validateSnapshot(source){
   const total=money(source.agreed_total)
@@ -23,12 +26,13 @@ async function ensureEngagementDraft(tx,scope,{source}){
     return {saleId:existing.id,state,created:false}
   }
   if(source.sale_id)fail('SOURCE_REVIEW_REQUIRED','Revisa el vínculo de la venta existente; no se creará otra venta')
-  const items=source.lines.map(l=>({product_id:l.product_id,qty:l.qty,unit_price:l.unit_price,line_total:l.line_total,...lineSnapshot(l)}))
+  const items=source.lines.map(sourceItem)
   const products=await tx.product.findMany({where:{company_id:scope.companyId,id:{in:items.map(l=>l.product_id)}},select:{id:true,kind:true,cost:true}})
   for(const item of items){
     const product=products.find(p=>p.id===item.product_id)
     if(!product||product.kind!==item.item_kind)fail('SOURCE_REVIEW_REQUIRED','Una partida ya no corresponde al alcance contratado')
-    item.unit_cost=item.item_kind==='SERVICE'?0:product.cost
+    item.unit_cost=item.item_kind==='SERVICE'?0:isV2(item)?D(product.cost).mul(item.base_qty).div(item.qty).toDecimalPlaces(12).toFixed():product.cost
+    if(isV2(item))item.base_unit_cost=item.item_kind==='SERVICE'?'0':D(product.cost).toFixed()
   }
   const branch=await tx.branch.findFirst({where:{id:scope.branchId,company_id:scope.companyId},select:{id:true,code:true,seq:true}})
   const status=await tx.saleStatus.findUnique({where:{name:'Borrador'}})
@@ -40,7 +44,8 @@ async function ensureEngagementDraft(tx,scope,{source}){
     is_final_consumer:snapshot.isFinalConsumer??true,sales_channel:snapshot.salesChannel||'POS',
     payment_method_id:null,payment_status:'PENDING',settlement_source:'ENGAGEMENT_RECEIPTS',
     amount_received:null,change:null,cash_register_session_id:null,
-    items:items.filter(l=>l.item_kind!=='SERVICE').reduce((sum,l)=>sum+Number(l.qty),0),
+    items:items.some(isV2)?items.length:items.filter(l=>l.item_kind!=='SERVICE').reduce((sum,l)=>sum+Number(l.qty),0),
+    ...(items.some(isV2)?{unit_metadata_version:2}:{}),
     subtotal:snapshot.subtotal||total.toFixed(2),discount_total:snapshot.discountTotal||'0.00',total:total.toFixed(2),adjusted_total:total.toFixed(2),
   }})
   const requestKey=`draft:${source.id}`
@@ -65,14 +70,16 @@ async function confirmEngagementDraft(tx,scope,{source,draftSaleId,idempotencyKe
     const s=draft.sale_items[i]
     if(s.product_id!==l.product_id||s.item_kind!==l.item_kind||s.item_name!==l.item_name||s.unit_label!==l.unit_label||s.quantity_decimals!==l.quantity_decimals||!s.qty.eq(l.qty)||!s.price.eq(l.unit_price)||!s.net_total?.eq(l.line_total))
       fail('SOURCE_REVIEW_REQUIRED','Las partidas del borrador cambiaron; revisa la contratación')
+    if(isV2(l)&&(!isV2(s)||!D(s.base_qty).eq(l.base_qty)||JSON.stringify(s.unit_snapshot)!==JSON.stringify(l.unit_snapshot)))fail('SOURCE_REVIEW_REQUIRED','La unidad del borrador cambió; revisa la contratación')
   }
-  const items=source.lines.map(l=>({product_id:l.product_id,qty:l.qty,unit_price:l.unit_price,line_total:l.line_total,...lineSnapshot(l)}))
+  const items=source.lines.map(sourceItem)
   await assertLinesAvailable(tx,items,{branchId:source.branch_id,companyId:scope.companyId,excludeDocumentId:source.quote_id||undefined,allowArchivedServices:true})
   const products=await tx.product.findMany({where:{company_id:scope.companyId,id:{in:items.map(l=>l.product_id)}},select:{id:true,cost:true,kind:true}})
   for(const item of items){
     const product=products.find(p=>p.id===item.product_id)
     if(!product||product.kind!==item.item_kind)fail('SOURCE_REVIEW_REQUIRED','El tipo de una partida cambió; revisa la fuente comercial')
-    item.unit_cost=item.item_kind==='SERVICE'?0:product.cost
+    item.unit_cost=item.item_kind==='SERVICE'?0:isV2(item)?D(product.cost).mul(item.base_qty).div(item.qty).toDecimalPlaces(12).toFixed():product.cost
+    if(isV2(item))item.base_unit_cost=item.item_kind==='SERVICE'?'0':D(product.cost).toFixed()
   }
   const status=await tx.saleStatus.findFirst({where:{name:'Completada'}})
   if(!status)fail('SALE_CONFIGURATION_REQUIRED','Configura el estado de venta')
@@ -81,7 +88,7 @@ async function confirmEngagementDraft(tx,scope,{source,draftSaleId,idempotencyKe
     payment_method_id:settlement.paymentMethodId,payment_status:total.eq(0)?'PAID':'PENDING',due_date:settlement.dueDate,
     idempotency_key:idempotencyKey,
   }})
-  for(const line of draft.sale_items)await tx.saleItem.update({where:{id:line.id},data:{unit_cost:items.find(l=>l.product_id===line.product_id).unit_cost}})
+  for(const [index,line]of draft.sale_items.entries())await tx.saleItem.update({where:{id:line.id},data:{unit_cost:items[index].unit_cost,...(isV2(items[index])?{base_unit_cost:items[index].base_unit_cost}:{})}})
   await moveSaleStock(tx,items,source.branch_id,{reason:'SALE',refType:'sale',refId:sale.id,userId:scope.userId,companyId:scope.companyId,allowArchivedServices:true})
   if(source.quote_id)await consumeByDocument(tx,source.quote_id)
   await tx.saleHistory.create({data:{company_id:scope.companyId,branch_id:scope.branchId,sale_id:sale.id,actor_id:scope.userId,action:'SALE_CONFIRMED',request_key:idempotencyKey,

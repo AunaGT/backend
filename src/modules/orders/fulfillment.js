@@ -1,7 +1,7 @@
 const { randomUUID } = require('crypto')
-const { resolveFulfillmentLines, isOrderFullyFulfilled, partialLineTotal } = require('../../services/commercialDocumentFulfillment')
+const { resolveFulfillmentLines, isOrderFullyFulfilled, partialLineTotal,netDocumentLines } = require('../../services/commercialDocumentFulfillment')
 const { assertLinesAvailable, consumePartialByDocument, releaseByDocument, reserveForDocument } = require('../../services/stockAvailability')
-const { expandLinesToStockMap, deductStockMap, restoreStockMap } = require('../../services/bomStock')
+const { expandLinesToStockMap, deductStockMap, restoreStockMap, stockMapFromMovements } = require('../../services/bomStock')
 const { consumeLotsFEFO, restoreLotsFEFO } = require('../../services/lots')
 const { dispatchedByRef } = require('../../services/stockLocations')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
@@ -11,6 +11,8 @@ const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivable
 const { getCompanyModuleBlock, readCompanyModules } = require('../platform/service')
 const {Prisma}=require('@prisma/client')
 const {lineSnapshot}=require('../../services/catalogItemRules')
+const {isV2,D,unitFields}=require('../../services/units/commercial')
+const {slicePhysicalSnapshot,dispatchCommercialLines,restorePhysicalSnapshot}=require('../../services/units/commercialPhysical')
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }) }
 
@@ -31,7 +33,8 @@ function selectLines(lines, raw, invoice = false) {
     seen.add(item.line_id)
   }
   return resolveFulfillmentLines(invoice
-    ? lines.map(line => ({ ...line, qty: line.qty_fulfilled, qty_fulfilled: line.qty_invoiced }))
+    ? lines.map(line => ({ ...line, qty: line.qty_fulfilled, qty_fulfilled: line.qty_invoiced,
+      ...(line.unit_metadata_version===2?{qty:line.qty,available_base:line.base_fulfilled,base_fulfilled:line.base_invoiced}: {}) }))
     : lines, raw)
 }
 
@@ -45,7 +48,7 @@ async function lockedOrder(tx, req, {separateOnly=true}={}) {
   if (!rows.length) fail('Pedido no encontrado en la sucursal activa', 404)
   const order = await tx.commercialDocument.findUnique({ where: { id: rows[0].id }, include: { lines: {orderBy:{sort_order:'asc'}} } })
   if (separateOnly && order.fulfillment_mode !== 'SEPARATE') fail('Este pedido conserva el flujo anterior', 409)
-  return order
+  return {...order,lines:netDocumentLines(order)}
 }
 
 async function deliver(tx, req) {
@@ -58,23 +61,34 @@ async function deliver(tx, req) {
   const lines = selectLines(order.lines, req.body.lines)
   const notes = req.body.notes == null ? null : String(req.body.notes).trim()
   if (notes?.length > 1000) fail('Las notas exceden 1000 caracteres')
-  const stockLines = lines.map(({ line, qty }) => ({ ...line,product_id: line.product_id, qty }))
-  await assertLinesAvailable(tx, stockLines, { excludeDocumentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true })
+  const advanced=lines.some(({line})=>isV2(line))||await require('../inventory/units').unitsEnabled(tx,req.companyId)
+  const stockLines = lines.map(({ line,...selection }) => ({ ...line,...selection,product_id: line.product_id }))
+  const lineMaps=advanced?await require('../../services/units/commercialPhysical').reservationStockMaps(tx,order.id,lines,{branchId:order.branch_id}):null
+  const physicalLines=lineMaps?lineMaps.flatMap(map=>[...map].map(([product_id,qty])=>({product_id,qty,base_qty:qty}))):stockLines
+  await assertLinesAvailable(tx, physicalLines, { excludeDocumentId: order.id, branchId: order.branch_id, companyId:req.companyId,allowArchivedServices:true })
   const physicalIds=lines.filter(({line})=>line.item_kind!=='SERVICE').map(({line})=>line.product_id)
   const productsAtDelivery = physicalIds.length ? await tx.product.findMany({ where: { id: { in: physicalIds },company_id:req.companyId }, select: { id: true, cost: true } }) : []
   const costs = new Map(productsAtDelivery.map(product => [product.id, product.cost]))
   const delivery = await tx.orderDelivery.create({ data: {
     document_id: order.id, request_key: key, created_by: req.user.sub, notes,
-    lines: { create: lines.map(({ line_id, line, qty }) => ({ document_line_id: line_id, qty, unit_cost:line.item_kind==='SERVICE' ? 0 : costs.get(line.product_id) ?? null })) },
+    lines: { create: lines.map(selection => {const {line_id,line,qty}=selection,baseCost=line.item_kind==='SERVICE'?'0':costs.get(line.product_id);return { document_line_id: line_id, qty, unit_cost:baseCost==null?null:isV2(line)?D(baseCost).mul(selection.base_qty).div(qty).toDecimalPlaces(12).toFixed():baseCost,
+      ...(isV2(line)?{...unitFields(selection),base_unit_cost:baseCost==null?null:D(baseCost).toFixed(),base_invoiced:'0'}:{})} }) },
   }, include: { lines: true } })
-  const stockMap = await expandLinesToStockMap(tx, stockLines, {companyId:req.companyId,allowArchivedServices:true})
+  const stockMap = advanced?null:await expandLinesToStockMap(tx, stockLines, {companyId:req.companyId,allowArchivedServices:true})
   const groupId = randomUUID()
-  const products = await deductStockMap(tx, stockMap, order.branch_id, {
+  const stockContext={reason:'ORDER_FULFILL',refType:'order_delivery',refId:delivery.id,userId:req.user.sub,groupId,companyId:req.companyId}
+  const dispatched=advanced?await dispatchCommercialLines(tx,stockLines,order.branch_id,stockContext,{lineMaps}):null
+  const products = dispatched?.updated??await deductStockMap(tx, stockMap, order.branch_id, {
     reason: 'ORDER_FULFILL', refType: 'order_delivery', refId: delivery.id, userId: req.user.sub, groupId,
   })
-  if (stockMap.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId }))
+  if(dispatched)for(let i=0;i<delivery.lines.length;i++){
+    const saved=delivery.lines.find(item=>item.document_line_id===lines[i].line_id)
+    const cost=require('../../services/units/commercialPhysical').snapshotCosts(dispatched.snapshots[i],stockLines[i])
+    await tx.orderDeliveryLine.update({where:{id:saved.id},data:{physical_snapshot:dispatched.snapshots[i],unit_cost:cost.commercial,...(isV2(lines[i].line)?{base_unit_cost:cost.base}:{})}})
+  }
+  if (stockMap?.size) await consumeLotsFEFO(tx, stockMap, order.branch_id, await dispatchedByRef(tx, { groupId }))
   await ensureStockAlertsBatch(tx, products, order.branch_id)
-  await consumePartialByDocument(tx, order.id, lines.map(({ line_id, qty }) => ({ line_id, qty })),{companyId:req.companyId})
+  await consumePartialByDocument(tx, order.id, lines.map(({ line_id, qty,base_qty }) => ({ line_id, qty,...(base_qty?{base_qty}:{}) })),{companyId:req.companyId})
   const updatedLines = await tx.commercialDocumentLine.findMany({ where: { document_id: order.id } })
   await tx.commercialDocument.update({ where: { id: order.id }, data: {
     status: isOrderFullyFulfilled(updatedLines) ? 'FULFILLED' : 'PARTIALLY_FULFILLED',
@@ -101,7 +115,7 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   if (!method) fail('Método de pago inválido')
   const round = value => Math.round(value * 100) / 100
   const originalLines = new Map(order.lines.map(line => [line.id, line]))
-  const netLineTotals = lines.map(({line_id,qty}) => { const original=originalLines.get(line_id); return partialLineTotal(original,qty,original.qty_invoiced).toNumber() })
+  const netLineTotals = lines.map(({line_id,qty,base_qty}) => { const original=originalLines.get(line_id); return partialLineTotal(original,isV2(original)?base_qty:qty,isV2(original)?original.base_invoiced:original.qty_invoiced).toNumber() })
   const totalDecimal=netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0))
   if (totalDecimal.gte('10000000000')) fail('Total de factura fuera de rango')
   const total=totalDecimal.toNumber()
@@ -139,34 +153,47 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   const deliveredLines = await tx.orderDeliveryLine.findMany({ where: { delivery: { document_id: order.id, reversed_at: null } }, orderBy: [{ delivery: { created_at: 'asc' } }, { id: 'asc' }] })
   const allocations = []
   const costs = new Map()
-  for (const { line_id, qty } of lines) {
-    let remaining = new Prisma.Decimal(qty)
-    let cost = new Prisma.Decimal(0)
+  const physicalSnapshots=new Map()
+  for (const { line_id, qty,base_qty,line } of lines) {
+    const advanced=isV2(line)
+    let remaining = D(advanced?base_qty:qty)
+    let cost = D(0)
     let hasCost = false
+    const entries=[]
     for (const item of deliveredLines.filter(item => item.document_line_id === line_id)) {
-      const take = Prisma.Decimal.min(remaining,new Prisma.Decimal(String(item.qty)).sub(String(item.qty_invoiced || 0)))
+      const available=D(advanced?item.base_qty:item.qty).sub(advanced?item.base_invoiced||0:item.qty_invoiced||0)
+      const take = Prisma.Decimal.min(remaining,available)
       if (take.lte(0)) continue
-      allocations.push({ id: item.id, qty: take })
-      if (item.unit_cost != null) { cost=cost.add(take.mul(String(item.unit_cost))); hasCost = true }
+      allocations.push({ id: item.id, qty: take,advanced,item })
+      const unitCost=advanced?item.base_unit_cost:item.unit_cost
+      if (unitCost != null) { cost=cost.add(take.mul(String(unitCost))); hasCost = true }
+      if((advanced||item.physical_snapshot)&&line.item_kind!=='SERVICE')entries.push(...slicePhysicalSnapshot(item.physical_snapshot,advanced?item.base_qty:item.qty,take,advanced?item.base_invoiced||0:item.qty_invoiced||0).entries)
       remaining=remaining.sub(take)
     }
     if (!remaining.eq(0)) fail('Las entregas no cubren las cantidades solicitadas', 409)
-    costs.set(line_id, hasCost ? cost.div(qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber() : null)
+    costs.set(line_id, hasCost ? advanced?{commercial:cost.div(qty).toDecimalPlaces(12,Prisma.Decimal.ROUND_HALF_UP).toFixed(),base:cost.div(base_qty).toDecimalPlaces(12,Prisma.Decimal.ROUND_HALF_UP).toFixed()}:cost.div(qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber() : null)
+    if(advanced||entries.length)physicalSnapshots.set(line_id,{version:1,entries})
   }
-  const physicalUnits=lines.filter(({line})=>line.item_kind!=='SERVICE').reduce((sum,{qty})=>sum+qty.toNumber(),0)
+  const physicalUnits=lines.some(({line})=>isV2(line))?lines.length:lines.filter(({line})=>line.item_kind!=='SERVICE').reduce((sum,{qty})=>sum+qty.toNumber(),0)
   if (physicalUnits>2147483647) fail('Cantidad física total fuera de rango')
   let sale
   if(settlement?.draftSaleId){
     await tx.$queryRaw`SELECT id FROM sales WHERE id=${settlement.draftSaleId}::uuid AND branch_id=${order.branch_id}::uuid FOR UPDATE`
     const draft=await tx.sale.findFirst({where:{id:settlement.draftSaleId,branch_id:order.branch_id,origin_engagement_id:settlement.engagementId,branch:{company_id:req.companyId}},include:{status:true,sale_items:{orderBy:{id:'asc'}}}})
     if(!draft||draft.status.name!=='Borrador'||!draft.total.eq(totalDecimal)||draft.sale_items.length!==lines.length)fail('El borrador no coincide con el pedido contratado',409)
-    for(const [i,{line,qty}]of lines.entries()){
+    for(const [i,selection]of lines.entries()){
+      const {line,qty}=selection
       const item=draft.sale_items[i]
       if(item.product_id!==line.product_id||item.item_kind!==line.item_kind||item.item_name!==line.item_name||item.unit_label!==line.unit_label||item.quantity_decimals!==line.quantity_decimals||!item.qty.eq(qty)||!item.price.eq(line.unit_price)||!item.net_total?.eq(netLineTotals[i]))fail('Las partidas del borrador cambiaron',409)
+      if(isV2(line)&&(!isV2(item)||!D(item.base_qty).eq(selection.base_qty)||JSON.stringify(item.unit_snapshot)!==JSON.stringify(selection.unit_snapshot)))fail('La unidad del borrador cambió',409)
     }
     sale=await tx.sale.update({where:{id:draft.id,version:draft.version},data:{status_id:status.id,version:{increment:1},date:settlement.issuedAt,sold_at:settlement.issuedAt,confirmed_at:settlement.issuedAt,
       payment_method_id:method.id,payment_status:total===0?'PAID':'PENDING',due_date:dueDate,idempotency_key:key}})
-    for(const [i,{line,line_id}]of lines.entries())await tx.saleItem.update({where:{id:draft.sale_items[i].id},data:{unit_cost:line.item_kind==='SERVICE'?0:costs.get(line_id)??null}})
+    for(const [i,{line,line_id}]of lines.entries()){
+      const cost=costs.get(line_id)
+      await tx.saleItem.update({where:{id:draft.sale_items[i].id},data:{unit_cost:line.item_kind==='SERVICE'?0:isV2(line)?cost?.commercial??null:cost??null,
+        ...(isV2(line)?{base_unit_cost:cost?.base??'0',physical_snapshot:physicalSnapshots.get(line_id),base_returned:'0'}:{})}})
+    }
     await tx.commercialDocumentSale.create({data:{document_id:order.id,sale_id:sale.id}})
     await tx.saleHistory.create({data:{company_id:req.companyId,branch_id:order.branch_id,sale_id:sale.id,actor_id:req.user.sub,action:'SALE_CONFIRMED',request_key:key,
       input_hash:require('node:crypto').createHash('sha256').update(`${settlement.engagementId}:${draft.version}`).digest('hex'),before:{state:'DRAFT'},after:{state:'CONFIRMED',orderId:order.id,engagementId:settlement.engagementId}}})
@@ -181,14 +208,17 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     cash_register_session_id: sessionId, idempotency_key: key,
     items: physicalUnits, subtotal: total, discount_total: 0,
     total, adjusted_total: total, total_returned: 0,
-    sale_items: { create: lines.map(({ line, line_id, qty }, index) => ({ product_id: line.product_id, qty, price: line.unit_price, unit_cost:line.item_kind==='SERVICE' ? 0 : costs.get(line_id) ?? null, net_total: netLineTotals[index],...lineSnapshot(line) })) },
+    ...(lines.some(({line})=>isV2(line))?{unit_metadata_version:2}:{}),
+    sale_items: { create: lines.map((selection, index) => {const {line,line_id,qty}=selection,advanced=isV2(line),cost=costs.get(line_id);return { product_id: line.product_id, qty, price: advanced?selection.unit_price:line.unit_price, unit_cost:line.item_kind==='SERVICE' ? 0 : advanced?cost?.commercial??null:cost??null, net_total: netLineTotals[index],...lineSnapshot(line),
+      ...(physicalSnapshots.has(line_id)?{physical_snapshot:physicalSnapshots.get(line_id)}:{}),
+      ...(advanced?{...unitFields(selection),base_unit_cost:cost?.base??'0',unit_label:selection.unit_label,quantity_decimals:selection.quantity_decimals,base_returned:'0'}:{})} }) },
     orderLink: { create: { document_id: order.id } },
   } })
-  for (const { line_id, qty } of lines) {
-    await tx.commercialDocumentLine.update({ where: { id: line_id }, data: { qty_invoiced: { increment: qty } } })
+  for (const { line_id, qty,base_qty,line } of lines) {
+    await tx.commercialDocumentLine.update({ where: { id: line_id }, data: isV2(line)?{base_invoiced:{increment:base_qty},qty_invoiced:D(line.base_invoiced||0).add(base_qty).mul(line.qty).div(line.base_qty).toDecimalPlaces(6).toFixed()}:{ qty_invoiced: { increment: qty } } })
   }
   for (const allocation of allocations) {
-    await tx.orderDeliveryLine.update({ where: { id: allocation.id }, data: { qty_invoiced: { increment: allocation.qty } } })
+    await tx.orderDeliveryLine.update({ where: { id: allocation.id }, data: allocation.advanced?{base_invoiced:{increment:allocation.qty},qty_invoiced:D(allocation.item.base_invoiced||0).add(allocation.qty).mul(allocation.item.qty).div(allocation.item.base_qty).toDecimalPlaces(6).toFixed()}:{ qty_invoiced: { increment: allocation.qty } } })
   }
   await recordInitialPayment(tx, req, sale, initialAmount, sessionId)
   // Inventory was consumed by deliveries; invoicing must never deduct it again.
@@ -200,11 +230,39 @@ async function reverseDelivery(tx, req) {
   const delivery = await tx.orderDelivery.findFirst({ where: { id: req.params.deliveryId, document_id: order.id }, include: { lines: true } })
   if (!delivery) fail('Entrega no encontrada', 404)
   if (delivery.reversed_at) return { orderId: order.id, delivery }
-  if (delivery.lines.some(line => line.qty_invoiced > 0)) fail('La entrega tiene ventas emitidas. Corrige los productos mediante Devoluciones.', 409)
+  if (delivery.lines.some(line => D(isV2(line)?line.base_invoiced||0:line.qty_invoiced||0).gt(0))) fail('La entrega tiene ventas emitidas. Corrige los productos mediante Devoluciones.', 409)
+  if(delivery.lines.some(line=>isV2(line)||line.physical_snapshot)){
+    const active=await tx.stockReservation.findMany({where:{document_id:order.id,status:'ACTIVE'}})
+    const snapshots=delivery.lines.map(item=>item.physical_snapshot).filter(Boolean)
+    await require('../../services/units/physical').lockPhysicalProducts(tx,[...new Set(snapshots.flatMap(snapshot=>snapshot.entries.map(entry=>entry.product_id)))].sort(),order.branch_id)
+    const rows=[],updated=[]
+    for(const item of delivery.lines){
+      const source=order.lines.find(line=>line.id===item.document_line_id)
+      if(source.item_kind!=='SERVICE'){
+        if(!item.physical_snapshot)fail('Falta la asignación física original de la entrega',409)
+        updated.push(...await restorePhysicalSnapshot(tx,item.physical_snapshot,order.branch_id,{reason:'SALE_RETURN',refType:'order_delivery',refId:delivery.id,userId:req.user.sub}))
+        const grouped=new Map()
+        for(const entry of item.physical_snapshot.entries)grouped.set(entry.product_id,D(grouped.get(entry.product_id)).add(entry.base_qty).toFixed())
+        for(const [product_id,qty]of grouped)rows.push({product_id,qty,document_id:order.id,document_line_id:source.id,branch_id:order.branch_id,status:'ACTIVE',reservation_kind:'ORDER',expires_at:order.valid_until||null,created_by:req.user.sub})
+      }
+      const next=D(source.base_fulfilled||0).sub(item.base_qty||0)
+      await tx.commercialDocumentLine.update({where:{id:source.id},data:isV2(source)?{base_fulfilled:next.toFixed(),qty_fulfilled:next.mul(source.qty).div(source.base_qty).toDecimalPlaces(6).toFixed()}:{qty_fulfilled:{decrement:item.qty}}})
+    }
+    await ensureStockAlertsBatch(tx,updated,order.branch_id)
+    await releaseByDocument(tx,order.id)
+    const expired=order.valid_until&&new Date(order.valid_until)<new Date()
+    if(!expired){
+      const retained=active.map(({id,released_at,consumed_at,...row})=>({...row,created_at:new Date()}))
+      if(retained.length||rows.length)await tx.stockReservation.createMany({data:[...retained,...rows]})
+    }
+    const current=await tx.commercialDocumentLine.findMany({where:{document_id:order.id}})
+    await tx.commercialDocument.update({where:{id:order.id},data:{status:expired?'EXPIRED':current.some(line=>D(isV2(line)?line.base_fulfilled:line.qty_fulfilled).gt(0))?'PARTIALLY_FULFILLED':'CONFIRMED'}})
+    await tx.orderDelivery.update({where:{id:delivery.id},data:{reversed_at:new Date()}})
+    return{orderId:order.id}
+  }
   const lines = delivery.lines.map(item => ({ ...order.lines.find(line => line.id === item.document_line_id), qty: item.qty }))
   const allServices=lines.every(line=>line.item_kind==='SERVICE')
-  const dispatched = allServices ? new Map() : await dispatchedByRef(tx, { refType: 'order_delivery', refId: delivery.id, reason: 'ORDER_FULFILL' })
-  const stockMap = new Map([...dispatched].map(([productId, locations]) => [productId, locations.reduce((sum, location) => sum + location.qty, 0)]))
+  const stockMap = allServices ? new Map() : await stockMapFromMovements(tx, { refType: 'order_delivery', refId: delivery.id, reason: 'ORDER_FULFILL' })
   if (!stockMap.size && !allServices) fail('No se encontraron los movimientos originales de esta entrega', 409)
   const products = await restoreStockMap(tx, stockMap, order.branch_id, { reason: 'SALE_RETURN', refType: 'order_delivery', refId: delivery.id, userId: req.user.sub })
   await restoreLotsFEFO(tx, stockMap, order.branch_id)

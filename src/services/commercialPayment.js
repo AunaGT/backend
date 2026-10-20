@@ -41,16 +41,18 @@ function initialPaymentAmount(body, total, isCredit) {
 }
 
 async function recordInitialPayment(tx, req, sale, amount, sessionId) {
-  if (!amount) return
+  if (!amount) return null
   if (!sessionId) fail('Abre un turno de caja antes de recibir el abono inicial')
   const method = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.initial_payment.payment_method_id,purpose:'RECEIPT'})
-  await applyPayment(tx, {
+  const result=await applyPayment(tx, {
     customerId: sale.customer_contact_id, branchId: sale.branch_id, amount,
     paidAt: sale.date, paymentMethodId: method.id, cashRegisterSessionId: sessionId,
     reference: sale.reference, notes: 'Abono inicial al registrar la venta', userId: req.user.sub,
     manualApplications: [{ sale_id: sale.id, amount }],
+    hardware:method.settlement_kind==='CASH'?{origin:'INITIAL_CREDIT_RECEIPT',scope:require('../modules/config/hardware/drawer/events').requestHardwareScope({...req,branchId:sale.branch_id})}:undefined,
   })
   sale.payment_status = 'PARTIAL'
+  return {paymentId:result.paymentId}
 }
 
 module.exports = { documentPaymentTerms, creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone }

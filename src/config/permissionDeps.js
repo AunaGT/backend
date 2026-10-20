@@ -12,6 +12,10 @@
 
 /** code → permisos que otorga implícitamente. */
 const IMPLIES = {
+  'hardware.view': ['settings.view'],
+  'hardware.manage': ['hardware.view'],
+  'hardware.test_print': ['hardware.view'],
+  'hardware.test_drawer': ['hardware.view'],
   'appointments.create': ['appointments.view'],
   'appointments.edit': ['appointments.view'],
   'appointments.cancel': ['appointments.view'],

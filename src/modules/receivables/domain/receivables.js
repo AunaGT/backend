@@ -377,6 +377,7 @@ async function applyPayment(tx, params) {
   })
 
   for (const a of applications) await syncSaleStatus(tx, a.sale_id)
+  if(kind==='PAYMENT'&&params.hardware)await require('../../config/hardware/drawer/events').enqueueDrawerIntent(tx,params.hardware.scope,{origin:params.hardware.origin,sourceId:payment.id,workstationId:params.hardware.workstationId})
   return { paymentId: payment.id, applications, unapplied }
 }
 

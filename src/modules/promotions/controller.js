@@ -14,7 +14,7 @@
  * Supports multiple codes per promotion
  */
 
-const { prisma } = require('../../models/prisma')
+const { prisma,prismaTransaction } = require('../../models/prisma')
 const {Prisma}=require('@prisma/client')
 const {parseCouponDesign,assertCouponRestrictionFields}=require('./couponDesign')
 const {claimCouponAssets}=require('./couponAssets')
@@ -22,6 +22,16 @@ const { DateTime } = require('luxon')
 const { applyPromotion, applyMultiplePromotions, PROMOTION_TYPES } = require('../../services/promotionCalculator')
 const { buildPromotionListWhere, attachPromotionUsage } = require('./listFilters')
 const { validatePromotionDates, parsePromotionDate,validatePromotionCatalog,loadPromotionCart } = require('./validation')
+const {resolvePromotionReference}=require('../../services/units/promotionReference')
+const {parseQuantity}=require('../../services/units/quantity')
+async function promotionCart(req,items){
+    const Units=require('../inventory/units')
+    if(!await Units.unitsEnabled(prisma,req.companyId))return loadPromotionCart(prisma,items,req.companyId)
+    return prismaTransaction.$transaction(async tx=>{
+        const tier=await require('../../services/priceResolution').resolvePriceTierForContext(tx,{companyId:req.companyId,customerContactId:req.body.customer_contact_id,salesChannel:req.body.sales_channel})
+        return loadPromotionCart(tx,items,req.companyId,{scope:Units.requestUnitScope(req),tier})
+    })
+}
 
 /**
  * Una promo se ve donde aplica: en toda la empresa o solo en sus sucursales.
@@ -285,6 +295,7 @@ exports.create = async (req, res, next) => {
         }
         const typeName = promotionType.name
         await validatePromotionCatalog(prisma,req.body,typeName,req.companyId)
+        const reference=await resolvePromotionReference(prisma,req.companyId,req.body,typeName)
         if (typeName === 'PERCENTAGE' || typeName === 'MIN_QTY_DISCOUNT') {
             if (discount_percentage == null || discount_percentage === '' || isNaN(Number(discount_percentage))) {
                 return res.status(400).json({ message: 'Porcentaje de descuento es requerido para este tipo' })
@@ -295,7 +306,7 @@ exports.create = async (req, res, next) => {
             }
         }
         if (typeName === 'MIN_QTY_DISCOUNT') {
-            if (min_quantity == null || min_quantity === '' || !Number(min_quantity) || Number(min_quantity) < 1) {
+            if (min_quantity == null || min_quantity === '' || !Number(min_quantity) || Number(min_quantity) < (reference?0:1)) {
                 return res.status(400).json({ message: 'Cantidad mínima es requerida para este tipo' })
             }
         }
@@ -305,7 +316,7 @@ exports.create = async (req, res, next) => {
             }
         }
         if (typeName === 'BUY_X_GET_Y') {
-            if (!buy_quantity || Number(buy_quantity) < 1) {
+            if (!buy_quantity || Number(buy_quantity) < (reference?0:1)) {
                 return res.status(400).json({ message: 'Cantidad a comprar es requerida (ej: 2 para 2x1)' })
             }
             if (get_quantity == null || get_quantity === '' || Number(get_quantity) < 0) {
@@ -386,15 +397,16 @@ exports.create = async (req, res, next) => {
             const newPromotion = await tx.promotion.create({
                 data: {
                     company_id: req.companyId,
+                    ...(reference?{quantity_reference:reference}:{}),
                     name,
                     description,
                     ...(design===undefined?{}:{coupon_design:design===null?Prisma.DbNull:design}),
                     type_id,
                     discount_value: discount_value ? Number(discount_value) : null,
                     discount_percentage: discount_percentage ? Number(discount_percentage) : null,
-                    buy_quantity: buy_quantity ? Number(buy_quantity) : null,
-                    get_quantity: get_quantity ? Number(get_quantity) : null,
-                    min_quantity: min_quantity ? Number(min_quantity) : null,
+                    buy_quantity: buy_quantity ? reference?parseQuantity(String(buy_quantity)).toFixed():Number(buy_quantity) : null,
+                    get_quantity: get_quantity ? reference?parseQuantity(String(get_quantity),{allowZero:true}).toFixed():Number(get_quantity) : null,
+                    min_quantity: min_quantity ? reference?parseQuantity(String(min_quantity)).toFixed():Number(min_quantity) : null,
                     applies_to_all: applies_to_all ?? false,
                     trigger_product_id,
                     target_product_id,
@@ -603,6 +615,8 @@ exports.update = async (req, res, next) => {
         const supportsRestrictedScope = ['PERCENTAGE', 'BUY_X_GET_Y', 'MIN_QTY_DISCOUNT'].includes(typeName)
 
         const data = {}
+        if(Object.hasOwn(raw,'quantity_reference'))data.quantity_reference=await resolvePromotionReference(prisma,req.companyId,{...existing,...raw,product_ids:productIdsBody??existing.applicable_products?.map(row=>row.product_id),category_ids:categoryIdsBody??existing.applicable_categories?.map(row=>row.category_id)},typeName)??Prisma.DbNull
+        else if(existing.quantity_reference&&['type_id','applies_to_all','trigger_product_id','target_product_id','product_ids','category_ids'].some(key=>Object.hasOwn(body,key)))data.quantity_reference=await resolvePromotionReference(prisma,req.companyId,{...existing,...raw,product_ids:productIdsBody??existing.applicable_products?.map(row=>row.product_id),category_ids:categoryIdsBody??existing.applicable_categories?.map(row=>row.category_id),quantity_reference:{trigger_unit_id:existing.quantity_reference.trigger.id,...(existing.quantity_reference.gift?{gift_unit_id:existing.quantity_reference.gift.id}:{})}},typeName)
         if (raw.name !== undefined) data.name = raw.name
         if (raw.description !== undefined) data.description = raw.description
         if (raw.type_id !== undefined) data.type_id = Number(raw.type_id)
@@ -625,6 +639,7 @@ exports.update = async (req, res, next) => {
         if (raw.min_quantity !== undefined) {
             data.min_quantity = raw.min_quantity == null || raw.min_quantity === '' ? null : Number(raw.min_quantity)
         }
+        if(raw.quantity_reference||existing.quantity_reference)for(const key of ['buy_quantity','get_quantity','min_quantity'])if(raw[key]!=null&&raw[key]!=='')data[key]=parseQuantity(String(raw[key]),{allowZero:key==='get_quantity'}).toFixed()
         if (raw.applies_to_all !== undefined) data.applies_to_all = Boolean(raw.applies_to_all)
         if (raw.trigger_product_id !== undefined) data.trigger_product_id = raw.trigger_product_id || null
         if (raw.target_product_id !== undefined) data.target_product_id = raw.target_product_id || null
@@ -826,7 +841,7 @@ exports.validateCode = async (req, res, next) => {
         }
 
         // Calculate discount
-        const result = applyPromotion(promotion, await loadPromotionCart(prisma,items,req.companyId))
+        const result = applyPromotion(promotion, await promotionCart(req,items))
 
         if (!result || !result.details) {
             return res.json({ valid: false, message: 'No se pudo calcular la promoción' })
@@ -900,7 +915,7 @@ exports.calculateDiscount = async (req, res, next) => {
             return res.status(404).json({ message: 'Promoción no encontrada' })
         }
 
-        const result = applyPromotion(promotion, await loadPromotionCart(prisma,items,req.companyId))
+        const result = applyPromotion(promotion, await promotionCart(req,items))
 
         res.json({
             promotion_id,

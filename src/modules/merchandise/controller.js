@@ -11,6 +11,8 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { payableScope, entryWhere, cancelLegacyEntry } = require('./payables')
 const { shapePaymentBalance, addIndividualPayment, changePaymentConditions } = require('./payables/compatibility')
+const {balanceOf}=require('./payables/balance')
+const {Prisma}=require('@prisma/client')
 const { DateTime } = require('luxon')
 const PDFDocument = require('pdfkit')
 const { getBrandingForPdf, PDF_COLORS, setupReportPdf, ensureReportSpace, drawReportTable, finishReportPdf } = require('../../utils/pdfBranding')
@@ -22,6 +24,13 @@ function computeMerchandiseTotal (items) {
 
 function roundMoney (n) {
   return Math.round(n * 100) / 100
+}
+const advancedItem=item=>item.unit_metadata_version===2&&item.unit_snapshot?.version===2
+const exact=value=>new Prisma.Decimal(String(value)).toFixed()
+function incomingItem(item,product=item.product){
+  const legacy={id:item.id,product,quantity:item.quantity,unit_cost:item.unit_cost}
+  if(!advancedItem(item))return {...legacy,subtotal:Number(item.quantity)*Number(item.unit_cost)}
+  return {...legacy,quantity:exact(item.quantity),unit_cost:exact(item.unit_cost),unit_metadata_version:2,unit_snapshot:item.unit_snapshot,unit_label:item.unit_snapshot.presentation?.label??item.unit_snapshot.baseUnit.label,base_qty:exact(item.base_qty),base_unit_cost:exact(item.base_unit_cost),line_total:new Prisma.Decimal(String(item.line_total)).toFixed(2),subtotal:new Prisma.Decimal(String(item.line_total)).toFixed(2)}
 }
 
 const incomingDetailInclude = {
@@ -113,11 +122,14 @@ function shapePaymentEntries (entries) {
 }
 
 function shapeIncomingDetail (record) {
-  const balance = shapePaymentBalance(record)
+  const advanced=record.items.some(advancedItem)
+  const exactBalance=advanced?balanceOf(record):null
+  const balance = exactBalance?{payment_status:exactBalance.status==='REVIEW'?record.payment_status:exactBalance.status,totalValue:exactBalance.total,amount_paid_total:exactBalance.documentedPaid,legacy_settled_amount:exactBalance.legacySettled,amount_pending:exactBalance.balance,payment_balance_review_required:exactBalance.status==='REVIEW',payment_revision:exactBalance.revision}:shapePaymentBalance(record)
   const entries = record.paymentEntries || []
   const { supplier_payment_terms: termLinks = [], ...supplier } = record.supplier || {}
   return {
     id: record.id,
+    ...(advanced?{unit_metadata_version:2,itemsCount:record.items.length}:{}),
     source: record.source,
     supplier,
     payment_terms: termLinks.map(link => link.payment_term),
@@ -147,13 +159,7 @@ function shapeIncomingDetail (record) {
     payment_entries: shapePaymentEntries(entries),
     ...balance,
     payment_audit: record.payment_audit || [],
-    items: record.items.map(item => ({
-      id: item.id,
-      product: item.product,
-      quantity: item.quantity,
-      unit_cost: item.unit_cost,
-      subtotal: Number(item.quantity) * Number(item.unit_cost)
-    }))
+    items: record.items.map(item=>incomingItem(item))
   }
 }
 
@@ -271,12 +277,14 @@ exports.list = async (req, res, next) => {
 
     // Calculate total value for each record
     const adapted = records.map(record => {
-      const totalValue = record.items.reduce((sum, item) => {
+      const advanced=record.items.some(advancedItem)
+      const totalValue = advanced?balanceOf(record).total:record.items.reduce((sum, item) => {
         return sum + (Number(item.quantity) * Number(item.unit_cost))
       }, 0)
 
       return {
         id: record.id,
+        ...(advanced?{unit_metadata_version:2}:{}),
         supplier: {
           id: record.supplier.id,
           name: record.supplier.name,
@@ -298,19 +306,13 @@ exports.list = async (req, res, next) => {
         due_date: record.due_date,
         itemsCount: record.items.length,
         totalValue,
-        items: record.items.map(item => ({
-          id: item.id,
-          product: {
+        items: record.items.map(item => incomingItem(item,{
             id: item.product.id,
             name: item.product.name,
             brand: item.product.brand,
             size: item.product.size,
             barcode: item.product.barcode
-          },
-          quantity: item.quantity,
-          unit_cost: item.unit_cost,
-          subtotal: Number(item.quantity) * Number(item.unit_cost)
-        }))
+          }))
       }
     })
 

@@ -24,7 +24,7 @@ test('paid incoming merchandise forwards its selected real medium to supplier re
 test('legacy order conversion rejects disabled medium before a sale is written',async()=>{
   let writes=0
   const method={id:7,name:'Tarjeta',is_credit:false}
-  const tx={$executeRaw:async()=>0,companyPaymentMethod:{findFirst:async()=>({enabled:false,payment_method:method})},paymentMethod:{findUnique:async()=>method},
+  const tx={$executeRaw:async()=>0,$queryRaw:async()=>[],companyPaymentMethod:{findFirst:async()=>({enabled:false,payment_method:method})},paymentMethod:{findUnique:async()=>method},
     cashRegister:{findFirst:async()=>({id:'CR'})},cashRegisterSession:{findFirst:async()=>({id:'CS',opened_by_id:'U'})},sale:{create:async()=>{writes++}},
     commercialDocument:{findFirst:async()=>({id:'O',branch_id:'B',status:'CONFIRMED',fulfillment_mode:'LEGACY',lines:[{id:'L',product_id:'P',qty:1,qty_fulfilled:0,unit_price:10}]})}}
   tx.$transaction=async run=>run(tx)

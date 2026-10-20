@@ -22,6 +22,47 @@ const PROMOTION_TYPES = {
     MIN_QTY_DISCOUNT: 'MIN_QTY_DISCOUNT'
 }
 const {Prisma}=require('@prisma/client')
+const {D,isV2}=require('./units/commercial')
+const amountOf=item=>isV2(item)&&item.line_total!=null?D(item.line_total):D(item.price).mul(item.qty)
+
+function advancedCountPromotion(promotion,cartItems,typeName){
+    const grouped=new Map(),excluded=[]
+    const reference=promotion.quantity_reference?.trigger??{code:'UNIT',family:'COUNT',factor:'1'}
+    const giftReference=promotion.quantity_reference?.gift??(typeName===PROMOTION_TYPES.BUY_X_GET_Y?reference:{code:'UNIT',family:'COUNT',factor:'1'})
+    for(const item of cartItems){
+        if((item.item_kind??item.kind)==='SERVICE')continue
+        const unit=item.promotion_base_unit??{code:item.unit_snapshot?.baseUnit?.code??'UNIT',family:item.unit_snapshot?.baseUnit?.code&&item.unit_snapshot.baseUnit.code!=='UNIT'?'UNKNOWN':'COUNT',factor:'1'}
+        const selected=[PROMOTION_TYPES.FREE_GIFT,PROMOTION_TYPES.COMBO_DISCOUNT].includes(typeName)&&item.product_id===promotion.target_product_id?giftReference:reference
+        if(unit.family!==selected.family){excluded.push(item.product_id);continue}
+        const qty=D(isV2(item)?item.base_qty:item.qty).mul(unit.factor).div(selected.factor)
+        if(selected.family==='COUNT'&&!qty.isInteger()){excluded.push(item.product_id);continue}
+        if(!grouped.has(item.product_id))grouped.set(item.product_id,{...item,qty:D(0),triggerQty:D(0),amount:D(0)})
+        const group=grouped.get(item.product_id);group.qty=group.qty.add(qty);group.amount=group.amount.add(amountOf(item))
+        if(unit.family===reference.family)group.triggerQty=group.triggerQty.add(D(isV2(item)?item.base_qty:item.qty).mul(unit.factor).div(reference.factor))
+    }
+    const groups=[...grouped.values()],affected=[]
+    let discount=D(0),freeGift
+    const eligible=groups.filter(item=>promotion.applies_to_all||itemMatchesRestrictedScope(promotion,item))
+    if(typeName===PROMOTION_TYPES.BUY_X_GET_Y){
+        for(const item of eligible){
+            const free=Prisma.Decimal.min(item.qty,item.qty.div(promotion.buy_quantity||2).floor().mul(promotion.get_quantity||1).mul(giftReference.factor).div(reference.factor))
+            const value=item.amount.mul(free).div(item.qty);discount=discount.add(value)
+            if(free.gt(0))affected.push({product_id:item.product_id,freeQty:free.toNumber(),freeQtyReferenceUnit:reference.code,itemDiscount:value.toNumber()})
+        }
+    }else if(typeName===PROMOTION_TYPES.MIN_QTY_DISCOUNT){
+        for(const item of eligible)if(item.qty.gte(promotion.min_quantity||3)){discount=discount.add(item.amount.mul(promotion.discount_percentage||0).div(100));affected.push(item.product_id)}
+    }else{
+        const trigger=grouped.get(promotion.trigger_product_id),target=grouped.get(promotion.target_product_id)
+        if(trigger&&target&&trigger.triggerQty.gte(promotion.buy_quantity||1)){
+            const unit=target.amount.div(target.qty)
+            const giftQty=Prisma.Decimal.min(target.qty,D(promotion.get_quantity||1))
+            const comboValue=unit.mul(Prisma.Decimal.min(target.qty,1))
+            discount=typeName===PROMOTION_TYPES.FREE_GIFT?unit.mul(giftQty):promotion.discount_percentage?comboValue.mul(promotion.discount_percentage).div(100):Prisma.Decimal.min(comboValue,D(promotion.discount_value))
+            if(typeName===PROMOTION_TYPES.FREE_GIFT)freeGift={product_id:target.product_id,qty:giftQty.toFixed(),reference_unit:giftReference.code}
+        }else if(trigger&&!target&&trigger.triggerQty.gte(promotion.buy_quantity||1)&&typeName===PROMOTION_TYPES.FREE_GIFT&&!excluded.includes(promotion.target_product_id))freeGift={product_id:promotion.target_product_id,mustAddToCart:true,reference_unit:giftReference.code}
+    }
+    return {discount:discount.toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber(),...(freeGift?{freeGift}:{}),details:{type:typeName,referenceUnit:reference.code,giftReferenceUnit:giftReference.code,excludedProducts:[...new Set(excluded)],itemsAffected:affected}}
+}
 
 /** Línea del carrito coincide con alcance por producto/categoría (promo no “aplica a todos”) */
 function itemMatchesRestrictedScope(promotion, item) {
@@ -52,6 +93,7 @@ function eligibleSubtotalForMinPurchase(promotion, cartItems, typeName) {
     ]
     if (!scopedTypes.includes(typeName)) return null
     if (promotion.applies_to_all) return null
+    if(cartItems.some(isV2))return cartItems.filter(item=>itemMatchesRestrictedScope(promotion,item)).reduce((sum,item)=>sum.add(amountOf(item)),D(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
     let sum = 0
     for (const item of cartItems || []) {
         if (itemMatchesRestrictedScope(promotion, item)) {
@@ -86,7 +128,7 @@ function calculatePercentageDiscount(promotion, cartItems) {
     }
 
     const eligibleItems=promotion.applies_to_all ? cartItems : cartItems.filter(item=>itemMatchesRestrictedScope(promotion,item))
-    const exactTotal=eligibleItems.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
+    const exactTotal=eligibleItems.reduce((sum,item)=>sum.add(amountOf(item)),D(0))
     const discount = exactTotal.mul(String(promotion.discount_percentage)).div(100).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
 
     return {
@@ -104,7 +146,7 @@ function calculatePercentageDiscount(promotion, cartItems) {
  * Calculate fixed amount discount
  */
 function calculateFixedDiscount(promotion, cartItems) {
-    const cartTotal = cartItems.reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.price)).mul(String(item.qty))),new Prisma.Decimal(0))
+    const cartTotal = cartItems.reduce((sum,item)=>sum.add(amountOf(item)),D(0))
     const discountValue = Number(promotion.discount_value)
 
     // Don't discount more than the cart total
@@ -313,7 +355,7 @@ function calculateMinQtyDiscount(promotion, cartItems) {
 function applyPromotion(promotion, cartItems) {
     const typeName = promotion.type?.name || ''
     if (![PROMOTION_TYPES.PERCENTAGE,PROMOTION_TYPES.FIXED_AMOUNT].includes(typeName)) cartItems=(cartItems || []).filter(item=>(item.item_kind ?? item.kind)!=='SERVICE')
-    const cartTotal = (cartItems || []).reduce(
+    const cartTotal = cartItems.some(isV2)?cartItems.reduce((sum,item)=>sum.add(amountOf(item)),D(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber():(cartItems || []).reduce(
         (sum, item) => sum + (Number(item.price) * Number(item.qty || 0)),
         0
     )
@@ -339,6 +381,7 @@ function applyPromotion(promotion, cartItems) {
         }
     }
 
+    if(![PROMOTION_TYPES.PERCENTAGE,PROMOTION_TYPES.FIXED_AMOUNT].includes(typeName)&&(cartItems.some(isV2)||promotion.quantity_reference))return advancedCountPromotion(promotion,cartItems,typeName)
     switch (typeName) {
         case PROMOTION_TYPES.PERCENTAGE:
             return calculatePercentageDiscount(promotion, cartItems)

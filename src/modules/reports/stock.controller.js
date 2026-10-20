@@ -22,6 +22,8 @@ const { getBrandingForPdf } = require('../../utils/pdfBranding')
 const { replenishmentSuggestions } = require('../../services/stockLocations')
 const { reportDateWhere, reportError } = require('./reportFilters')
 const { assertReportSize } = require('./reportModel')
+const {D,baseUnit,attachBaseUnits}=require('./quantities')
+const Units=require('../inventory/units')
 const { buildStockByLocationReport, buildKardexReport, buildInternalMovesReport, buildReplenishmentReport, buildOccupancyReport } = require('./models/stock')
 const {
   reportScope, scopeBranchIds, periodRange, number, makeMoney, prepareReportMeta,
@@ -97,7 +99,7 @@ async function stockByLocationReport(req, res, next) {
     const rows = branches ? await prisma.$queryRaw`
       SELECT w.id AS warehouse_id, w.name || ' · ' || b.name AS warehouse, l.code AS location, l.name AS location_name,
              COUNT(*) FILTER (WHERE psl.stock <> 0)::int AS skus,
-             COALESCE(SUM(psl.stock), 0)::int AS units,
+             COUNT(*) FILTER (WHERE psl.stock <> 0)::int AS units,
              COALESCE(SUM(psl.stock * p.cost), 0)::numeric AS value
       FROM product_stock_locations psl
       JOIN products p ON p.id = psl.product_id AND p.kind <> 'SERVICE' AND NOT p.deleted AND p.deleted_at IS NULL AND p.company_id = ${req.companyId}::uuid
@@ -129,20 +131,20 @@ async function stockByLocationReport(req, res, next) {
         { label: 'Almacenes', value: String(byWarehouse.size) },
         { label: 'Ubicaciones', value: String(rows.length) },
         { label: 'SKUs', value: String(skus) },
-        { label: 'Unidades', value: String(units) },
+        { label: 'Partidas', value: String(units) },
         { label: 'Valor', value: money(value) },
       ],
       sections: [
         {
           title: 'Por Almacén',
-          columns: ['Almacén', 'SKUs', 'Unidades', 'Valor'],
+          columns: ['Almacén', 'SKUs', 'Partidas', 'Valor'],
           rows: [...byWarehouse.entries()].map(([name, a]) => [name, String(a.skus), String(a.units), money(a.value)]),
           widths: [240, 80, 90, 110],
           align: ['left', 'right', 'right', 'right'],
         },
         {
           title: 'Por Ubicación',
-          columns: ['Almacén', 'Ubicación', 'SKUs', 'Unidades', 'Valor'],
+          columns: ['Almacén', 'Ubicación', 'SKUs', 'Partidas', 'Valor'],
           rows: rows.map((r) => [
             r.warehouse,
             r.location_name ? `${r.location} — ${r.location_name}` : r.location,
@@ -171,7 +173,7 @@ async function movementsInPeriod(req, { startUtc, endUtc, reason }) {
   const { product_id: pid, location_id: lid, warehouse_id: wid } = req.query || {}
   const internal = reason === 'INTERNAL_MOVE'
   const select = {
-    id: true, product_id: true, qty: true, balance: true, reason: true, ref_type: true, notes: true, created_at: true, group_id: true,
+    ...(await Units.unitsEnabled(prisma,req.companyId)?{unit_snapshot:true}:{}),id: true, product_id: true, qty: true, balance: true, reason: true, ref_type: true, notes: true, created_at: true, group_id: true,
     product: { select: { id: true, name: true } },
     location: { select: { id: true, code: true, warehouse: { select: { id: true, name: true } } } },
     createdBy: { select: { name: true } },
@@ -212,7 +214,7 @@ async function kardexReport(req, res, next) {
     if (meta) return emit(req, res, { prepared: buildKardexReport({ movements: rows }, meta) }, branding)
 
     let entradas = 0, salidas = 0
-    for (const r of rows) (r.qty > 0 ? (entradas += r.qty) : (salidas -= r.qty))
+    for (const r of rows) (D(r.qty).gt(0) ? entradas++ : salidas++)
 
     await emit(req, res, {
       title: 'Kardex por Ubicación',
@@ -220,19 +222,19 @@ async function kardexReport(req, res, next) {
       periodLabel: label,
       summary: [
         { label: 'Movimientos', value: String(rows.length) },
-        { label: 'Entradas', value: String(entradas) },
-        { label: 'Salidas', value: String(salidas) },
+        { label: 'Movimientos de entrada', value: String(entradas) },
+        { label: 'Movimientos de salida', value: String(salidas) },
       ],
       sections: [{
         title: 'Movimientos',
         columns: ['Fecha', 'Producto', 'Ubicación', 'Motivo', 'Entrada', 'Salida', 'Saldo'],
         rows: rows.map((r) => [
           day(r.created_at),
-          r.product?.name || '—',
+          `${r.product?.name || '—'} · ${baseUnit(r)}`,
           `${r.location.warehouse.name} · ${r.location.code}`,
           REASON_ES[r.reason] || r.reason,
           r.qty > 0 ? String(r.qty) : '',
-          r.qty < 0 ? String(-r.qty) : '',
+          D(r.qty).lt(0) ? D(r.qty).neg().toFixed() : '',
           String(r.balance),
         ]),
         widths: [85, 120, 110, 85, 50, 50, 50],
@@ -259,15 +261,15 @@ async function internalMovesReport(req, res, next) {
     for (const r of rows) {
       const key = `${r.group_id || r.id}|${r.product?.id || r.product_id}`
       const item = byKey.get(key) || {
-        date: r.created_at, product: r.product?.name || '—', from: '—', to: '—',
+        date: r.created_at, product: `${r.product?.name || '—'} · ${baseUnit(r)}`, from: '—', to: '—',
         qty: 0, user: r.createdBy?.name || '—', notes: r.notes || '',
       }
       const place = `${r.location.warehouse.name} · ${r.location.code}`
-      if (r.qty < 0) { item.from = place; item.qty = -r.qty } else { item.to = place }
+      if (D(r.qty).lt(0)) { item.from = place; item.qty = D(r.qty).neg().toFixed() } else { item.to = place }
       byKey.set(key, item)
     }
     const moves = [...byKey.values()].sort((a, b) => b.date - a.date)
-    const units = moves.reduce((s, m) => s + m.qty, 0)
+    const units = moves.length
 
     await emit(req, res, {
       title: 'Movimientos Internos',
@@ -275,11 +277,11 @@ async function internalMovesReport(req, res, next) {
       periodLabel: label,
       summary: [
         { label: 'Movimientos', value: String(moves.length) },
-        { label: 'Unidades movidas', value: String(units) },
+        { label: 'Partidas movidas', value: String(units) },
       ],
       sections: [{
         title: 'Detalle',
-        columns: ['Fecha', 'Producto', 'Origen', 'Destino', 'Unidades', 'Usuario'],
+        columns: ['Fecha', 'Producto', 'Origen', 'Destino', 'Partidas', 'Usuario'],
         rows: moves.map((m) => [day(m.date), m.product, m.from, m.to, String(m.qty), m.user]),
         widths: [85, 120, 105, 105, 55, 80],
         align: ['left', 'left', 'left', 'left', 'right', 'left'],
@@ -297,6 +299,7 @@ async function replenishmentReport(req, res, next) {
     // Es una sugerencia de mover mercancía DENTRO de una sucursal: en
     // consolidado se recorren todas las del alcance.
     let rows = (await Promise.all(ids.map((id) => replenishmentSuggestions(prisma, id)))).flat()
+    await attachBaseUnits(prisma,req.companyId,rows,'product_id')
     const { warehouse_id: wid, location_id: lid } = req.query || {}
     if (wid) {
       const locations = await prisma.stockLocation.findMany({ where: { warehouse_id: wid, warehouse: { branch_id: { in: ids }, branch: { company_id: req.companyId } } }, select: { id: true } })
@@ -321,7 +324,7 @@ async function replenishmentReport(req, res, next) {
         title: 'Sugerencias',
         columns: ['Producto', 'Ubicación', 'Hay', 'Mínimo', 'Falta', 'Traer de', 'Disponible', 'Mover'],
         rows: rows.map((r) => [
-          r.product_name,
+          `${r.product_name} · ${baseUnit(r)}`,
           `${r.warehouse_name} · ${r.location_code}`,
           String(r.stock), String(r.min_stock), String(r.missing),
           r.from_location_code ? `${r.from_warehouse_name} · ${r.from_location_code}` : 'Sin existencia en otra ubicación',
@@ -344,7 +347,7 @@ async function occupancyReport(req, res, next) {
     const rows = branches ? await prisma.$queryRaw`
       SELECT w.name || ' · ' || b.name AS warehouse, l.code AS location, l.name AS location_name, l.pickable,
              COUNT(p.id) FILTER (WHERE psl.stock > 0)::int AS skus,
-             COALESCE(SUM(CASE WHEN p.id IS NOT NULL THEN GREATEST(psl.stock, 0) ELSE 0 END), 0)::int AS units
+             COUNT(p.id) FILTER (WHERE psl.stock > 0)::int AS units
       FROM stock_locations l
       JOIN warehouses w ON w.id = l.warehouse_id
       JOIN branches b ON b.id = w.branch_id AND b.company_id = ${req.companyId}::uuid
@@ -369,12 +372,12 @@ async function occupancyReport(req, res, next) {
         { label: 'Ubicaciones', value: String(rows.length) },
         { label: 'Vacías', value: String(vacias.length) },
         { label: 'Con un solo SKU', value: String(unSolo.length) },
-        { label: 'Unidades', value: String(rows.reduce((s, r) => s + r.units, 0)) },
+        { label: 'Partidas', value: String(rows.reduce((s, r) => s + r.units, 0)) },
       ],
       sections: [
         {
           title: 'Por Ubicación',
-          columns: ['Almacén', 'Ubicación', 'SKUs', 'Unidades', 'Despacha'],
+          columns: ['Almacén', 'Ubicación', 'SKUs', 'Partidas', 'Despacha'],
           rows: rows.map((r) => [
             r.warehouse,
             r.location_name ? `${r.location} — ${r.location_name}` : r.location,

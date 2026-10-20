@@ -34,7 +34,7 @@ function base(scope) {
   return S`WITH scoped AS (
  SELECT m.*,b.name AS branch_name,s.name AS supplier_name FROM incoming_merchandise m JOIN branches b ON b.id=m.branch_id JOIN suppliers s ON s.id=m.supplier_id
  WHERE b.company_id=${scope.companyId}::uuid AND s.company_id=${scope.companyId}::uuid AND ${branch} AND m.source='PURCHASE'
- ), totals AS (SELECT i.incoming_merchandise_id,SUM(i.quantity*i.unit_cost) AS total_amount,COUNT(*) AS n,BOOL_OR(i.quantity<0 OR i.unit_cost<0) AS invalid FROM incoming_merchandise_items i JOIN scoped s ON s.id=i.incoming_merchandise_id GROUP BY i.incoming_merchandise_id),
+ ), totals AS (SELECT i.incoming_merchandise_id,SUM(COALESCE((to_jsonb(i)->>'line_total')::numeric,ROUND(i.quantity*i.unit_cost,2))) AS total_amount,COUNT(*) AS n,BOOL_OR(i.quantity<0 OR i.unit_cost<0) AS invalid FROM incoming_merchandise_items i JOIN scoped s ON s.id=i.incoming_merchandise_id GROUP BY i.incoming_merchandise_id),
  paid AS (SELECT a.incoming_merchandise_id,SUM(a.amount) AS documented_paid,BOOL_OR(a.amount<0) AS invalid FROM incoming_merchandise_payment_entries a JOIN scoped s ON s.id=a.incoming_merchandise_id WHERE a.cancelled_at IS NULL GROUP BY a.incoming_merchandise_id),
  amounts AS (SELECT s.*,COALESCE(t.total_amount,0) AS total_amount,COALESCE(p.documented_paid,0) AS documented_paid,
  (s.payment_balance_review_required OR COALESCE(t.invalid,false) OR COALESCE(p.invalid,false) OR COALESCE(t.n,0)=0 OR COALESCE(t.total_amount,0)<0 OR COALESCE(p.documented_paid,0)+s.legacy_settled_amount>COALESCE(t.total_amount,0) OR COALESCE(t.total_amount,0)>90071992547409.91) AS needs_review

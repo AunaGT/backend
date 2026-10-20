@@ -11,6 +11,8 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const {Prisma}=require('@prisma/client')
 const {lineSnapshot}=require('../../services/catalogItemRules')
+const {isV2,D,unitFields}=require('../../services/units/commercial')
+const Units=require('../inventory/units')
 const {
   getAvailabilityBatchWithKits,
 } = require('../../services/bomStock')
@@ -142,6 +144,7 @@ exports.eligibleSales = async (req, res, next) => {
     const page = Math.max(1, Number(req.query.page || 1))
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize || 10)))
     const resolvedSaleId = requestedSaleId ? await resolveSaleId(requestedSaleId, branchWhere(req)) : null
+    const unitMode=await Units.unitsEnabled(prisma,req.companyId)
     const where = {
       ...branchWhere(req),
       status: { name: 'Completada' },
@@ -171,9 +174,10 @@ exports.eligibleSales = async (req, res, next) => {
             price: true,
             product_id: true,
             item_kind:true,item_name:true,unit_label:true,quantity_decimals:true,net_total:true,
+            ...(unitMode?{unit_metadata_version:true,unit_snapshot:true,base_qty:true,base_returned:true}:{}),
             product: { select: { id: true, name: true, barcode: true, image_url: true } },
             return_items: {
-              select: { qty_returned: true,refund_amount:true, return: { select: { status: { select: { name: true } } } } },
+              select: { qty_returned: true,refund_amount:true,...(unitMode?{base_qty:true}:{}), return: { select: { status: { select: { name: true } } } } },
             },
           },
         },
@@ -191,12 +195,14 @@ exports.eligibleSales = async (req, res, next) => {
           unitPrice: item.price,
           qty: 1,
         }),
-        available_to_return: availableReturnQty(item.qty, item.return_items.map((row) => ({
+        ...(isV2(item)?(()=>{const rawBase=D(item.base_qty).sub(item.return_items.filter(row=>ACTIVE_RETURN_STATUSES.includes(row.return.status.name)).reduce((sum,row)=>sum.add(row.base_qty||0),D(0))),base=rawBase.gt(0)?rawBase:D(0);return{
+          available_base_to_return:base.toFixed(),available_to_return:base.mul(item.qty).div(item.base_qty).toDecimalPlaces(6,Prisma.Decimal.ROUND_HALF_UP).toFixed(),
+        }})():{available_to_return: availableReturnQty(item.qty, item.return_items.map((row) => ({
           qty_returned: row.qty_returned,
           status: row.return.status,
-        }))),
+        })))}),
         return_items: undefined,
-      })).filter((item) => item.available_to_return > 0)
+      })).filter((item) => isV2(item)?D(item.available_base_to_return).gt(0):item.available_to_return > 0)
       const eligibility = evaluateReturnEligibility({
         saleDate: sale.date,
         statusName: sale.status?.name,
@@ -345,8 +351,7 @@ exports.create = async (req, res, next) => {
             include: {
               product: true,
               return_items: {
-                select: {
-                  qty_returned: true,refund_amount:true,
+                include: {
                   return: { select: { status: { select: { name: true } } } },
                 },
               },
@@ -379,7 +384,7 @@ exports.create = async (req, res, next) => {
         saleDate: sale.date,
         now: requestInstant,
         statusName: sale.status.name,
-        availableUnits: sale.sale_items.filter(item=>availableReturnQty(item.qty,item.return_items.map(row=>({qty_returned:row.qty_returned,status:row.return.status}))).gt(0)).length,
+        availableUnits: sale.sale_items.filter(item=>availableReturnQty(isV2(item)?item.base_qty:item.qty,item.return_items.map(row=>({qty_returned:isV2(item)?row.base_qty:row.qty_returned,status:row.return.status}))).gt(0)).length,
         policy,
         override: { authorized: canOverridePolicy, reason: policy_override_reason },
       })
@@ -437,13 +442,15 @@ exports.create = async (req, res, next) => {
         }
 
         const activeReturns = saleItem.return_items.map((row) => ({
-          qty_returned: row.qty_returned,
+          qty_returned: isV2(saleItem)?row.base_qty:row.qty_returned,
           status: row.return.status,
         }))
-        const availableToReturn = availableReturnQty(saleItem.qty, activeReturns)
-        const previouslyReturned = new Prisma.Decimal(String(saleItem.qty)).sub(availableToReturn)
+        const originalQty=isV2(saleItem)?saleItem.base_qty:saleItem.qty
+        const requestedQty=isV2(saleItem)?item.base_qty:qty_returned
+        const availableToReturn = availableReturnQty(originalQty, activeReturns)
+        const previouslyReturned = new Prisma.Decimal(String(originalQty)).sub(availableToReturn)
 
-        if (new Prisma.Decimal(qty_returned).gt(availableToReturn)) {
+        if (new Prisma.Decimal(requestedQty).gt(availableToReturn)) {
           const err = new Error(
             `${saleItem.product.name}: solo se pueden devolver ${availableToReturn} unidades ` +
             `(vendidas: ${saleItem.qty}, ya devueltas: ${previouslyReturned})`
@@ -454,13 +461,14 @@ exports.create = async (req, res, next) => {
 
         const previousAmount=saleItem.return_items.filter(row=>ACTIVE_RETURN_STATUSES.includes(row.return.status.name)).reduce((sum,row)=>sum.add(String(row.refund_amount || 0)),new Prisma.Decimal(0))
         const lineNet=saleItem.net_total ?? estimateRefundAmount({saleTotal:sale.total,grossTotal,unitPrice:saleItem.price,qty:saleItem.qty})
-        const refundAmount = refundFromLine({originalQty:saleItem.qty,lineNet,qty:qty_returned,returnedQty:previouslyReturned,returnedAmount:previousAmount})
+        const refundAmount = isV2(saleItem)?Prisma.Decimal.max(0,Prisma.Decimal.min(D(lineNet).sub(previousAmount),D(lineNet).mul(previouslyReturned.add(requestedQty)).div(originalQty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).sub(previousAmount))).toNumber():refundFromLine({originalQty:saleItem.qty,lineNet,qty:qty_returned,returnedQty:previouslyReturned,returnedAmount:previousAmount})
         totalRefund=totalRefund.add(String(refundAmount))
 
         validatedItems.push({
           sale_item_id: Number(sale_item_id),
           product_id,
           qty_returned,
+          ...unitFields(item),
           refund_amount: refundAmount,
           reason: item.reason || null
         })
@@ -485,6 +493,7 @@ exports.create = async (req, res, next) => {
           pricing: policy.exchangePricing,
           originalSaleItems: sale.sale_items,
           availability: getAvailabilityBatchWithKits,
+          permissions:req.user?.permissions||[],isAdmin:Units.requestUnitScope(req).isAdmin,actorId:req.user?.sub,
         })
         for (const rep of resolved) {
           replacementTotal=replacementTotal.add(String(rep.line_total))
@@ -494,6 +503,8 @@ exports.create = async (req, res, next) => {
             unit_price: rep.unit_price,
             line_total: rep.line_total,
             ...lineSnapshot(rep),
+            ...unitFields(rep),
+            ...(isV2(rep)?{unit_label:rep.unit_label,quantity_decimals:rep.quantity_decimals}:{}),
           })
         }
       }
@@ -518,6 +529,7 @@ exports.create = async (req, res, next) => {
       const returnRecord = await tx.return.create({
         data: {
           reference: await nextDocumentReference(tx, 'D', sale.branch),
+          ...(validatedItems.some(isV2)||validatedReplacements.some(isV2)?{unit_metadata_version:2}:{}),
           sale_id,
           type: returnType,
           requested_resolution: requestedResolution,
@@ -622,6 +634,7 @@ exports.updateStatus = async (req, res, next) => {
         lines: req.body.lines,
         companyId: req.companyId,
         replacements: req.body.replacements,
+        permissions:req.user?.permissions||[],isAdmin:Units.requestUnitScope(req).isAdmin,
       }), { maxWait: 10000, timeout: 15000 })
       return res.json(result)
     }
@@ -632,6 +645,7 @@ exports.updateStatus = async (req, res, next) => {
         userId: req.user?.sub,
         companyId: req.companyId,
         isAdmin:hasPerm({...req.user,permissions:[]},'returns.manage'),
+        permissions:req.user.permissions||[],
         payload: req.body,
       })
       return res.json(result)
@@ -736,6 +750,7 @@ exports.approve = async (req, res, next) => {
       lines: req.body.lines,
       companyId: req.companyId,
       replacements: req.body.replacements,
+      permissions:req.user?.permissions||[],isAdmin:Units.requestUnitScope(req).isAdmin,
     }), { maxWait: 10000, timeout: 15000 })
     res.json(result)
   } catch (e) {
@@ -751,6 +766,7 @@ exports.complete = async (req, res, next) => {
       userId: req.user?.sub,
       companyId: req.companyId,
       isAdmin:hasPerm({...req.user,permissions:[]},'returns.manage'),
+      permissions:req.user.permissions||[],
       payload: req.body,
     })
     res.json(result)

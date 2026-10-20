@@ -18,6 +18,9 @@ const {
 } = require('./controller')
 
 const router = Router()
+router.use('/hardware/operations', require('./hardware/printing/routes'))
+router.use('/hardware/operations', require('./hardware/drawer/routes'))
+router.use('/hardware', require('./hardware/routes'))
 
 const uploadLogoImage = multer({
   storage: multer.memoryStorage(),

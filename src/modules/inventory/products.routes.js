@@ -45,6 +45,7 @@ const uploadImage = multer({
 })
 
 const router = Router()
+router.use(require('./units/routes'))
 const BarcodeLabels = require('./barcodeLabels/controller')
 router.get('/shelf-labels/layout', Auth, hasPermission('products.view'), BarcodeLabels.shelfLayout)
 router.put('/shelf-labels/layout', Auth, hasPermission('products.view'), hasPermission('settings.manage'), BarcodeLabels.shelfSaveLayout)
@@ -325,6 +326,8 @@ router.get('/:id/lots', Auth, hasPermission('products.view'), Products.getLots)
 router.get('/:id/bom', Auth, Products.getBom)
 router.put('/:id/bom', Auth, hasPermission('products.edit'), Products.updateBom)
 router.post('/:id/kit/assemble', Auth, hasPermission('products.edit'), Products.assembleKit)
+router.post('/:id/kit/disassemble', Auth, hasPermission('products.edit'), Products.disassembleKit)
+router.get('/:id/kit/assemblies', Auth, hasPermission('products.view'), Products.listKitAssemblies)
 router.get('/:id', Auth, Products.getOne)
 
 /**

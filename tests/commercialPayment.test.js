@@ -40,7 +40,8 @@ test('abono parcial se aplica a esta venta, no a una deuda anterior, y sincroniz
   }
   const req = { companyId:'company-a',user: { sub: 'cashier-a' }, body: { initial_payment: { amount: 25, payment_method_id: 2 } } }
   assert.equal(initialPaymentAmount(req.body, 100, true), 25)
-  await recordInitialPayment(tx, req, sale, 25, 'session-a')
+  const receipt=await recordInitialPayment(tx, req, sale, 25, 'session-a')
+  assert.deepEqual(receipt,{paymentId:'payment-a'})
   assert.deepEqual(paymentData.applications.create, [{ sale_id: 'new-sale', amount: 25 }])
   assert.equal(paymentData.cash_register_session_id, 'session-a')
   assert.equal(status, 'PARTIAL')

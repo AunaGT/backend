@@ -20,6 +20,10 @@ const { requestScope } = require('../appointments/access')
 const { saveServiceProfile } = require('../appointments/profiles')
 const { withAgendaTransaction } = require('../appointments/application')
 const { parseCatalogKind, assertServiceFields, assertServicesEnabled, assertPhysicalItem } = require('../../services/catalogItemRules')
+const Units = require('./units')
+const { requestUnitScope } = Units
+const { parseQuantity, lineTotal } = require('../../services/units/quantity')
+const { decimal, physicalQuantity, storageQuantity, lockPhysicalProducts, physicalSnapshot } = require('../../services/units/physical')
 const { validMoney, checkText } = require('../../utils/importValidation')
 const { ensureBranchStockRows } = require('../../services/stockAvailability')
 const {
@@ -31,28 +35,31 @@ const {
  * products.stock por el delta. Devuelve la fila de la sucursal actualizada.
  */
 async function setBranchStock(tx, productId, branchId, { stock, minStock }, ctx = {}) {
+  const products=await lockPhysicalProducts(tx,[productId],branchId)
+  const product=products.get(String(productId))
+  if(stock!==undefined)stock=physicalQuantity(stock,product,{signed:true,allowZero:true})
+  if(minStock!==undefined)minStock=physicalQuantity(minStock,product,{allowZero:true})
   await ensureBranchStockRows(tx, [productId], branchId)
   const key = { product_id_branch_id: { product_id: productId, branch_id: branchId } }
   const row = await tx.productStock.findUnique({ where: key })
   const data = {}
-  if (minStock !== undefined) data.min_stock = Number(minStock)
-  if (stock !== undefined) data.stock = Number(stock)
-  const updated = await tx.productStock.update({ where: key, data })
+  if (minStock !== undefined) data.min_stock = storageQuantity(minStock)
+  if (stock !== undefined) data.stock = storageQuantity(stock)
   if (stock !== undefined) {
-    const delta = Number(stock) - Number(row?.stock || 0)
-    if (delta !== 0) {
-      await tx.product.update({ where: { id: productId }, data: { stock: { increment: delta } } })
+    const delta = decimal(stock).sub(row?.stock ?? 0)
+    if (!delta.isZero()) {
       // La misma diferencia por ubicación: entra a la de recepción y, si baja,
       // sale primero de la menos accesible.
-      await applyBranchDelta(tx, [[String(productId), Math.abs(delta)]], branchId, Math.sign(delta), {
+      await applyBranchDelta(tx, [[String(productId), delta.abs()]], branchId, delta.gt(0) ? 1 : -1, {
         reason: 'MANUAL_ADJUST', refType: 'product', refId: String(productId), adjust: true, ...ctx,
         // Un ajuste que sube existencia no trae lote. Se excluye refType
         // 'product_lot': ahí el lote es justamente lo que se está editando.
         autoLotForTracked: ctx.refType !== 'product_lot',
       })
+      await tx.product.update({ where: { id: productId }, data: { stock: { increment: storageQuantity(delta) } } })
     }
   }
-  return updated
+  return tx.productStock.update({ where: key, data })
 }
 
 /**
@@ -200,8 +207,8 @@ async function overlayScopedStock(items, scope) {
   const agg = new Map()
   for (const r of rows) {
     const a = agg.get(r.product_id) || { stock: 0, min_stock: 0 }
-    a.stock += r.stock
-    a.min_stock += r.min_stock
+    a.stock = storageQuantity(decimal(a.stock).add(r.stock))
+    a.min_stock = storageQuantity(decimal(a.min_stock).add(r.min_stock))
     agg.set(r.product_id, a)
   }
   return items.map((p) => {
@@ -264,7 +271,7 @@ exports.list = async (req, res, next) => {
     const prevPage = safePage > 1 ? safePage - 1 : null
 
     res.json({
-      items: await overlayScopedStock(products, scope),
+      items: await Units.extendProductDTO(prisma,{companyId:req.companyId},await overlayScopedStock(products, scope)),
       ...(summary ? { summary } : {}),
       page: safePage,
       pageSize,
@@ -276,11 +283,12 @@ exports.list = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
-function validateServiceCommercialFields(payload) {
+function validateServiceCommercialFields(payload,advanced=false) {
   const errors = []
   checkText(payload, {name:150,barcode:50,description:4000,service_unit_label:50}, errors)
   for (const key of ['price','price_wholesale','price_promotion']) {
     if (payload[key] === undefined || (key !== 'price' && (payload[key] === null || payload[key] === ''))) continue
+    if(advanced){const value=require('../../services/units/quantity').parseQuantity(payload[key],{decimals:6,allowZero:key!=='price',max:'9999999999.99'});if(key==='price'&&value.lte(0))errors.push('Precio inválido');continue}
     if (payload[key] === null || payload[key] === '' || !validMoney(Number(payload[key])) || (key === 'price' && Number(payload[key]) <= 0)) errors.push('Precio inválido o fuera de rango')
   }
   if (errors.length) throw Object.assign(new Error(errors.join('; ')), {status:400})
@@ -289,18 +297,20 @@ function validateServiceCommercialFields(payload) {
 exports.create = async (req, res, next) => {
   try {
     const payload = req.body || {}
+    Units.assertPublicProductInput(payload,{create:true})
     const kind = parseCatalogKind(payload.kind)
     if (payload.schedule_profile !== undefined && kind !== 'SERVICE') throw Object.assign(new Error('Solo los servicios admiten configuración de agenda'), { status: 400 })
     if (kind === 'SERVICE') {
       await assertServicesEnabled(prisma,req.companyId)
-      assertServiceFields(payload)
-      validateServiceCommercialFields(payload)
+      const serviceInput=payload.units_configuration?{...payload,quantity_decimals:payload.units_configuration.quantity_decimals??0}:payload
+      assertServiceFields(serviceInput)
+      validateServiceCommercialFields(payload,!!(payload.base_unit_id||payload.units_configuration)&&await Units.unitsEnabled(prisma,req.companyId))
       const category = await prisma.productCategory.findFirst({where:{id:Number(payload.category_id),company_id:req.companyId}})
       if (!category || !String(payload.name || '').trim() || !Number.isFinite(Number(payload.price)) || Number(payload.price) <= 0) throw Object.assign(new Error('Nombre, categoría y precio válidos son requeridos'),{status:400})
       const status = await prisma.stockStatus.findFirst({where:{name:{in:['active','available','Disponible','Activo']}},orderBy:{id:'asc'}})
       if (!status) throw Object.assign(new Error('Estado de catálogo no configurado'),{status:409})
       const data = {company_id:req.companyId,name:String(payload.name).trim(),category_id:category.id,kind,
-        service_unit_label:payload.service_unit_label.trim(),quantity_decimals:payload.quantity_decimals,
+        service_unit_label:payload.service_unit_label.trim(),quantity_decimals:serviceInput.quantity_decimals,
         price:payload.price,cost:0,stock:0,min_stock:0,supplier_id:null,status_id:status.id,
         barcode:payload.barcode?.trim() || null,description:payload.description || null,image_url:payload.image_url || null,
         available_for_sale:payload.available_for_sale !== false && payload.available_for_sale !== 'false'}
@@ -311,15 +321,16 @@ exports.create = async (req, res, next) => {
       if (payload.promotion_valid_until) {const date=new Date(payload.promotion_valid_until);if(Number.isNaN(date.getTime()))throw Object.assign(new Error('Fecha inválida'),{status:400});data.promotion_valid_until=date}
       const scope = payload.schedule_profile === undefined ? null : requestScope(req)
       const save = async tx => {
-        const product = await tx.product.create({data})
+        const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),null,payload,data,{create:true})
+        const product = await finish(await tx.product.create({data}))
         if (scope) await saveServiceProfile(tx, scope, product.id, payload.schedule_profile)
         return product
       }
       const product = scope ? await withAgendaTransaction(prismaTransaction, scope.companyId, save) : await prismaTransaction.$transaction(save)
       return res.status(201).json({product,purchaseLog:null})
     }
-    const stock = Number(payload.stock || 0)
-    const cost = payload.cost != null ? Number(payload.cost) : 0
+    let stock = payload.stock ?? 0
+    const cost = parseQuantity(typeof payload.cost==='number'?String(payload.cost):payload.cost??0,{decimals:6,allowZero:true,max:'9999999999.99'}).toFixed()
     const branchId = requireBranch(req)
 
     // Preparar payload seguro: normalizar campos y validar
@@ -379,6 +390,8 @@ exports.create = async (req, res, next) => {
     // create product and, if initial stock > 0, create a purchase log in the same transaction
     // Use prismaTransaction (DIRECT_URL) for transactions as pooled connections don't support them
     const result = await prismaTransaction.$transaction(async (tx) => {
+      const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),null,payload,safePayload,{create:true})
+      stock=finish.initialStock??stock
       let product
       try {
         product = await tx.product.create({ data: safePayload })
@@ -399,6 +412,7 @@ exports.create = async (req, res, next) => {
         }
       }
 
+      product=await finish(product)
       if (kind === 'KIT') {
         if (!bomComponents?.length) {
           const err = new Error('Un kit debe incluir al menos un componente (bom_components)')
@@ -411,13 +425,14 @@ exports.create = async (req, res, next) => {
       // El stock inicial vive en la sucursal donde se creó el producto
       const branchStock = await setBranchStock(tx, product.id, branchId, {
         stock: kind === 'KIT' ? 0 : stock,
-        minStock: Number(product.min_stock || 0),
+        minStock: product.min_stock ?? 0,
       }, { reason: 'INITIAL', userId: req.user?.sub || null })
       product.stock = branchStock.stock
 
       let purchaseLog = null
 
       if (stock > 0 && kind !== 'KIT') {
+        const snapshot=await physicalSnapshot(tx,product)
         // supplier_id is required on Product model, but validate to ensure purchase log can be created
         const supplierId = product.supplier_id || payload.supplier_id
         if (!supplierId) {
@@ -437,8 +452,9 @@ exports.create = async (req, res, next) => {
           data: {
             product_id: product.id,
             supplier_id: supplierId,
-            qty: stock,
+            qty: storageQuantity(stock),
             cost: cost,
+            ...(snapshot?{unit_metadata_version:2,unit_snapshot:snapshot,base_qty:decimal(stock).toFixed(),base_unit_cost:decimal(cost).toFixed(12),line_total:lineTotal(stock,cost)}:{}),
             date: now,
             source: 'INITIAL',
           },
@@ -460,7 +476,7 @@ exports.create = async (req, res, next) => {
     // Si el producto inicia ya bajo mínimo (o en 0) generar / actualizar alerta
     try {
       const { product } = result
-      if (product && product.min_stock != null && Number(product.stock) < Number(product.min_stock)) {
+      if (product && product.min_stock != null && decimal(product.stock).lt(decimal(product.min_stock))) {
         await ensureStockAlert(prisma, product.id, product.stock, product.min_stock, branchId)
       }
     } catch (e) {
@@ -472,6 +488,13 @@ exports.create = async (req, res, next) => {
   } catch (e) { next(e) }
 }
 
+async function bomUnitLabels(companyId,components){
+  if(!components?.length||!await Units.unitsEnabled(prisma,companyId))return components
+  const products=await prisma.product.findMany({where:{company_id:companyId,id:{in:[...new Set(components.map(line=>line.component_product_id))]}},select:{id:true,base_unit_id:true,quantity_decimals:true,base_unit:{select:{code:true,label:true}}}})
+  const byId=new Map(products.map(product=>[product.id,product]))
+  return components.map(line=>{const product=byId.get(line.component_product_id);if(!product||product.base_unit_id&&!product.base_unit)throw Object.assign(new Error('Revisa la unidad base del componente'),{status:409,code:'UNIT_METADATA_REVIEW_REQUIRED'});return {...line,component_product:{...line.component_product,...product}}})
+}
+
 exports.getOne = async (req, res, next) => {
   try {
     const item = await prisma.product.findFirst({
@@ -479,11 +502,14 @@ exports.getOne = async (req, res, next) => {
       include: BOM_INCLUDE,
     })
     if (!item || item.deleted) return res.status(404).json({ message: 'No encontrado' })
+    const [withUnits]=await Units.extendProductDTO(prisma,{companyId:req.companyId},[item])
+    if(withUnits.kit_components?.length)withUnits.kit_components=await bomUnitLabels(req.companyId,withUnits.kit_components)
+    if(withUnits.base_unit&&await Units.unitsEnabled(prisma,req.companyId))withUnits.base_unit_locked=await Units.productBaseLocked(prisma,{companyId:req.companyId},withUnits)
     if (req.branchId) {
-      const [withBranch] = await overlayBranchStock([item], req.branchId)
+      const [withBranch] = await overlayBranchStock([withUnits], req.branchId)
       return res.json(withBranch)
     }
-    res.json(item)
+    res.json(withUnits)
   } catch (e) { next(e) }
 }
 
@@ -507,7 +533,7 @@ exports.getBom = async (req, res, next) => {
         },
       },
     })
-    res.json({ kind: product.kind, components })
+    res.json({ kind: product.kind, components:await bomUnitLabels(req.companyId,components) })
   } catch (e) {
     next(e)
   }
@@ -518,9 +544,10 @@ exports.updateBom = async (req, res, next) => {
     const id = req.params.id
     const { components } = req.body || {}
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const measured=await Units.unitsEnabled(tx,req.companyId)
       const product = await tx.product.findFirst({
         where: { id, deleted: false, company_id: req.companyId },
-        select: { id: true, kind: true },
+        select: { id: true, kind: true,...(measured?{base_unit_id:true}:{}) },
       })
       if (!product) {
         const err = new Error('Producto no encontrado')
@@ -529,6 +556,7 @@ exports.updateBom = async (req, res, next) => {
       }
       assertPhysicalItem(product)
       if (product.kind !== 'KIT') {
+        if(product.base_unit_id)throw Object.assign(new Error('El tipo de un producto con unidad base no se puede cambiar'),{status:409})
         await tx.product.update({ where: { id }, data: { kind: 'KIT', stock: 0 } })
       }
       return replaceProductBom(tx, id, components)
@@ -551,12 +579,27 @@ exports.assembleKit = async (req, res, next) => {
     const { qty } = req.body || {}
     const branchId = requireBranch(req)
     const result = await prismaTransaction.$transaction(async (tx) => {
-      const out = await assembleKit(tx, id, qty, branchId)
+      await require('../../services/kitAssemblies').kitInScope(tx,id,branchId,req.companyId)
+      const out = await assembleKit(tx, id, qty, branchId,{actorId:req.user?.sub||null})
       await ensureStockAlert(tx, out.product.id, out.product.stock, out.product.min_stock, branchId)
       return out
     })
     res.json(result)
   } catch (e) { next(e) }
+}
+
+exports.disassembleKit = async (req,res,next) => {
+  try {
+    const branchId=requireBranch(req)
+    const result=await prismaTransaction.$transaction(tx=>require('../../services/kitAssemblies').disassembleKit(tx,{productId:req.params.id,branchId,companyId:req.companyId,actorId:req.user?.sub||null,input:req.body}),{maxWait:10000,timeout:30000})
+    res.json(result)
+  } catch(error){next(error)}
+}
+
+exports.listKitAssemblies = async (req,res,next) => {
+  try {
+    res.json(await require('../../services/kitAssemblies').listKitAssemblies(prisma,{productId:req.params.id,branchId:requireBranch(req),companyId:req.companyId,query:req.query}))
+  } catch(error){next(error)}
 }
 
 /**
@@ -600,6 +643,7 @@ exports.update = async (req, res, next) => {
   try {
     const id = req.params.id
     const payload = req.body || {}
+    Units.assertPublicProductInput(payload)
 
     // Get current product to detect stock changes
     const current = await prisma.product.findFirst({ where: { id, company_id: req.companyId } })
@@ -611,7 +655,7 @@ exports.update = async (req, res, next) => {
     if (current.kind === 'SERVICE') {
       await assertServicesEnabled(prisma,req.companyId)
       assertServiceFields({...payload,service_unit_label:payload.service_unit_label ?? current.service_unit_label,quantity_decimals:payload.quantity_decimals ?? current.quantity_decimals})
-      validateServiceCommercialFields(payload)
+      validateServiceCommercialFields(payload,!!(current.base_unit_id||payload.base_unit_id)&&await Units.unitsEnabled(prisma,req.companyId))
       if (payload.category_id !== undefined && !await prisma.productCategory.findFirst({where:{id:Number(payload.category_id),company_id:req.companyId}})) throw Object.assign(new Error('Categoría inválida'),{status:400})
       const data={}
       for(const key of ['name','description','image_url','barcode','category_id','available_for_sale','price','price_wholesale','price_promotion','promotion_valid_until','service_unit_label','quantity_decimals'])if(payload[key]!==undefined)data[key]=payload[key]
@@ -626,13 +670,14 @@ exports.update = async (req, res, next) => {
       if (payload.schedule_profile !== undefined) {
         const scope = requestScope(req)
         const product = await withAgendaTransaction(prismaTransaction, scope.companyId, async tx => {
-          const product = await tx.product.update({where:{id},data})
+          const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),current,payload,data)
+          const product = await finish(await tx.product.update({where:{id},data}))
           await saveServiceProfile(tx, scope, id, payload.schedule_profile)
           return product
         })
         return res.json(product)
       }
-      return res.json(await prisma.product.update({where:{id},data}))
+      return res.json(await prismaTransaction.$transaction(async tx=>{const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),current,payload,data);return finish(await tx.product.update({where:{id},data}))}))
     }
     const branchId = requireBranch(req)
 
@@ -766,8 +811,8 @@ exports.update = async (req, res, next) => {
 
     if (safePayload.supplier_id !== undefined && !await prisma.supplier.findFirst({where:{id:safePayload.supplier_id,company_id:req.companyId,deleted:false}})) return res.status(400).json({message:'Proveedor no encontrado en esta empresa'})
     // stock y min_stock del formulario aplican a LA SUCURSAL activa, no al espejo global
-    const branchStockValue = safePayload.stock !== undefined ? Number(safePayload.stock) : undefined
-    const branchMinValue = safePayload.min_stock !== undefined ? Number(safePayload.min_stock) : undefined
+    const branchStockValue = safePayload.stock
+    const branchMinValue = safePayload.min_stock
     delete safePayload.stock
     // min_stock del producto se mantiene como default para sucursales nuevas
     if (branchMinValue !== undefined) safePayload.min_stock = branchMinValue
@@ -776,7 +821,8 @@ exports.update = async (req, res, next) => {
     let branchRow = null
     try {
       const out = await prismaTransaction.$transaction(async (tx) => {
-        const prod = await tx.product.update({ where: { id }, data: safePayload })
+        const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),current,payload,safePayload)
+        const prod = await finish(await tx.product.update({ where: { id }, data: safePayload }))
         const row = (branchStockValue !== undefined || branchMinValue !== undefined)
           ? await setBranchStock(tx, id, branchId, { stock: branchStockValue, minStock: branchMinValue }, { userId: req.user?.sub || null })
           : null
@@ -787,7 +833,7 @@ exports.update = async (req, res, next) => {
     } catch (prismaError) {
       // Si el error es porque image_url no existe en la base de datos (migración no ejecutada)
       // Remover image_url y reintentar
-      if (prismaError.message && (
+      if (!current.base_unit_id && payload.base_unit_id===undefined && !Object.hasOwn(payload,'barcode') && prismaError.message && (
         prismaError.message.includes('image_url') ||
         prismaError.message.includes('Unknown argument') ||
         prismaError.message.includes('Unknown field')
@@ -803,7 +849,7 @@ exports.update = async (req, res, next) => {
     // If stock or min_stock changed, trigger alert logic (valores de la sucursal)
     if (branchRow) {
       try {
-        await ensureStockAlert(prisma, id, Number(branchRow.stock), Number(branchRow.min_stock), branchId)
+        await ensureStockAlert(prisma, id, branchRow.stock, branchRow.min_stock, branchId)
       } catch (e) {
         console.error('post-update ensureStockAlert error', e.message)
       }
@@ -885,9 +931,12 @@ exports.addToBranch = async (req, res, next) => {
     const existing = await prisma.productStock.findUnique({ where: key })
     if (existing) return res.json({ ok: true, already: true, branch_stock: existing })
 
-    const minStock = Number.isFinite(Number(req.body?.min_stock)) ? Number(req.body.min_stock) : 0
-    const created = await prisma.productStock.create({
-      data: { product_id: owned.id, branch_id: branchId, stock: 0, min_stock: minStock },
+    const created = await prismaTransaction.$transaction(async tx=>{
+      const products=await lockPhysicalProducts(tx,[owned.id],branchId)
+      const minStock=storageQuantity(physicalQuantity(req.body?.min_stock??0,products.get(String(owned.id)),{allowZero:true}))
+      return tx.productStock.create({
+        data: { product_id: owned.id, branch_id: branchId, stock: 0, min_stock: minStock },
+      })
     })
     res.status(201).json({ ok: true, branch_stock: created })
   } catch (e) { next(e) }
@@ -914,7 +963,7 @@ exports.removeFromBranch = async (req, res, next) => {
     // Borrar con existencias perdería el inventario: primero trasladarlo o ajustarlo.
     // Se exige 0 en la sucursal Y en cada una de sus ubicaciones.
     const inLocations = await branchLocationStock(prisma, owned.id, branchId)
-    if (Number(row.stock) !== 0 || inLocations !== 0) {
+    if (!decimal(row.stock).isZero() || !decimal(inLocations).isZero()) {
       return res.status(400).json({ message: 'Deja el stock en 0 en esta sucursal antes de quitarlo (traslada o ajusta)' })
     }
 
@@ -929,7 +978,8 @@ exports.commercialHistory = async (req,res,next) => {
     const product = await prisma.product.findFirst({where:{id:req.params.id,company_id:req.companyId},select:{id:true}})
     if (!product) return res.status(404).json({message:'Artículo no encontrado'})
     const where = {product_id:product.id,sale:require('../sales/commercialState').confirmedSaleWhere({branch:{company_id:req.companyId},...branchWhere(req)})}
-    const pageSize = 10
+    const requestedSize = Number(req.query.pageSize)
+    const pageSize = Number.isSafeInteger(requestedSize) && requestedSize > 0 ? Math.min(100, requestedSize) : 10
     const totalItems = await prisma.saleItem.count({where})
     const totalPages = Math.max(1,Math.ceil(totalItems/pageSize))
     const page = Math.min(totalPages,Math.max(1,Number.parseInt(req.query.page,10)||1))
@@ -962,6 +1012,8 @@ exports.reportPdf = async (req, res, next) => {
       orderBy: { name: 'asc' },
     })
     const products = await overlayScopedStock(productRows, scope)
+    const {attachBaseUnits,baseUnit,D}=require('../reports/quantities')
+    await attachBaseUnits(prisma,req.companyId,products)
 
     // Optional columns from query (e.g. ?fields=name,category,price,stock for cotización)
     const fieldsParam = req.query.fields
@@ -980,7 +1032,7 @@ exports.reportPdf = async (req, res, next) => {
       const now = new Date()
       switch (key) {
         case 'kind': return p.kind === 'SERVICE' ? 'Servicio' : p.kind === 'KIT' ? 'Kit' : 'Bien'
-        case 'service_unit_label': return p.kind === 'SERVICE' ? p.service_unit_label : 'unidad'
+        case 'service_unit_label': return p.kind === 'SERVICE' ? p.service_unit_label : baseUnit(p)
         case 'quantity_decimals': return String(p.quantity_decimals ?? 0)
         case 'name': return p.name || '-'
         case 'category': return p.category?.name || 'Sin categoría'
@@ -1003,9 +1055,9 @@ exports.reportPdf = async (req, res, next) => {
           if (d < now) return `${money(v)} (vencida)`
           return `${money(v)} (hasta ${ds})`
         }
-        case 'cost': return money(p.cost)
-        case 'stock': return String(Number(p.stock || 0))
-        case 'min_stock': return String(Number(p.min_stock || 0))
+        case 'cost': return p.base_unit_id ? `${String(p.cost??0)} ${currencyCode} / ${baseUnit(p)}` : money(p.cost)
+        case 'stock': return `${String(p.stock??0)} ${baseUnit(p)}`
+        case 'min_stock': return `${String(p.min_stock??0)} ${baseUnit(p)}`
         case 'supplier': return p.supplier?.name || '-'
         case 'status': return p.kind === 'SERVICE' ? (p.available_for_sale ? 'Disponible para venta' : 'No disponible') : p.status?.name || '-'
         case 'description': return (p.description || '').toString().slice(0, 80) + ((p.description || '').length > 80 ? '...' : '')
@@ -1040,7 +1092,7 @@ exports.reportPdf = async (req, res, next) => {
         `Alcance,${alcance}`,
         `Generado,${new Date().toLocaleString('es-GT')}`,
         `Productos,${products.length}`,
-        ...(serviceCatalog ? [] : [`Unidades,${products.filter(p => p.kind !== 'SERVICE').reduce((sum, p) => sum + Number(p.stock || 0), 0)}`]),
+        ...(serviceCatalog ? [] : [`Productos físicos,${products.filter(p => p.kind !== 'SERVICE').length}`]),
       ], [{
         title: 'Productos',
         columns: cols.map((c) => headers[c] || c),
@@ -1065,8 +1117,8 @@ exports.reportPdf = async (req, res, next) => {
     if (includeSummary) {
       // Summary cards
       const totalProductos = products.length
-      const totalUnidades = products.filter(p => p.kind !== 'SERVICE').reduce((s, p) => s + Number(p.stock || 0), 0)
-      const valorInventario = products.filter(p => p.kind !== 'SERVICE').reduce((s, p) => s + Number(p.stock || 0) * Number(p.cost || 0), 0)
+      const totalUnidades = products.filter(p => p.kind !== 'SERVICE').length
+      const valorInventario = products.filter(p => p.kind !== 'SERVICE').reduce((s, p) => s.add(D(p.stock).mul(D(p.cost))), D(0)).toDecimalPlaces(2,4).toNumber()
 
       const cardW = (pageWidth - 24) / 3
       const cardH = 56
@@ -1080,7 +1132,7 @@ exports.reportPdf = async (req, res, next) => {
       }
 
       drawSummary(startX, startY, serviceCatalog ? 'Servicios registrados' : 'Productos registrados', String(totalProductos))
-      drawSummary(startX + cardW + 12, startY, serviceCatalog ? 'Disponibles para venta' : 'Unidades en inventario', String(serviceCatalog ? products.filter(p=>p.available_for_sale).length : totalUnidades))
+      drawSummary(startX + cardW + 12, startY, serviceCatalog ? 'Disponibles para venta' : 'Productos físicos', String(serviceCatalog ? products.filter(p=>p.available_for_sale).length : totalUnidades))
       drawSummary(startX + (cardW + 12) * 2, startY, serviceCatalog ? 'Con cantidades fraccionadas' : `Valor del inventario (${currencyCode})`, serviceCatalog ? String(products.filter(p=>p.quantity_decimals>0).length) : money(valorInventario))
 
       gridTop = startY + cardH + 24
@@ -1099,10 +1151,10 @@ exports.reportPdf = async (req, res, next) => {
       const gap = 12, cardWidth = (pageWidth - gap) / 2, contentWidth = cardWidth - 20
       const cards = products.map(p => {
         const details = [
-          `Costo: ${money(p.cost)}`,
+          `Costo: ${getCellValue(p,'cost')}`,
           ...(Number(p.price_wholesale) > 0 ? [`Mayoreo: ${money(p.price_wholesale)}`] : []),
           ...(Number(p.price_promotion) > 0 ? [`Promo: ${getCellValue(p, 'price_promotion')}`] : []),
-          `Stock: ${Number(p.stock || 0)}`, `Proveedor: ${p.supplier?.name || '-'}`, `Estado: ${p.status?.name || '-'}`,
+          `Stock: ${getCellValue(p,'stock')}`, `Proveedor: ${p.supplier?.name || '-'}`, `Estado: ${p.status?.name || '-'}`,
           ...(p.description ? [String(p.description)] : []),
         ]
         const lines = []
@@ -1171,9 +1223,7 @@ exports.critical = async (req, res, next) => {
     // filter server-side for products where stock < min_stock
     const critical = products.filter((p) => {
       if (p.kind === 'KIT' && !p.stock_assembled) return false
-      const stock = Number(p.stock || 0)
-      const min = Number(p.min_stock || 0)
-      return stock < min
+      return decimal(p.stock).lt(decimal(p.min_stock))
     })
 
     res.json(critical)
@@ -1215,19 +1265,19 @@ exports.getLots = async (req, res, next) => {
       },
       select: { stock: true },
     })
-    const physical = stocks.reduce((s, r) => s + Number(r.stock || 0), 0)
-    const lotted = lots.reduce((s, l) => s + Number(l.qty_remaining || 0), 0)
+    const physical = stocks.reduce((s, r) => s.add(r.stock ?? 0), decimal(0))
+    const lotted = lots.reduce((s, l) => s.add(l.qty_remaining ?? 0), decimal(0))
 
     res.json({
       lots,
       reconciliation: {
-        physical,
-        lotted,
-        unlotted: physical - lotted,
+        physical:storageQuantity(physical),
+        lotted:storageQuantity(lotted),
+        unlotted:storageQuantity(physical.sub(lotted)),
         tracks_expiry: Boolean(product?.tracks_expiry),
         // Con tracks_expiry cualquier diferencia es un descuadre que hay que
         // corregir; sin él, lo no lotificado es esperado y no es un error.
-        balanced: physical === lotted,
+        balanced: physical.eq(lotted),
       },
     })
   } catch (e) { next(e) }
@@ -1245,32 +1295,33 @@ exports.updateLot = async (req, res, next) => {
     const { qty_received, expiry_date, lot_code } = req.body || {}
 
     const result = await prismaTransaction.$transaction(async (tx) => {
-      const lot = await tx.productLot.findUnique({
+      let lot = await tx.productLot.findUnique({
         where: { id: lotId },
-        include: { product: { select: { id: true, stock: true, min_stock: true, tracks_expiry: true } } },
+        include: { product: true },
       })
       if (!lot) { const e = new Error('Lote no encontrado'); e.status = 404; throw e }
+      if (lot.branch_id !== requireBranch(req)) throw Object.assign(new Error('El lote no pertenece a esta sucursal'),{status:403})
+      const products=await lockPhysicalProducts(tx,[lot.product_id],lot.branch_id)
+      lot=await tx.productLot.findUnique({where:{id:lotId},include:{product:true}})
+      if(!lot)throw Object.assign(new Error('Lote no encontrado'),{status:404})
 
       const data = {}
       let expiryChanged = false
 
       if (qty_received !== undefined) {
-        const newQty = Number(qty_received)
-        if (!Number.isInteger(newQty) || newQty <= 0) {
-          const e = new Error('qty_received debe ser un entero mayor a 0'); e.status = 400; throw e
-        }
-        const consumed = lot.qty_received - lot.qty_remaining
-        if (newQty < consumed) {
+        const newQty = physicalQuantity(qty_received,products.get(lot.product_id))
+        const consumed = decimal(lot.qty_received).sub(lot.qty_remaining)
+        if (newQty.lt(consumed)) {
           const e = new Error(`No puede recibir menos de lo ya vendido de este lote (${consumed})`); e.status = 400; throw e
         }
-        const delta = newQty - lot.qty_received
-        data.qty_received = newQty
-        data.qty_remaining = lot.qty_remaining + delta
-        if (delta !== 0) {
+        const delta = newQty.sub(lot.qty_received)
+        data.qty_received = storageQuantity(newQty)
+        data.qty_remaining = storageQuantity(decimal(lot.qty_remaining).add(delta))
+        if (!delta.isZero()) {
           // Ajusta la sucursal del lote (y el espejo global) por la diferencia
-          const map = new Map([[String(lot.product_id), Math.abs(delta)]])
-          const lotCtx = { reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId), userId: req.user?.sub || null }
-          const [row] = delta > 0
+          const map = new Map([[String(lot.product_id), delta.abs()]])
+          const lotCtx = { reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId), userId: req.user?.sub || null, ...(lot.location_id?{locationId:lot.location_id}:{adjust:true}) }
+          const [row] = delta.gt(0)
             ? await restoreStockMap(tx, map, lot.branch_id, lotCtx)
             : await deductStockMap(tx, map, lot.branch_id, lotCtx)
           if (row) await ensureStockAlert(tx, row.id, row.stock, row.min_stock, lot.branch_id)
@@ -1308,16 +1359,21 @@ exports.deleteLot = async (req, res, next) => {
   try {
     const { lotId } = req.params
     await prismaTransaction.$transaction(async (tx) => {
-      const lot = await tx.productLot.findUnique({
+      let lot = await tx.productLot.findUnique({
         where: { id: lotId },
         include: { product: { select: { id: true, stock: true, min_stock: true } } },
       })
       if (!lot) { const e = new Error('Lote no encontrado'); e.status = 404; throw e }
+      if(lot.branch_id!==requireBranch(req))throw Object.assign(new Error('El lote no pertenece a esta sucursal'),{status:403})
+      await lockPhysicalProducts(tx,[lot.product_id],lot.branch_id)
+      lot=await tx.productLot.findUnique({where:{id:lotId},include:{product:true}})
+      if(!lot)throw Object.assign(new Error('Lote no encontrado'),{status:404})
 
-      if (lot.qty_remaining > 0) {
+      if (decimal(lot.qty_remaining).gt(0)) {
         const map = new Map([[String(lot.product_id), lot.qty_remaining]])
         const [row] = await deductStockMap(tx, map, lot.branch_id, {
           reason: 'MANUAL_ADJUST', refType: 'product_lot', refId: String(lotId), userId: req.user?.sub || null,
+          ...(lot.location_id?{locationId:lot.location_id}:{adjust:true}),
         })
         if (row) await ensureStockAlert(tx, row.id, row.stock, row.min_stock, lot.branch_id)
       }
@@ -1345,14 +1401,16 @@ exports.writeOffLots = async (req, res, next) => {
     const reason = req.body?.reason ? String(req.body.reason).trim().slice(0, 200) : 'Lote vencido'
 
     const result = await prismaTransaction.$transaction(async (tx) => {
-      const lots = await tx.productLot.findMany({
+      let lots = await tx.productLot.findMany({
         where: { id: { in: ids }, branch_id: branchId },
         select: { id: true, product_id: true, location_id: true, qty_remaining: true, lot_code: true },
       })
       if (lots.length !== ids.length) {
         const e = new Error('Uno de los lotes no es de esta sucursal'); e.status = 404; throw e
       }
-      let units = 0
+      await lockPhysicalProducts(tx,lots.map(lot=>lot.product_id),branchId)
+      lots=await tx.productLot.findMany({where:{id:{in:ids},branch_id:branchId},select:{id:true,product_id:true,location_id:true,qty_remaining:true,lot_code:true}})
+      let units = decimal(0)
       for (const lot of lots) {
         if (lot.qty_remaining <= 0) continue
         const map = new Map([[String(lot.product_id), lot.qty_remaining]])
@@ -1365,10 +1423,10 @@ exports.writeOffLots = async (req, res, next) => {
           ...(lot.location_id ? { locationId: lot.location_id } : { adjust: true }),
         })
         if (row) await ensureStockAlert(tx, row.id, row.stock, row.min_stock, branchId)
-        units += lot.qty_remaining
+        units = units.add(lot.qty_remaining)
       }
       await tx.productLot.updateMany({ where: { id: { in: ids } }, data: { qty_remaining: 0 } })
-      return { lots: lots.length, units }
+      return { lots: lots.length, units:storageQuantity(units) }
     }, { maxWait: 10000, timeout: 20000 })
 
     await syncLotExpiryAlerts(prisma, { force: true })
@@ -1382,6 +1440,7 @@ exports.writeOffLots = async (req, res, next) => {
  */
 exports.lotsExpiring = async (req, res, next) => {
   try {
+    const unitMode=await Units.unitsEnabled(prisma,req.companyId)
     const days = Math.min(365, Math.max(1, Number(req.query.days) || 30))
     const status = ['expiring', 'expired', 'all'].includes(req.query.status) ? req.query.status : 'all'
 
@@ -1406,7 +1465,7 @@ exports.lotsExpiring = async (req, res, next) => {
       orderBy: { expiry_date: 'asc' },
       include: {
         product: {
-          select: { id: true, name: true, brand: true, size: true, barcode: true, stock: true, image_url: true }
+          select: { id: true, name: true, brand: true, size: true, barcode: true, stock: true, image_url: true,...(req.branchId?{branch_stocks:{where:{branch_id:req.branchId},select:{stock:true}}}:{}),...(unitMode?{quantity_decimals:true,base_unit:{select:{code:true,label:true}}}:{}) }
         },
         branch: { select: { id: true, name: true, code: true } },
         location: { select: { id: true, code: true, name: true } },
@@ -1433,6 +1492,8 @@ exports.lotsExpiring = async (req, res, next) => {
       status,
       lots: lots.map(l => {
         const lotted = lottedByProduct[l.product_id] || 0
+        const stock=req.branchId?l.product.branch_stocks?.[0]?.stock??0:l.product.stock
+        const {branch_stocks,...product}=l.product
         return {
           id: l.id,
           lot_code: l.lot_code,
@@ -1443,9 +1504,10 @@ exports.lotsExpiring = async (req, res, next) => {
           branch: l.branch,
           location: l.location,
           product: {
-            ...l.product,
-            lotted,
-            unlotted: Math.max(0, Number(l.product.stock) - lotted),
+            ...product,
+            stock:storageQuantity(stock),
+            lotted:storageQuantity(lotted),
+            unlotted:storageQuantity(decimal(stock).sub(lotted).gt(0)?decimal(stock).sub(lotted):0),
           },
         }
       }),
@@ -1459,24 +1521,25 @@ exports.lotsExpiring = async (req, res, next) => {
  * vive en el producto, no en la sucursal). Con stock en cero o negativo el
  * promedio no significa nada: manda el costo de lo que acaba de entrar.
  */
-async function updateAverageCost(tx, product, qty, unitCost, corriente) {
-  const entran = Number(qty)
-  const costoNuevo = Number(unitCost)
-  if (!Number.isFinite(entran) || entran <= 0) return
-  if (!Number.isFinite(costoNuevo) || costoNuevo < 0) return
+async function updateAverageCost(tx, product, qty, unitCost, corriente, commercialValue) {
+  const entran = parseQuantity(qty)
+  const costoNuevo = parseQuantity(unitCost, {decimals:12,allowZero:true,max:'999999999999.999999999999'})
 
   // El mismo producto puede venir en dos líneas del ingreso con costos
   // distintos: se arrastra el resultado de la anterior en vez de releer.
   const key = String(product.id)
   const estado = corriente.get(key) || {
-    stock: Number(product.stock || 0),
-    cost: Number(product.cost || 0),
+    stock: decimal(product.stock),
+    value: decimal(product.stock).mul(decimal(product.cost)),
   }
-  const promedio = estado.stock > 0
-    ? (estado.stock * estado.cost + entran * costoNuevo) / (estado.stock + entran)
-    : costoNuevo
-  const redondeado = Math.round(promedio * 100) / 100
-  corriente.set(key, { stock: estado.stock + entran, cost: redondeado })
+  const receivedValue = commercialValue ?? entran.mul(costoNuevo)
+  const value = estado.stock.gt(0) ? estado.value.add(receivedValue) : receivedValue
+  const stock = estado.stock.add(entran)
+  const promedio = estado.stock.gt(0)
+    ? value.div(stock)
+    : decimal(receivedValue).div(entran)
+  const redondeado = promedio.toDecimalPlaces(12).toFixed(12)
+  corriente.set(key, { stock, value: estado.stock.gt(0) ? value : stock.mul(promedio) })
 
   await tx.product.update({ where: { id: product.id }, data: { cost: redondeado } })
 }
@@ -1612,6 +1675,23 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
     // Run in transaction: create audit record, update products, create purchase logs, update supplier
     // Use prismaTransaction (DIRECT_URL) for transactions as pooled connections don't support them
     const result = await prismaTransaction.$transaction(async (tx) => {
+      await Units.lockCompany(tx, req.companyId)
+      const advanced = await Units.unitsEnabled(tx, req.companyId)
+      const requestKey = body.request_key
+      let requestHash
+      if (advanced) {
+        if (typeof requestKey !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(requestKey)) {
+          throw Object.assign(new Error('request_key es requerido para registrar mercancía'), {status:400})
+        }
+        const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+          ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
+        requestHash = require('crypto').createHash('sha256').update(JSON.stringify(canonical({branchId, body}))).digest('hex')
+        const previous = await tx.incomingMerchandise.findFirst({where:{request_company_id:req.companyId,registered_by,request_key:requestKey}})
+        if (previous) {
+          if (previous.request_hash !== requestHash) throw Object.assign(new Error('La clave de solicitud ya fue usada con otros datos'), {status:409,code:'PURCHASE_REQUEST_CONFLICT'})
+          return previous.request_result
+        }
+      }
       // Verify supplier still exists
       const supplier = await tx.supplier.findUnique({ where: { id: supplier_id } })
       if (!supplier || supplier.deleted) {
@@ -1623,7 +1703,10 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
       // Verify all products exist and belong to the supplier
       // Únicos: el mismo producto puede venir en dos líneas (dos lotes, o dos
       // costos en la misma factura) y contra el crudo la cuenta nunca cuadraba.
-      const productIds = [...new Set(items.map(item => item.product_id))]
+      const productIds = [...new Set(items.map(item => item.product_id))].sort()
+      for (const id of productIds) {
+        await tx.$executeRaw`SELECT id FROM products WHERE id=${id}::uuid AND company_id=${req.companyId}::uuid FOR UPDATE`
+      }
       const products = await tx.product.findMany({
         where: {
           id: { in: productIds },
@@ -1680,13 +1763,14 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           due_date,
           payment_updated_by: registered_by,
           payment_updated_at: now,
+          ...(advanced ? {unit_metadata_version:2,request_company_id:req.companyId,request_key:requestKey,request_hash:requestHash} : {}),
         },
       })
 
       // Process each item
       const updatedProducts = []
       const purchaseLogs = []
-      let totalPurchaseValue = 0
+      let totalPurchaseValue = decimal(0)
       // Código compartido para todos los productos de esta entrada que no traigan su propio lot_code
       // (llegaron en la misma entrega/factura). ponytail: un solo código por llamada, no por item.
       const autoLotCode = generateLotCode(dateAsUtcWithGtClock)
@@ -1716,19 +1800,33 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         const product = products.find(p => p.id === item.product_id)
         if (!product) continue
 
-        const quantity = Number(item.quantity)
-        const unitCost = Number(item.unit_cost)
+        if (!advanced && !Units.advancedProduct(product) && (item.presentation_id != null || ['factor','base_qty','unit_snapshot','unit_metadata_version'].some(key=>Object.hasOwn(item,key)))) {
+          throw Object.assign(new Error('Recarga el producto antes de elegir una presentación'), {status:409})
+        }
+        const legacyQty = !advanced && !Units.advancedProduct(product) ? physicalQuantity(item.quantity,product).toFixed() : null
+        const resolved = legacyQty ? {qty:legacyQty,base_qty:legacyQty} : await Units.resolveUnitLine(tx, requestUnitScope(req), product, {
+          qty:item.quantity,
+          ...(Object.hasOwn(item,'presentation_id') ? {presentation_id:item.presentation_id} : {}),
+          unit_revision:item.unit_revision, accept_rounding:item.accept_rounding,
+          ...Object.fromEntries(['factor','base_qty','unit_snapshot','unit_metadata_version'].filter(key=>Object.hasOwn(item,key)).map(key=>[key,item[key]])),
+        }, {operation:'PURCHASE'})
+        const quantity = resolved.qty
+        const baseQty = resolved.base_qty
+        const unitCost = parseQuantity(!advanced&&typeof item.unit_cost==='number'?String(item.unit_cost):item.unit_cost,{decimals:6,allowZero:true,max:'9999999999.99'}).toFixed()
+        const amount = lineTotal(quantity, unitCost)
+        const baseCost = decimal(amount).div(baseQty).toDecimalPlaces(12).toFixed(12)
+        const unitFields = advanced ? {unit_metadata_version:resolved.unit_metadata_version,unit_snapshot:resolved.unit_snapshot,base_qty:baseQty,base_unit_cost:baseCost,line_total:amount} : {}
 
         // Costo promedio ponderado, ANTES de sumar lo que entra: mezcla lo que
         // ya había al costo viejo con lo que llega al costo nuevo. Sin esto el
         // costo del producto se quedaba en el del día que se creó, y con él la
         // valuación del inventario y todos los márgenes.
-        await updateAverageCost(tx, product, quantity, unitCost, costeoCorriente)
+        await updateAverageCost(tx, product, baseQty, baseCost, costeoCorriente, decimal(amount))
 
         // La mercancía entra al stock de la sucursal (y al espejo global).
         // reason sigue la misma clasificación que el resto del kardex:
         // 'INITIAL' si es carga de apertura, 'PURCHASE' si es compra real.
-        const [updated] = await restoreStockMap(tx, new Map([[String(product.id), quantity]]), branchId, {
+        const [updated] = await restoreStockMap(tx, new Map([[String(product.id), baseQty]]), branchId, {
           reason: merchandiseSource, refType: 'incoming_merchandise', refId: String(incomingMerchandise.id),
           userId: registered_by, locationId: lotLocationId,
         })
@@ -1739,10 +1837,11 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           data: {
             product_id: product.id,
             supplier_id,
-            qty: quantity,
+            qty: advanced ? quantity : Number(quantity),
             cost: unitCost,
             date: now,
             source: merchandiseSource,
+            ...unitFields,
           }
         })
         purchaseLogs.push(purchaseLog)
@@ -1752,8 +1851,9 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
           data: {
             incoming_merchandise_id: incomingMerchandise.id,
             product_id: product.id,
-            quantity,
+            quantity: advanced ? quantity : Number(quantity),
             unit_cost: unitCost,
+            ...unitFields,
           }
         })
 
@@ -1770,9 +1870,9 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
               location_id: lotLocationId,
               lot_code: lotCode,
               expiry_date: hasExpiry ? new Date(item.expiry_date) : null,
-              qty_received: quantity,
-              qty_remaining: quantity,
-              unit_cost: unitCost,
+              qty_received: advanced ? baseQty : Number(baseQty),
+              qty_remaining: advanced ? baseQty : Number(baseQty),
+              unit_cost: baseCost,
               supplier_id,
               incoming_merchandise_id: incomingMerchandise.id,
               received_at: now,
@@ -1784,7 +1884,7 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
         // Update stock alerts (valores de la sucursal)
         await ensureStockAlert(tx, product.id, updated.stock, updated.min_stock, branchId)
 
-        totalPurchaseValue += quantity * unitCost
+        totalPurchaseValue = totalPurchaseValue.add(amount)
       }
 
       const settledPurchase = await require('../merchandise/payables/compatibility').settleNewPurchase(
@@ -1801,18 +1901,20 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
       await tx.supplier.update({
         where: { id: supplier_id },
         data: {
-          ...(merchandiseSource === 'PURCHASE' ? { total_purchases: { increment: totalPurchaseValue } } : {}),
+          ...(merchandiseSource === 'PURCHASE' ? { total_purchases: { increment: totalPurchaseValue.toFixed(2) } } : {}),
           last_order: now,
         }
       })
 
-      return {
+      const response = {
         incomingMerchandise,
         updatedProducts,
         purchaseLogs,
-        totalPurchaseValue,
+        totalPurchaseValue: advanced ? totalPurchaseValue.toFixed(2) : totalPurchaseValue.toNumber(),
         lotsCreated,
       }
+      if (advanced) await tx.incomingMerchandise.update({where:{id:incomingMerchandise.id},data:{request_result:JSON.parse(JSON.stringify(response))}})
+      return response
     }, {
       maxWait: 10000, // 10 seconds
       timeout: 30000, // 30 seconds

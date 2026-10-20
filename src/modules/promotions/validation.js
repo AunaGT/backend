@@ -33,8 +33,12 @@ async function validatePromotionCatalog(tx,payload,typeName,companyId) {
   if (categories.length && await tx.productCategory.count({where:{id:{in:categories},company_id:companyId}})!==categories.length) throw Object.assign(new Error('Categoría no encontrada en esta empresa'),{status:400})
 }
 
-async function loadPromotionCart(tx,items,companyId) {
+async function loadPromotionCart(tx,items,companyId,{scope,tier='LIST'}={}) {
   if (!Array.isArray(items)) throw Object.assign(new Error('Carrito inválido'),{status:400})
+  if(await require('../inventory/units').unitsEnabled(tx,companyId)){
+    const lines=await require('../../services/units/saleLines').resolveCommercialLines(tx,scope,items,{tier})
+    return require('../../services/units/promotionReference').withPromotionBaseUnits(tx,lines.map(line=>({...line,price:line.unit_price})),companyId)
+  }
   const {validMoney}=require('../../utils/importValidation')
   if(items.some(item=>!item || !['number','string'].includes(typeof item.price) || !/^\d+(?:\.\d{1,2})?$/.test(String(item.price)) || !validMoney(Number(item.price)))) throw Object.assign(new Error('Precio inválido en el carrito'),{status:400})
   const ids=[...new Set(items.map(item=>String(item.product_id || '')))]

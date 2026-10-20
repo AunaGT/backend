@@ -31,6 +31,10 @@ const {
 const { defaultQuoteValidUntil, defaultQuoteSoftHoldExpiresAt } = require('../../services/commercialDocumentSettings')
 const {commercialQuantity,lineSnapshot,assertServicesEnabled}=require('../../services/catalogItemRules')
 const {validMoney}=require('../../utils/importValidation')
+const Units=require('../inventory/units')
+const {publicUnitLine}=require('../../services/units/publicLine')
+const {resolveCommercialLines}=require('../../services/units/saleLines')
+const {unitFields,isV2}=require('../../services/units/commercial')
 const {
   assertLinesAvailable,
   reserveForDocument,
@@ -186,6 +190,7 @@ exports.getPublicByToken = async (req, res, next) => {
     const companyMap = Object.fromEntries(companyRows.map((r) => [r.key, r.value]))
 
     res.json({
+      ...(quote.lines.some(l=>l.unit_metadata_version===2)?{unit_metadata_version:2}:{}),
       reference: quote.reference,
       status: quote.status,
       customer: quote.customer,
@@ -213,6 +218,7 @@ exports.getPublicByToken = async (req, res, next) => {
         qty: l.qty,
         unit_price: l.unit_price,
         line_total: l.line_total,
+        ...publicUnitLine(l),
       })),
     })
   } catch (e) {
@@ -285,6 +291,17 @@ async function validateCustomerContact(tx, customerContactId) {
 }
 
 async function resolveQuoteLines(tx, items, ctx) {
+  if(await Units.unitsEnabled(tx,ctx.companyId)){
+    const tier=ctx.explicitPriceTier||await resolvePriceTierForContext(tx,ctx)
+    const resolved=await resolveCommercialLines(tx,ctx.scope(),items,{tier,allowOverride:true})
+    const serviceIds=resolved.filter(line=>line.item_kind==='SERVICE').map(line=>line.product_id)
+    const profiles=serviceIds.length?await tx.product.findMany({where:{id:{in:serviceIds},company_id:ctx.companyId},select:{id:true,service_schedule_profile:{select:publicProfileSelect}}}):[]
+    const lines=resolved.map((line,index)=>{const {unit_cost,...saved}=line;return {...saved,sort_order:index,
+      ...(isV2(line)?{base_fulfilled:'0',base_invoiced:'0'}:{}),service_schedule_snapshot:line.item_kind==='SERVICE'?(publicConditionsFromRow(profiles.find(product=>product.id===line.product_id)?.service_schedule_profile)??Prisma.DbNull):Prisma.DbNull}})
+    const subtotal=lines.reduce((sum,line)=>sum.add(line.line_total),new Prisma.Decimal(0)).toNumber()
+    if(!validMoney(subtotal))throw Object.assign(new Error('Total de cotización fuera de rango'),{status:400})
+    return {lines,subtotal,total:subtotal}
+  }
   if (!Array.isArray(items) || items.length === 0) {
     const err = new Error('Debe incluir al menos un producto')
     err.status = 400
@@ -512,6 +529,7 @@ exports.create = async (req, res, next) => {
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
+        scope:()=>({...Units.requestUnitScope(req),branchId}),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
@@ -520,7 +538,7 @@ exports.create = async (req, res, next) => {
 
       await assertLinesAvailable(
         tx,
-        lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+        lines,
         { branchId, companyId:req.companyId }
       )
 
@@ -558,6 +576,7 @@ exports.create = async (req, res, next) => {
           notes: notes != null ? String(notes).trim() || null : null,
           created_by: user.sub,
           lines: { create: lines },
+          ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: QUOTE_DETAIL_INCLUDE,
       })
@@ -612,6 +631,7 @@ exports.update = async (req, res, next) => {
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
+        scope:()=>({...Units.requestUnitScope(req),branchId:existing.branch_id}),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
@@ -620,7 +640,7 @@ exports.update = async (req, res, next) => {
 
       await assertLinesAvailable(
         tx,
-        lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+        lines,
         { branchId: existing.branch_id, companyId:req.companyId }
       )
 
@@ -659,6 +679,7 @@ exports.update = async (req, res, next) => {
           notes: notes !== undefined ? (notes != null ? String(notes).trim() || null : null) : undefined,
           valid_until: validUntil,
           lines: { create: lines },
+          ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: QUOTE_DETAIL_INCLUDE,
       })
@@ -767,6 +788,8 @@ exports.convertToOrder = async (req, res, next) => {
         line_total: l.line_total,
         sort_order: idx,
         ...lineSnapshot(l),
+        ...unitFields(l),
+        ...(isV2(l)?{unit_label:l.unit_label,quantity_decimals:l.quantity_decimals,base_fulfilled:'0',base_invoiced:'0'}:{}),
         service_schedule_snapshot:l.service_schedule_snapshot??Prisma.DbNull,
       }))
 
@@ -792,6 +815,7 @@ exports.convertToOrder = async (req, res, next) => {
           converted_from_id: quote.id,
           created_by: user.sub,
           lines: { create: lines },
+          ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: {
           customerContact: { select: { id: true, name: true, tax_id: true } },

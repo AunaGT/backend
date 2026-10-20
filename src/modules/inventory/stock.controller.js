@@ -23,6 +23,7 @@ const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { StockMovementReason } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
+const { decimal, physicalQuantity, storageQuantity, lockPhysicalProducts } = require('../../services/units/physical')
 
 // El pooler de Supabase excede los 5s por defecto en conexiones frías.
 const TX_OPTIONS = { maxWait: 10000, timeout: 20000 }
@@ -143,9 +144,7 @@ exports.createAdjustment = async (req, res, next) => {
     const { location_id, lines, notes } = req.body || {}
     if (!location_id) return res.status(400).json({ message: 'location_id es obligatorio' })
 
-    const rows = (lines || [])
-      .map((l) => ({ product_id: String(l.product_id || ''), qty: Math.floor(Number(l.qty || 0)) }))
-      .filter((l) => l.product_id && l.qty !== 0)
+    const rows = Array.isArray(lines) ? lines : []
     if (rows.length === 0) {
       return res.status(400).json({ message: 'Indica al menos un producto con una diferencia distinta de 0' })
     }
@@ -167,9 +166,16 @@ exports.createAdjustment = async (req, res, next) => {
       notes: notes ? String(notes).trim().slice(0, 300) : null,
     }
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const products = await lockPhysicalProducts(tx,rows.map(r=>r.product_id),branchId)
+      const quantities = new Map()
+      for (const row of rows) {
+        const id=String(row.product_id||'')
+        const qty=physicalQuantity(row.qty,products.get(id),{signed:true,allowZero:true})
+        quantities.set(id,decimal(quantities.get(id)).add(qty))
+      }
       const out = []
-      const ups = new Map(rows.filter((r) => r.qty > 0).map((r) => [r.product_id, r.qty]))
-      const downs = new Map(rows.filter((r) => r.qty < 0).map((r) => [r.product_id, -r.qty]))
+      const ups = new Map([...quantities].filter(([,qty])=>qty.gt(0)).map(([id,qty])=>[id,storageQuantity(qty)]))
+      const downs = new Map([...quantities].filter(([,qty])=>qty.lt(0)).map(([id,qty])=>[id,storageQuantity(qty.abs())]))
       if (ups.size) out.push(...await restoreStockMap(tx, ups, branchId, ctx))
       if (downs.size) out.push(...await deductStockMap(tx, downs, branchId, ctx))
       await ensureStockAlertsBatch(tx, out, branchId)
@@ -222,8 +228,7 @@ exports.setLocationMin = async (req, res, next) => {
   try {
     const branchId = requireBranch(req)
     const { product_id, location_id, min_stock } = req.body || {}
-    const min = Math.floor(Number(min_stock))
-    if (!product_id || !location_id || !Number.isFinite(min) || min < 0) {
+    if (!product_id || !location_id) {
       return res.status(400).json({ message: 'product_id, location_id y min_stock >= 0 son obligatorios' })
     }
     const owned = await prisma.stockLocation.findFirst({
@@ -232,13 +237,16 @@ exports.setLocationMin = async (req, res, next) => {
     })
     if (!owned) return res.status(403).json({ message: 'La ubicación no pertenece a esta sucursal' })
 
-    await require('../../services/catalogItemRules').assertPhysicalProducts(prisma,[String(product_id)],branchId)
-    const row = await prisma.productStockLocation.upsert({
+    const row = await prismaTransaction.$transaction(async tx=>{
+      const products=await lockPhysicalProducts(tx,[String(product_id)],branchId)
+      const min=storageQuantity(physicalQuantity(min_stock,products.get(String(product_id)),{allowZero:true}))
+      return tx.productStockLocation.upsert({
       where: { product_id_location_id: { product_id: String(product_id), location_id: owned.id } },
       update: { min_stock: min },
       create: { product_id: String(product_id), location_id: owned.id, stock: 0, min_stock: min },
       select: { product_id: true, location_id: true, stock: true, min_stock: true },
-    })
+      })
+    },TX_OPTIONS)
     res.json(row)
   } catch (e) { next(e) }
 }
@@ -248,6 +256,11 @@ exports.setLocationMin = async (req, res, next) => {
 exports.replenishment = async (req, res, next) => {
   try {
     const rows = await replenishmentSuggestions(prisma, requireBranch(req))
+    if(await require('./units').unitsEnabled(prisma,req.companyId)){
+      const products=await prisma.product.findMany({where:{company_id:req.companyId,id:{in:[...new Set(rows.map(row=>row.product_id))]}},select:{id:true,quantity_decimals:true,base_unit:{select:{code:true,label:true}}}})
+      const byId=new Map(products.map(product=>[product.id,product]))
+      return res.json(rows.map(row=>({...row,quantity_decimals:byId.get(row.product_id)?.quantity_decimals??0,base_unit:byId.get(row.product_id)?.base_unit??null})))
+    }
     res.json(rows)
   } catch (e) { next(e) }
 }

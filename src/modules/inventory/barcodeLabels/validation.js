@@ -118,7 +118,7 @@ function parsePreparationInput(raw,shelf=false){
   if(!Array.isArray(raw.items)||raw.items.length<1||raw.items.length>100)fail('items','Selecciona de 1 a 100 productos')
   const seen=new Set();let total=0
   const items=raw.items.map(i=>{
-    object(i,['productId','copies','expectedBarcode','assignment'],'item',shelf?['priceTiers']:[]);uuid(i.productId,'productId');if(seen.has(i.productId))fail(i.productId,'Producto repetido');seen.add(i.productId)
+    object(i,['productId','copies','expectedBarcode','assignment'],'item',['presentation_id','unit_revision',...(shelf?['priceTiers']:[])]);uuid(i.productId,'productId');if(i.presentation_id!=null)uuid(i.presentation_id,'presentation_id');if(i.unit_revision!==undefined)number(i.unit_revision,1,Number.MAX_SAFE_INTEGER,'unit_revision',true);const identity=i.productId+':'+(i.presentation_id??'BASE');if(seen.has(identity))fail(i.productId,'Producto/presentación repetido');seen.add(identity)
     number(i.copies,1,1000,'copies',true);total+=i.copies;if(i.expectedBarcode!==null)string(i.expectedBarcode,100,'expectedBarcode',1)
     object(i.assignment,['mode'],'assignment',['value']);choice(i.assignment.mode,['keep','auto','manual'],'mode')
     const {mode}=i.assignment

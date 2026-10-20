@@ -15,6 +15,7 @@
  */
 
 const { Prisma } = require('@prisma/client')
+const {physicalValue,returnPhysicalValue}=require('../units/frozenCost')
 const { isCashMethod } = require('../paymentMethods/behavior')
 const { splitIva, round2 } = require('./logic')
 const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, getOptionalAccount, AccountingError } = require('./core')
@@ -94,7 +95,7 @@ function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequen
     lines.push({ account_id: defaults.pequenoTax.id, debit: tax, credit: 0 })
     lines.push({ account_id: defaults.pequenoTaxExpense.id, debit: 0, credit: tax })
   }
-  const cost = costBase((ret.return_items || []).filter(item=>(item.sale_item?.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.restock_qty ?? item.qty_returned ?? 0)).mul(String(item.sale_item?.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
+  const cost = costBase((ret.return_items || []).filter(item=>(item.sale_item?.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(returnPhysicalValue(item)??(item.unit_metadata_version===2&&item.sale_item?.base_unit_cost!=null?new Prisma.Decimal(String(item.base_restock_qty??0)).mul(String(item.sale_item.base_unit_cost)):new Prisma.Decimal(String(item.restock_qty ?? item.qty_returned ?? 0)).mul(String(item.sale_item?.unit_cost ?? item.product?.cost ?? 0)))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
   if (cost > 0) {
     lines.push({ account_id: defaults.inventory.id, debit: cost, credit: 0 })
     lines.push({ account_id: defaults.cogs.id, debit: 0, credit: cost })
@@ -107,7 +108,7 @@ function buildSalePosting(sale,{defaults,splitVat,ivaRate,costBase,pequenoTaxOf}
   const { base, iva } = splitIva(total, ivaRate)
   // El costo congelado en la venta; las ventas viejas (sin él) caen al costo
   // del producto, que es lo que se usaba antes de guardarlo por línea.
-  const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
+  const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(physicalValue(item.physical_snapshot)??(item.unit_metadata_version===2&&item.base_unit_cost!=null?new Prisma.Decimal(String(item.base_qty)).mul(String(item.base_unit_cost)):new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0)))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
   const chargeAccount = sale.settlement_source==='ENGAGEMENT_RECEIPTS'?defaults.receivables:cashOrBank(defaults, sale.payment_method)
   const lines = splitVat
     ? [
@@ -184,7 +185,7 @@ async function postPendingOperations(prisma, userId, companyId) {
       settlement_source:true,
       customerContact: { select: { name: true } },
       payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
-      sale_items: { select: { qty: true,item_kind:true, unit_cost: true, product: { select: { cost: true,kind:true } } } },
+      sale_items: { select: { qty:true,item_kind:true,unit_cost:true,...(await require('../../modules/inventory/units').unitsEnabled(prisma,companyId)?{unit_metadata_version:true,base_qty:true,base_unit_cost:true,physical_snapshot:true}:{}),product: { select: { cost: true,kind:true } } } },
     },
     orderBy: { date: 'asc' },
   })
@@ -227,10 +228,9 @@ async function postPendingOperations(prisma, userId, companyId) {
         },
       },
       return_items: {
-        select: {
-          qty_returned: true, restock_qty: true,
+        include: {
           // Lo devuelto vuelve al inventario al costo con el que salió.
-          sale_item: { select: { unit_cost: true,item_kind:true } },
+          sale_item: true,
           product: { select: { cost: true,kind:true } },
         },
       },
@@ -290,7 +290,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     select: {
       id: true, date: true, payment_status: true, paid_at: true, branch_id: true,
       supplier: { select: { name: true } },
-      items: { select: { quantity: true, unit_cost: true } },
+      items: { select: { quantity: true, unit_cost: true,...(await require('../../modules/inventory/units').unitsEnabled(prisma,companyId)?{line_total:true}:{}) } },
       paymentEntries: { select: { id: true } },
     },
     orderBy: { date: 'asc' },
@@ -301,7 +301,7 @@ async function postPendingOperations(prisma, userId, companyId) {
   for (const purchase of purchases) {
     if (!esperaAsientoDeCompra.has(purchase.id)) continue
     const label = `Compra a ${purchase.supplier?.name || 'proveedor'} (${purchase.id.slice(0, 8)})`
-    const total = round2(purchase.items.reduce((s, i) => s + i.quantity * Number(i.unit_cost), 0))
+    const total = purchase.items.reduce((sum,item)=>sum.add(item.line_total??new Prisma.Decimal(String(item.quantity)).mul(String(item.unit_cost))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
     if (total <= 0) { track(label, 'total 0'); continue }
     const { base, iva } = splitIva(total, ivaRate)
     const reason = await tryPost(prisma, () => ({
@@ -521,7 +521,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     if (purchase.payment_status !== 'PAID' || purchase.paymentEntries.length > 0) continue
     const synthId = `pm-synth:${purchase.id}`
     if (!esperaPagoSintetico.has(synthId)) continue
-    const total = round2(purchase.items.reduce((s, i) => s + i.quantity * Number(i.unit_cost), 0))
+    const total = purchase.items.reduce((sum,item)=>sum.add(item.line_total??new Prisma.Decimal(String(item.quantity)).mul(String(item.unit_cost))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
     if (total <= 0) continue
     const label = `Pago compra a ${purchase.supplier?.name || 'proveedor'} (${purchase.id.slice(0, 8)})`
     const reason = await tryPost(prisma, () => ({
@@ -617,7 +617,7 @@ async function postSaleInTransaction(tx,scope,saleId){
 async function postReturnInTransaction(tx,scope,returnId){
   const modules=require('../../modules/platform/registry').resolveEffectiveModules(await tx.companyModule.findMany({where:{company_id:scope.companyId}}))
   if(!modules.find(m=>m.code==='accounting')?.effectiveEnabled)return null
-  const ret=await tx.return.findFirst({where:{id:returnId,sale:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},status:{name:'Completada'}},include:{sale:{include:{payment_method:true}},return_items:{include:{sale_item:{select:{unit_cost:true,item_kind:true}},product:{select:{cost:true,kind:true}}}},settlements:{include:{payment_method:true}}}})
+  const ret=await tx.return.findFirst({where:{id:returnId,sale:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},status:{name:'Completada'}},include:{sale:{include:{payment_method:true}},return_items:{include:{sale_item:true,product:{select:{cost:true,kind:true}}}},settlements:{include:{payment_method:true}}}})
   if(!ret)throw new AccountingError('Devolución no encontrada en la sucursal activa')
   if(ret.total_refund.eq(0))return null
   await require('./core').lockAccountingCompany(tx,scope.companyId)

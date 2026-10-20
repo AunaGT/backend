@@ -59,6 +59,7 @@ function defaultCompanySettings(company = {}) {
     ['sales_allow_credit', 'true', 'string'],
     ['sales_show_fiscal_fields', 'true', 'string'],
     ['sales_show_channels', 'true', 'string'],
+    ['inventory_units_enabled', 'false', 'string'],
     ['returns.policy', JSON.stringify(DEFAULT_RETURN_POLICY), 'json'],
     [EXPIRY_ALERT_POLICY_KEY,JSON.stringify(DEFAULT_EXPIRY_ALERT_POLICY),'json'],
   ]
@@ -70,6 +71,8 @@ async function seedCompanySettings(tx, companyId, company = {}) {
     data: defaultCompanySettings(company).map(([key, value, type]) => ({ company_id: companyId, key, value, type })),
     skipDuplicates: true,
   })
+  const {seedStandardUnits}=require('../modules/inventory/units')
+  if(tx.measureUnit)await seedStandardUnits(tx,companyId)
 }
 
 module.exports = { seedCompanySettings, defaultCompanySettings, DEFAULT_DENOMINATIONS }
