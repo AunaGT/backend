@@ -1,0 +1,3 @@
+npm notice run deposito-frontend@0.0.0 npx
+npm notice run 'tsc' -p tsconfig.app.json --noEmit --pretty false
+src/modules/appointments/commercialApi.ts(11,88): error TS2554: Expected 3 arguments, but got 2.

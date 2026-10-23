@@ -29,6 +29,7 @@ const { ensureBranchStockRows } = require('../../services/stockAvailability')
 const {
   applyBranchDelta, branchLocationStock, clearBranchLocations, defaultLocationId, salesLocationId,
 } = require('../../services/stockLocations')
+const CREATE_TX_OPTIONS = { maxWait: 10000, timeout: 30000 }
 
 /**
  * Fija stock/min_stock del producto EN LA SUCURSAL dada y ajusta el espejo
@@ -249,20 +250,37 @@ exports.list = async (req, res, next) => {
     const scope = listScope(req)
     const where = buildProductListWhere(req, scope)
     
-    const totalItems = await prisma.product.count({ where })
+    let totalItems
     let summary
     if (req.query.includeSummary === 'true') {
       const service = req.query.catalog_type === 'services'
-      const counts = await Promise.all((service ? [{available_for_sale:true},{available_for_sale:false},{quantity_decimals:{gt:0}}] : [{ available_for_sale: true }, { kind: 'KIT' }, { tracks_expiry: true }]).map(filter => prisma.product.count({ where: { AND: [where, filter] } })))
-      summary = service ? {total:totalItems,forSale:counts[0],notForSale:counts[1],fractional:counts[2]} : { total: totalItems, forSale: counts[0], kits: counts[1], tracksExpiry: counts[2] }
-    }
+      const groups = await prisma.product.groupBy({
+        where,
+        by: service ? ['available_for_sale', 'quantity_decimals'] : ['available_for_sale', 'kind', 'tracks_expiry'],
+        _count: { _all: true },
+      })
+      summary = service ? { total: 0, forSale: 0, notForSale: 0, fractional: 0 } : { total: 0, forSale: 0, kits: 0, tracksExpiry: 0 }
+      for (const group of groups) {
+        const count = group._count._all
+        summary.total += count
+        if (group.available_for_sale) summary.forSale += count
+        if (service) {
+          if (!group.available_for_sale) summary.notForSale += count
+          if (group.quantity_decimals > 0) summary.fractional += count
+        } else {
+          if (group.kind === 'KIT') summary.kits += count
+          if (group.tracks_expiry) summary.tracksExpiry += count
+        }
+      }
+      totalItems = summary.total
+    } else totalItems = await prisma.product.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
     
     const products = await prisma.product.findMany({
       where,
       include: { category: true, supplier: true, status: true },
-      orderBy: { name: 'asc' },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
       skip: (safePage - 1) * pageSize,
       take: pageSize,
     })
@@ -326,7 +344,7 @@ exports.create = async (req, res, next) => {
         if (scope) await saveServiceProfile(tx, scope, product.id, payload.schedule_profile)
         return product
       }
-      const product = scope ? await withAgendaTransaction(prismaTransaction, scope.companyId, save) : await prismaTransaction.$transaction(save)
+      const product = scope ? await withAgendaTransaction(prismaTransaction, scope.companyId, save) : await prismaTransaction.$transaction(save, CREATE_TX_OPTIONS)
       return res.status(201).json({product,purchaseLog:null})
     }
     let stock = payload.stock ?? 0
@@ -335,7 +353,7 @@ exports.create = async (req, res, next) => {
 
     // Preparar payload seguro: normalizar campos y validar
     const safePayload = { ...payload }
-    if (!safePayload.supplier_id) return res.status(400).json({ message:'El proveedor es obligatorio para bienes y kits' })
+    if (safePayload.supplier_id == null || safePayload.supplier_id === '') safePayload.supplier_id = null
     
     // Remover image_url si está vacío
     if (safePayload.image_url === '' || safePayload.image_url === null) {
@@ -348,7 +366,7 @@ exports.create = async (req, res, next) => {
     }
 
     // Validar y normalizar supplier_id: debe ser un UUID válido
-    if (safePayload.supplier_id !== undefined) {
+    if (safePayload.supplier_id != null) {
       const supplierId = String(safePayload.supplier_id).trim()
       // Validar formato UUID básico (8-4-4-4-12 caracteres hex)
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -433,11 +451,7 @@ exports.create = async (req, res, next) => {
 
       if (stock > 0 && kind !== 'KIT') {
         const snapshot=await physicalSnapshot(tx,product)
-        // supplier_id is required on Product model, but validate to ensure purchase log can be created
-        const supplierId = product.supplier_id || payload.supplier_id
-        if (!supplierId) {
-          throw new Error('supplier_id required when initial stock > 0')
-        }
+        const supplierId = product.supplier_id || null
 
         // Instante real del evento: se guarda en UTC de verdad, tal cual lo da
         // `new Date()`. Convertir a la zona configurada y volver a etiquetar
@@ -462,7 +476,7 @@ exports.create = async (req, res, next) => {
 
         // No incrementa total_purchases del proveedor: es saldo de apertura,
         // no una compra real que el proveedor haya despachado.
-        await tx.supplier.update({
+        if (supplierId) await tx.supplier.update({
           where: { id: supplierId },
           data: {
             last_order: now,
@@ -471,7 +485,7 @@ exports.create = async (req, res, next) => {
       }
 
       return { product, purchaseLog }
-    })
+    }, CREATE_TX_OPTIONS)
 
     // Si el producto inicia ya bajo mínimo (o en 0) generar / actualizar alerta
     try {
@@ -504,7 +518,7 @@ exports.getOne = async (req, res, next) => {
     if (!item || item.deleted) return res.status(404).json({ message: 'No encontrado' })
     const [withUnits]=await Units.extendProductDTO(prisma,{companyId:req.companyId},[item])
     if(withUnits.kit_components?.length)withUnits.kit_components=await bomUnitLabels(req.companyId,withUnits.kit_components)
-    if(withUnits.base_unit&&await Units.unitsEnabled(prisma,req.companyId))withUnits.base_unit_locked=await Units.productBaseLocked(prisma,{companyId:req.companyId},withUnits)
+    if(await Units.unitsEnabled(prisma,req.companyId))withUnits.base_unit_locked=await Units.productBaseLocked(prisma,{companyId:req.companyId},withUnits)
     if (req.branchId) {
       const [withBranch] = await overlayBranchStock([withUnits], req.branchId)
       return res.json(withBranch)
@@ -786,7 +800,8 @@ exports.update = async (req, res, next) => {
     }
 
     // Validar y normalizar supplier_id: debe ser un UUID válido
-    if (safePayload.supplier_id !== undefined) {
+    if (safePayload.supplier_id === '' || safePayload.supplier_id === null) safePayload.supplier_id = null
+    if (safePayload.supplier_id != null) {
       const supplierId = String(safePayload.supplier_id).trim()
       // Validar formato UUID básico (8-4-4-4-12 caracteres hex)
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -809,7 +824,7 @@ exports.update = async (req, res, next) => {
       }
     }
 
-    if (safePayload.supplier_id !== undefined && !await prisma.supplier.findFirst({where:{id:safePayload.supplier_id,company_id:req.companyId,deleted:false}})) return res.status(400).json({message:'Proveedor no encontrado en esta empresa'})
+    if (safePayload.supplier_id != null && !await prisma.supplier.findFirst({where:{id:safePayload.supplier_id,company_id:req.companyId,deleted:false}})) return res.status(400).json({message:'Proveedor no encontrado en esta empresa'})
     // stock y min_stock del formulario aplican a LA SUCURSAL activa, no al espejo global
     const branchStockValue = safePayload.stock
     const branchMinValue = safePayload.min_stock
@@ -1547,6 +1562,13 @@ async function updateAverageCost(tx, product, qty, unitCost, corriente, commerci
 exports.registerIncomingMerchandise = async (req, res, next) => {
   try {
     const body = req.body || {}
+    if(body.source!=null&&!['PURCHASE','INITIAL','PRODUCTION'].includes(body.source))throw Object.assign(new Error('Origen de entrada inválido'),{status:400})
+    if(['INITIAL','PRODUCTION'].includes(body.source)){
+      if(!req.user?.sub)throw Object.assign(new Error('Inicia sesión'),{status:401})
+      const scope={companyId:req.companyId,branchId:requireBranch(req),userId:req.user.sub}
+      const result=await prismaTransaction.$transaction(tx=>require('../../services/ownReceipts').registerOwnReceipt(tx,scope,body),CREATE_TX_OPTIONS)
+      return res.json(result)
+    }
     const { supplier_id, items, notes, location_id, is_initial_load } = body
     // Carga de saldo de apertura (nuevo cliente/base) vs. compra operativa:
     // mismo endpoint, distinta clasificación contable/analítica.
@@ -1722,11 +1744,6 @@ exports.registerIncomingMerchandise = async (req, res, next) => {
       // Verify all products belong to the supplier
       for (const product of products) {
         assertPhysicalItem(product)
-        if (product.supplier_id !== supplier_id) {
-          const err = new Error(`El producto ${product.name} no pertenece al proveedor seleccionado`)
-          err.status = 400
-          throw err
-        }
         if (product.kind === 'KIT') {
           const err = new Error(
             `No se puede registrar entrada de mercancía sobre el kit "${product.name}". Registra los componentes por separado.`

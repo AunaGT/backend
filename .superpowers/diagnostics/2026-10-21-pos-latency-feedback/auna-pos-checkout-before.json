@@ -1,0 +1,219 @@
+{
+  "scope": "controller-only; excludes HTTP auth, unit preview, commit and ticket",
+  "lines": 1,
+  "rolledBack": true,
+  "controllerMs": 15529.61,
+  "sqlStatements": 100,
+  "queries": [
+    {
+      "label": "SELECT products",
+      "count": 32,
+      "sqlMs": 3669
+    },
+    {
+      "label": "UPDATE alerts",
+      "count": 1,
+      "sqlMs": 1005
+    },
+    {
+      "label": "SELECT sales",
+      "count": 6,
+      "sqlMs": 990
+    },
+    {
+      "label": "SELECT transaction",
+      "count": 4,
+      "sqlMs": 712
+    },
+    {
+      "label": "SELECT product_bom_lines",
+      "count": 6,
+      "sqlMs": 676
+    },
+    {
+      "label": "SELECT alert_types",
+      "count": 1,
+      "sqlMs": 518
+    },
+    {
+      "label": "SELECT product_stocks",
+      "count": 3,
+      "sqlMs": 515
+    },
+    {
+      "label": "SELECT cash_register_sessions",
+      "count": 3,
+      "sqlMs": 498
+    },
+    {
+      "label": "SELECT system_settings",
+      "count": 4,
+      "sqlMs": 496
+    },
+    {
+      "label": "SELECT product_stock_locations",
+      "count": 2,
+      "sqlMs": 354
+    },
+    {
+      "label": "SELECT sale_statuses",
+      "count": 2,
+      "sqlMs": 335
+    },
+    {
+      "label": "SELECT branches",
+      "count": 2,
+      "sqlMs": 333
+    },
+    {
+      "label": "SELECT statuses",
+      "count": 2,
+      "sqlMs": 314
+    },
+    {
+      "label": "SELECT alert_priorities",
+      "count": 1,
+      "sqlMs": 289
+    },
+    {
+      "label": "SELECT payment_methods",
+      "count": 2,
+      "sqlMs": 243
+    },
+    {
+      "label": "INSERT product_stocks",
+      "count": 2,
+      "sqlMs": 236
+    },
+    {
+      "label": "SELECT product_lots",
+      "count": 1,
+      "sqlMs": 225
+    },
+    {
+      "label": "INSERT sales",
+      "count": 1,
+      "sqlMs": 223
+    },
+    {
+      "label": "INSERT stock_movements",
+      "count": 1,
+      "sqlMs": 216
+    },
+    {
+      "label": "SELECT stock_movements",
+      "count": 1,
+      "sqlMs": 201
+    },
+    {
+      "label": "UPDATE product_lots",
+      "count": 1,
+      "sqlMs": 201
+    },
+    {
+      "label": "SELECT sale_items",
+      "count": 1,
+      "sqlMs": 198
+    },
+    {
+      "label": "WITH product_stocks",
+      "count": 1,
+      "sqlMs": 197
+    },
+    {
+      "label": "INSERT sale_items",
+      "count": 1,
+      "sqlMs": 196
+    },
+    {
+      "label": "SELECT cash_registers",
+      "count": 1,
+      "sqlMs": 188
+    },
+    {
+      "label": "SELECT stock_reservations",
+      "count": 1,
+      "sqlMs": 187
+    },
+    {
+      "label": "WITH product_stock_locations",
+      "count": 1,
+      "sqlMs": 180
+    },
+    {
+      "label": "SELECT hardware_workstations",
+      "count": 1,
+      "sqlMs": 175
+    },
+    {
+      "label": "SELECT company_payment_methods",
+      "count": 1,
+      "sqlMs": 174
+    },
+    {
+      "label": "UPDATE sale_items",
+      "count": 1,
+      "sqlMs": 174
+    },
+    {
+      "label": "SELECT sale_dtes",
+      "count": 1,
+      "sqlMs": 171
+    },
+    {
+      "label": "INSERT sale_dtes",
+      "count": 1,
+      "sqlMs": 171
+    },
+    {
+      "label": "INSERT sale_history",
+      "count": 1,
+      "sqlMs": 170
+    },
+    {
+      "label": "SELECT hardware_drawer_policies",
+      "count": 1,
+      "sqlMs": 168
+    },
+    {
+      "label": "UPDATE sales",
+      "count": 1,
+      "sqlMs": 167
+    },
+    {
+      "label": "BEGIN transaction",
+      "count": 2,
+      "sqlMs": 164
+    },
+    {
+      "label": "SELECT users",
+      "count": 1,
+      "sqlMs": 163
+    },
+    {
+      "label": "SET transaction",
+      "count": 1,
+      "sqlMs": 161
+    },
+    {
+      "label": "INSERT product_stock_locations",
+      "count": 1,
+      "sqlMs": 154
+    },
+    {
+      "label": "COMMIT transaction",
+      "count": 1,
+      "sqlMs": 98
+    },
+    {
+      "label": "ROLLBACK transaction",
+      "count": 1,
+      "sqlMs": 86
+    },
+    {
+      "label": "DEALLOCATE transaction",
+      "count": 1,
+      "sqlMs": 84
+    }
+  ]
+}

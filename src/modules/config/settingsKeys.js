@@ -12,6 +12,6 @@ async function historyKeys(user,companyId){
     hasPerm(user,'accounting.view')?getCompanyModuleBlock(companyId,'accounting'):true,
     hasPerm(user,'products.view')?getCompanyModuleBlock(companyId,'inventory'):true,
   ])
-  return [...GENERAL_SETTING_KEYS,...(!accounting?['accounting.defaultAccounts']:[]),...(!inventory?['inventory.barcode_label_layout','inventory.shelf_price_label_layout']:[])]
+  return [...GENERAL_SETTING_KEYS,...(hasPerm(user,'document_templates.view')?['invoices.appearance']:[]),...(!accounting?['accounting.defaultAccounts']:[]),...(!inventory?['inventory.barcode_label_layout','inventory.shelf_price_label_layout']:[])]
 }
 module.exports={GENERAL_SETTING_KEYS,historyKeys}

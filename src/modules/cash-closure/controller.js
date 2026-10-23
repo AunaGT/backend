@@ -68,7 +68,7 @@ exports.validateStocks = async (req, res, next) => {
           id: p.id,
           name: p.name,
           category: p.category.name,
-          supplier: p.supplier.name,
+          supplier: p.supplier?.name || 'Sin proveedor habitual',
           current_stock: stockByProduct.get(p.id) ?? 0,
           barcode: p.barcode,
           status: p.status.name

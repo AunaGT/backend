@@ -32,6 +32,7 @@ async function ensureBranchStockRows(tx, productIds, branchId) {
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return
   await lockPhysicalProducts(client, ids, b)
+  if(require('./checkoutContext').checkoutEnsuredRows(client,ids,b))return
   await client.$executeRaw`
     INSERT INTO product_stocks (id, product_id, branch_id, stock, min_stock)
     SELECT gen_random_uuid(), p.id, ${b}::uuid, 0, 0
@@ -39,6 +40,7 @@ async function ensureBranchStockRows(tx, productIds, branchId) {
     WHERE p.id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
     ON CONFLICT (product_id, branch_id) DO NOTHING
   `
+  require('./checkoutContext').checkoutEnsuredRows(client,ids,b,true)
 }
 
 async function sumActiveReservedQty(tx, productId, branchId) {
@@ -66,6 +68,8 @@ async function lockProductsForUpdate(tx, productIds, branchId) {
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   const out = new Map()
   if (ids.length === 0) return out
+  const cached=require('./checkoutContext').checkoutBranchRows(tx,ids,b)
+  if(cached)return cached
 
   await ensureBranchStockRows(tx, ids, b)
   const rows = await tx.$queryRaw`
@@ -78,6 +82,7 @@ async function lockProductsForUpdate(tx, productIds, branchId) {
   for (const row of rows) {
     out.set(String(row.id), row)
   }
+  require('./checkoutContext').checkoutBranchRows(tx,ids,b,rows)
   return out
 }
 
@@ -117,7 +122,8 @@ async function getAvailabilityBatch(productIds, tx, { excludeDocumentId, branchI
   const ids = [...new Set(productIds.filter(Boolean))]
   if (ids.length === 0) return {}
 
-  const products = await client.product.findMany({
+  const cached=require('./checkoutContext').checkoutProducts(client,ids,{branchId:b}),stocks=require('./checkoutContext').checkoutBranchRows(client,ids,b)
+  const products = cached&&stocks?ids.map(id=>({id,branch_stocks:[{stock:stocks.get(id).stock}]})):await client.product.findMany({
     where: { id: { in: ids } },
     select: {
       id: true,

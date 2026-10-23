@@ -481,6 +481,7 @@ exports.listLines = async (req, res, next) => {
     if (!session) return res.status(404).json({ message: 'Sesión no encontrada' })
 
     const dc = scopeDoubleCount(session.scope_json)
+    if(req.query.line_id&&session.branch_id!==req.branchId)return res.status(404).json({message:'Línea no encontrada en esta sucursal'})
 
     const take = Math.min(Number(req.query.limit) || 40, 200)
     const skip = Number(req.query.offset) || 0
@@ -488,6 +489,10 @@ exports.listLines = async (req, res, next) => {
     const pendingOnly = ['1', 'true', 'yes'].includes(String(req.query.pending || '').toLowerCase())
 
     const where = { session_id: id }
+    if(req.query.line_id){
+      if(!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(String(req.query.line_id)))return res.status(400).json({message:'Línea inválida'})
+      where.id=String(req.query.line_id)
+    }
     const andFilters = []
     if (q) {
       andFilters.push({

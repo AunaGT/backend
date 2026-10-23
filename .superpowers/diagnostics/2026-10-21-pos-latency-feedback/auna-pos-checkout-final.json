@@ -1,0 +1,220 @@
+{
+  "scope": "controller-only; excludes HTTP auth, unit preview, commit and ticket",
+  "lines": 1,
+  "rolledBack": true,
+  "suppressedMessages": 0,
+  "controllerMs": 15278.6,
+  "sqlStatements": 94,
+  "queries": [
+    {
+      "label": "SELECT products",
+      "count": 26,
+      "sqlMs": 3414
+    },
+    {
+      "label": "SELECT sales",
+      "count": 6,
+      "sqlMs": 967
+    },
+    {
+      "label": "SELECT product_stock_locations",
+      "count": 2,
+      "sqlMs": 691
+    },
+    {
+      "label": "SELECT transaction",
+      "count": 4,
+      "sqlMs": 670
+    },
+    {
+      "label": "SELECT product_bom_lines",
+      "count": 6,
+      "sqlMs": 667
+    },
+    {
+      "label": "SELECT statuses",
+      "count": 2,
+      "sqlMs": 587
+    },
+    {
+      "label": "SELECT product_stocks",
+      "count": 3,
+      "sqlMs": 557
+    },
+    {
+      "label": "SELECT system_settings",
+      "count": 4,
+      "sqlMs": 548
+    },
+    {
+      "label": "SELECT cash_register_sessions",
+      "count": 3,
+      "sqlMs": 496
+    },
+    {
+      "label": "UPDATE sale_items",
+      "count": 1,
+      "sqlMs": 475
+    },
+    {
+      "label": "SELECT branches",
+      "count": 2,
+      "sqlMs": 372
+    },
+    {
+      "label": "SELECT sale_statuses",
+      "count": 2,
+      "sqlMs": 366
+    },
+    {
+      "label": "SELECT alert_types",
+      "count": 1,
+      "sqlMs": 354
+    },
+    {
+      "label": "SELECT payment_methods",
+      "count": 2,
+      "sqlMs": 258
+    },
+    {
+      "label": "INSERT product_stocks",
+      "count": 2,
+      "sqlMs": 254
+    },
+    {
+      "label": "INSERT product_stock_locations",
+      "count": 1,
+      "sqlMs": 248
+    },
+    {
+      "label": "INSERT sales",
+      "count": 1,
+      "sqlMs": 234
+    },
+    {
+      "label": "WITH product_stock_locations",
+      "count": 1,
+      "sqlMs": 234
+    },
+    {
+      "label": "INSERT sale_dtes",
+      "count": 1,
+      "sqlMs": 226
+    },
+    {
+      "label": "INSERT stock_movements",
+      "count": 1,
+      "sqlMs": 210
+    },
+    {
+      "label": "SELECT alert_priorities",
+      "count": 1,
+      "sqlMs": 205
+    },
+    {
+      "label": "SELECT stock_movements",
+      "count": 1,
+      "sqlMs": 200
+    },
+    {
+      "label": "SELECT sale_dtes",
+      "count": 1,
+      "sqlMs": 198
+    },
+    {
+      "label": "WITH product_stocks",
+      "count": 1,
+      "sqlMs": 195
+    },
+    {
+      "label": "INSERT sale_items",
+      "count": 1,
+      "sqlMs": 193
+    },
+    {
+      "label": "UPDATE sales",
+      "count": 1,
+      "sqlMs": 190
+    },
+    {
+      "label": "INSERT sale_history",
+      "count": 1,
+      "sqlMs": 188
+    },
+    {
+      "label": "SELECT sale_items",
+      "count": 1,
+      "sqlMs": 181
+    },
+    {
+      "label": "SELECT hardware_drawer_policies",
+      "count": 1,
+      "sqlMs": 181
+    },
+    {
+      "label": "UPDATE alerts",
+      "count": 1,
+      "sqlMs": 180
+    },
+    {
+      "label": "UPDATE product_lots",
+      "count": 1,
+      "sqlMs": 168
+    },
+    {
+      "label": "SELECT users",
+      "count": 1,
+      "sqlMs": 166
+    },
+    {
+      "label": "SELECT company_payment_methods",
+      "count": 1,
+      "sqlMs": 164
+    },
+    {
+      "label": "SELECT hardware_workstations",
+      "count": 1,
+      "sqlMs": 162
+    },
+    {
+      "label": "SELECT product_lots",
+      "count": 1,
+      "sqlMs": 160
+    },
+    {
+      "label": "SET transaction",
+      "count": 1,
+      "sqlMs": 159
+    },
+    {
+      "label": "SELECT stock_reservations",
+      "count": 1,
+      "sqlMs": 158
+    },
+    {
+      "label": "BEGIN transaction",
+      "count": 2,
+      "sqlMs": 155
+    },
+    {
+      "label": "SELECT cash_registers",
+      "count": 1,
+      "sqlMs": 153
+    },
+    {
+      "label": "DEALLOCATE transaction",
+      "count": 1,
+      "sqlMs": 89
+    },
+    {
+      "label": "ROLLBACK transaction",
+      "count": 1,
+      "sqlMs": 84
+    },
+    {
+      "label": "COMMIT transaction",
+      "count": 1,
+      "sqlMs": 83
+    }
+  ]
+}

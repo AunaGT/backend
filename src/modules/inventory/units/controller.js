@@ -29,3 +29,7 @@ exports.preview=handler(async(req,res,scope)=>{
   await units.assertEnabled(prisma,scope)
   res.json(await transaction(async tx=>{const product=await units.scopedProduct(tx,scope,req.params.id);return units.resolveUnitLine(tx,scope,product,req.body,{operation:req.body.operation||'SALE'})}))
 })
+exports.previewBatch=handler(async(req,res,scope)=>{
+ const {parsePreviewBatch,previewUnitBatch}=require('./previewBatch'),input=parsePreviewBatch(req.body)
+ res.json(await require('../../../utils/requestTiming').measureRequestPhase(req,'unit_prepare',()=>transaction(tx=>previewUnitBatch(tx,scope,input))))
+})

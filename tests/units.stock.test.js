@@ -147,6 +147,7 @@ function assemblyFixture({measured=true,enabled=true,shortLots=false}={}) {
     $queryRaw:async(sql,...args)=>{
       assert(active,'Physical writes and FEFO must share the caller transaction')
       const s=String(sql),v=args.flatMap(x=>x?.values||[])
+      if(s.includes('UPDATE product_lots')){const rows=[];for(let i=0;i<v.length;i+=3){const [id,qty,product_id]=v.slice(i,i+3),row=state.lots.find(l=>l.id===id&&l.product_id===product_id);if(row&&dec(row.qty_remaining).gte(qty)){row.qty_remaining=dec(row.qty_remaining).sub(qty).toFixed();rows.push({id})}}return rows}
       if(s.includes('SELECT l.id'))return[{id:'KITLOC'}]
       if(s.includes('SELECT psl.product_id'))return ['L1','L2'].filter(location=>dec(state.locations['c|'+location]).gt(0)).map(location_id=>({product_id:'c',location_id,stock:state.locations['c|'+location_id]}))
       if(s.includes('UPDATE product_stock_locations')){

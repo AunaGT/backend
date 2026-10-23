@@ -81,14 +81,50 @@ async function fetchLogoBuffer(logoUrl) {
  * Buffer + content-type para servir logo vía HTTP (frontend PDFs).
  * @returns {Promise<{ buffer: Buffer, contentType: string } | null>}
  */
-async function fetchLogoForHttp(logoUrl) {
+async function fetchBoundedLogo(url, {signal,maxBytes}) {
+  if(signal?.aborted)return null
+  let reader,image
+  const cancelImage=()=>image?.destroy()
+  try {
+    const response=await fetch(url,{signal})
+    if(!response.ok||Number(response.headers.get('content-length'))>maxBytes){await response.body?.cancel();return null}
+    if(!response.body)return null
+    reader=response.body.getReader()
+    const chunks=[];let size=0
+    while(true){
+      const {done,value}=await reader.read()
+      if(done)break
+      size+=value.byteLength
+      if(signal?.aborted||size>maxBytes){await reader.cancel();return null}
+      chunks.push(value)
+    }
+    if(!size||signal?.aborted)return null
+    const raw=Buffer.concat(chunks,size)
+    image=sharp(raw,{limitInputPixels:16777216,...(isSvgBuffer(raw)?{density:150}:{})})
+    signal?.addEventListener('abort',cancelImage,{once:true})
+    const meta=await image.metadata()
+    if(signal?.aborted)return null
+    const raster=meta.format==='jpeg'||meta.format==='png'
+      ?{buffer:raw,contentType:meta.format==='jpeg'?'image/jpeg':'image/png'}
+      :{buffer:await image.resize({width:512,height:512,fit:'inside',withoutEnlargement:true}).png().toBuffer(),contentType:'image/png'}
+    if(signal?.aborted||!raster.buffer.length||raster.buffer.length>maxBytes)return null
+    logoBufferCache.set(url,{...raster,expiresAt:Date.now()+LOGO_CACHE_TTL_MS})
+    return raster
+  } catch {return null}
+  finally {signal?.removeEventListener('abort',cancelImage);reader?.releaseLock();image?.destroy()}
+}
+
+async function fetchLogoForHttp(logoUrl, options) {
   const url = logoUrl != null ? String(logoUrl).trim() : ''
-  if (!url) return null
+  if (!url||options?.signal?.aborted) return null
 
   const cached = logoBufferCache.get(url)
   if (cached && cached.expiresAt > Date.now()) {
+    if(options&&cached.buffer.length>options.maxBytes)return null
     return { buffer: cached.buffer, contentType: cached.contentType }
   }
+
+  if(options)return fetchBoundedLogo(url,options)
 
   const raw = await downloadRawLogoBuffer(url)
   const raster = await rasterizeLogoBuffer(raw)

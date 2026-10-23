@@ -272,7 +272,7 @@ async function applyLocationDeltas(tx, deltas, ctx = {}) {
   }
 
   const consumedLots = new Map()
-  if (ctx.reason === 'KIT_ASSEMBLE' && ctx.consumeLots === true) {
+  if (['KIT_ASSEMBLE','PRODUCTION'].includes(ctx.reason) && ctx.consumeLots === true) {
     const stockMap = new Map(), byLocation = new Map()
     for (const row of updated) {
       if (decimal(row.qty).gte(0)) continue

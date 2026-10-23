@@ -18,7 +18,7 @@ const {
   VALID_CHANNELS,
 } = require('../../services/priceResolution')
 const { nextDocumentReference } = require('../../services/referenceGenerator')
-const { targetBranch, branchWhere } = require('../../middlewares/tenant')
+const { targetBranch, branchWhere,requireCompany,requireBranch,hasPerm } = require('../../middlewares/tenant')
 const { getCompanyModuleBlock } = require('./access')
 const {publicProfileSelect,publicConditionsFromRow,publicServiceConditions,quoteAgendaContext}=require('../appointments')
 
@@ -490,10 +490,16 @@ exports.getById = async (req, res, next) => {
     const where = { ...quoteWhereIdOrReference(req.params.id), branch: { company_id: req.companyId } }
     const doc = await prisma.commercialDocument.findFirst({
       where,
-      include: QUOTE_DETAIL_INCLUDE,
+      include: {...QUOTE_DETAIL_INCLUDE,documentSales:{select:{sale_id:true}}},
     })
     if (!doc) return res.status(404).json({ message: 'Cotización no encontrada' })
-    res.json({...doc,...await quoteAgendaContext(prisma,req,doc)})
+    const {documentSales,...publicDoc}=doc
+    let directSale=null
+    if(documentSales?.length&&(hasPerm(req.user,'sales.create')||hasPerm(req.user,'sales.view_detail'))&&req.companyModules?.some(m=>m.code==='sales'&&m.effectiveEnabled)&&req.branchId===doc.branch_id){
+      const sale=await prisma.sale.findFirst({where:{id:documentSales[0].sale_id,branch_id:doc.branch_id,branch:{company_id:req.companyId},...(!hasPerm(req.user,'sales.view_detail')?{created_by:req.user.sub}:{})},select:{id:true,reference:true,status:{select:{name:true}}}})
+      if(sale)directSale={id:sale.id,reference:sale.reference,status:require('../sales/commercialState').commercialState(sale.status.name)}
+    }
+    res.json({...publicDoc,hasDirectSale:!!documentSales?.length,directSale,...await quoteAgendaContext(prisma,req,doc)})
   } catch (e) {
     next(e)
   }
@@ -723,6 +729,10 @@ exports.updateStatus = async (req, res, next) => {
     const userId = user?.sub || null
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      if(existing.status==='ACCEPTED'){
+        const locked=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:existing.branch_id},existing.id)
+        if(locked.status!==existing.status||locked.documentSales?.length)throw Object.assign(new Error('La cotización ya cambió o tiene una venta vinculada. Continúa desde su venta.'),{status:409,code:'QUOTE_ALREADY_LINKED'})
+      }
       if (newStatus === 'SENT') {
         await ensurePublicToken(tx, existing.id)
         await applyQuoteSoftHold(tx, existing, userId, req.companyId)
@@ -741,6 +751,13 @@ exports.updateStatus = async (req, res, next) => {
   } catch (e) {
     next(e)
   }
+}
+
+exports.convertToSale=async(req,res,next)=>{
+  try{
+    const scope={companyId:requireCompany(req),branchId:requireBranch(req),userId:req.user.sub,permissions:req.user.permissions||[],isAdmin:hasPerm({...req.user,permissions:[]},'sales.create')}
+    res.json(await require('./saleDraft').createQuoteSaleDraft(prismaTransaction,scope,req.params.id))
+  }catch(e){next(e)}
 }
 
 exports.convertToOrder = async (req, res, next) => {
@@ -775,7 +792,7 @@ exports.convertToOrder = async (req, res, next) => {
     const order = await prismaTransaction.$transaction(async (tx) => {
       quote=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:quote.branch_id},quote.id)
       if(quote.status!=='ACCEPTED') throw Object.assign(new Error('La cotización ya no está aceptada'),{status:409})
-      if(quote.convertedChildren.length||quote.quoted_engagement) throw Object.assign(new Error('La cotización ya tiene un pedido o contratación vinculada'),{status:409,code:'QUOTE_ALREADY_LINKED'})
+      if(quote.convertedChildren.length||quote.quoted_engagement||quote.documentSales?.length) throw Object.assign(new Error('La cotización ya tiene un pedido, contratación o venta vinculada'),{status:409,code:'QUOTE_ALREADY_LINKED'})
       if (quote.lines.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
       await releaseByDocument(tx, quote.id, { status: 'RELEASED' })
       // El pedido hereda la sucursal de la cotización

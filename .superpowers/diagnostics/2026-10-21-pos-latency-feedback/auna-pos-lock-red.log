@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: physical lock validates fresh scoped products with only one product read after the lock
+not ok 1 - physical lock validates fresh scoped products with only one product read after the lock
+  ---
+  duration_ms: 3.256858
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/physical-lock-read-performance.test.js:8:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   'read',
+        'lock',
+        'read'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'lock'
+    1: 'read'
+  actual:
+    0: 'read'
+    1: 'lock'
+    2: 'read'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/physical-lock-read-performance.test.js:11:9)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: physical lock rejects missing/foreign products and services before callers can write
+ok 2 - physical lock rejects missing/foreign products and services before callers can write
+  ---
+  duration_ms: 0.894811
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 109.946634

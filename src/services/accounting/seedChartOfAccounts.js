@@ -105,6 +105,7 @@ async function seedChartOfAccounts(tx, companyId, {actorId=null}={}) {
   const {setSettingsActor,writeSettings}=require('../settingsRevision')
   await setSettingsActor(tx,{actorId,source:'accounting-seed'})
   await writeSettings(tx,{companyId,changes:{'accounting.defaultAccounts':{value:JSON.stringify(mergedDefaults),type:'json'}},expectedRevisions:{'accounting.defaultAccounts':existingDefaults?existingDefaults.revision:0}})
+  await require('../payroll/prepareDeductions').prepareDeductions(tx, companyId, actorId)
 }
 
 module.exports = { seedChartOfAccounts, ACCOUNTS_SEED, DEFAULT_ACCOUNT_CODES }

@@ -132,6 +132,7 @@ async function generatePayslips(tx, run, overrides = {}) {
   if (employees.length === 0) fail(400, 'La planilla no tiene empleados activos en el período')
 
   const ids = employees.map((e) => e.id)
+  const manualDeductions = await require('../../../services/payroll/deductions').eligibleDeductions(tx, { companyId: run.company_id, branchId: run.branch_id, run, employeeIds: ids })
 
   const overtimeRows = await tx.attendance.groupBy({
     by: ['employee_id'],
@@ -168,6 +169,7 @@ async function generatePayslips(tx, run, overrides = {}) {
       rates,
       overtimeHours: override != null && override !== '' ? Number(override) : (overtimeByEmployee.get(employee.id) ?? 0),
       advances: advancesByEmployee.get(employee.id) || [],
+      deductions: manualDeductions.filter(row => row.employee_id === employee.id),
       ytd: ytdByEmployee.get(employee.id) || { taxable: 0, igss: 0, isr: 0 },
     })
     if (slip.lines.length === 0) continue // no le corresponde nada en este período
@@ -379,14 +381,18 @@ exports.remove = async (req, res, next) => {
     const id = toUuid(req.params.id, 'Planilla no encontrada')
     // La sucursal también acota: el permiso es de empresa (Role) pero el acceso a
     // sucursal es aparte (UserBranch).
-    const run = await prisma.payrollRun.findFirst({
-      where: { id, company_id: companyId, branch_id: requireBranch(req) },
-    })
-    if (!run) fail(404, 'Planilla no encontrada')
-    if (run.status !== 'BORRADOR') fail(409, 'Solo se puede eliminar una planilla en borrador')
-    // Reclamo atómico: si alguien la confirmó entre la lectura y el borrado, no se borra.
-    const claim = await prisma.payrollRun.deleteMany({ where: { id: run.id, status: 'BORRADOR' } })
-    if (claim.count !== 1) fail(409, 'La planilla cambió de estado, recarga la página')
+    await prismaTransaction.$transaction(async tx => {
+      const run = await lockPayrollRun(tx, { id, companyId, branchId: requireBranch(req) })
+      if (run.status !== 'BORRADOR') fail(409, 'Solo se puede eliminar una planilla en borrador')
+      if (await tx.employeeDeduction.count({ where: { target_run_id: id, status: 'PENDIENTE' } })) fail(409, 'Esta nómina tiene descuentos programados. Reprográmalos o cancélalos antes de eliminarla')
+      const cancelled = await tx.employeeDeduction.findMany({ where: { target_run_id: id, status: 'CANCELADO' } })
+      for (const row of cancelled) {
+        const after = await tx.employeeDeduction.update({ where: { id: row.id }, data: { target_run_id: null, revision: { increment: 1 } } })
+        await require('../../../services/payroll/deductions').auditDeduction(tx, { companyId, userId: req.user?.sub }, 'DEDUCTION_TARGET_REMOVED', row, after)
+      }
+      const claim = await tx.payrollRun.deleteMany({ where: { id: run.id, status: 'BORRADOR' } })
+      if (claim.count !== 1) fail(409, 'La planilla cambió de estado, recarga la página')
+    }, TX_OPTIONS)
     res.json({ ok: true })
   } catch (e) { next(e) }
 }

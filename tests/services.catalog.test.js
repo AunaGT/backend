@@ -13,8 +13,10 @@ test('restoring an archived service is a new catalog operation and remains block
 
 test('service filtering is applied before pagination and never overlays physical stock', async () => {
   let selection
-  const counts = []
-  const prisma = { ...enabled, product: { count: async ({ where }) => { counts.push(where); return counts.length === 1 ? 11 : 3 },
+  const prisma = { ...enabled, product: { groupBy: async () => [
+    {available_for_sale:true,quantity_decimals:2,_count:{_all:3}},
+    {available_for_sale:false,quantity_decimals:0,_count:{_all:8}},
+  ],
     findMany: async args => { selection = args; return [{ id:'s',name:'Asesoría',kind:'SERVICE',stock:0,service_unit_label:'Hora',quantity_decimals:2 }] } },
     productStock: { findMany: async () => { assert.fail('Services must not query branch stock') } } }
   await withMocks({ [model]: { prisma, prismaTransaction: prisma } }, target, async controller => {
@@ -24,7 +26,7 @@ test('service filtering is applied before pagination and never overlays physical
     assert.equal(selection.where.company_id, 'A')
     assert.equal(selection.take, 12)
     assert.equal(res.body.totalItems, 11)
-    assert.deepEqual(res.body.summary, { total:11,forSale:3,notForSale:3,fractional:3 })
+    assert.deepEqual(res.body.summary, { total:11,forSale:3,notForSale:8,fractional:3 })
     assert.equal(res.body.items[0].kind,'SERVICE')
   })
 })
@@ -34,7 +36,7 @@ test('service creation requires no supplier, writes no stock and rejects forged 
   const prisma = { ...enabled, productCategory: { findFirst: async () => ({id:1,company_id:'A'}) }, stockStatus: { findFirst:async()=>({id:1}) },
     product: { create:async({data})=>{created.push(data);return{id:'s',...data}} },
     productStock:{findMany:async()=>{assert.fail('No physical row for a service')}},
-    $transaction:async run=>run(prisma) }
+    $transaction:async(run,options)=>{const result=await run(prisma);if((options?.timeout??5000)<6000)throw Object.assign(new Error('Transaction expired after 5000ms'),{code:'P2028'});return result} }
   const payload = { name:'Asesoría',kind:'SERVICE',category_id:1,service_unit_label:'Hora',quantity_decimals:2,price:'100',available_for_sale:true }
   await withMocks({[model]:{prisma,prismaTransaction:prisma}},target,async controller=>{
     const res = jsonResponse()
@@ -56,15 +58,15 @@ test('disabled services cannot be created and physical type cannot be converted 
     await assert.rejects(controller.update({companyId:'A',branchId:'B',params:{id:'b'},body:{kind:'SERVICE'}},jsonResponse(),error=>{throw error}),/tipo|convertir/i)
   })
 })
-test('service prices and metadata are bounded and goods still require a scoped supplier',async()=>{
-  const prisma={...enabled,stockStatus:{findFirst:async()=>({id:1})},productCategory:{findFirst:async()=>({id:1})},product:{create:async()=>assert.fail('Invalid input must not write')},$transaction:async run=>run(prisma)}
+test('service prices and metadata are bounded and an informed supplier must belong to the company',async()=>{
+  const prisma={...enabled,stockStatus:{findFirst:async()=>({id:1})},supplier:{findFirst:async()=>null},productCategory:{findFirst:async()=>({id:1})},product:{create:async()=>assert.fail('Invalid input must not write')},$transaction:async run=>run(prisma)}
   const service={name:'Asesoría',kind:'SERVICE',category_id:1,service_unit_label:'Hora',quantity_decimals:2,price:'100'}
   await withMocks({[model]:{prisma,prismaTransaction:prisma}},target,async controller=>{
     for(const invalid of [{price:'10000000000'},{price:'1.001'},{name:'x'.repeat(151)},{bom_components:[]}]){
       await assert.rejects(controller.create({companyId:'A',branchId:'B',body:{...service,...invalid}},jsonResponse(),error=>{throw error}),error=>error.status===400)
     }
     const res=jsonResponse()
-    await controller.create({companyId:'A',branchId:'B',body:{name:'Bien',kind:'STANDARD',category_id:1,price:100}},res,error=>{throw error})
+    await controller.create({companyId:'A',branchId:'B',body:{name:'Bien',kind:'STANDARD',category_id:1,price:100,supplier_id:'00000000-0000-4000-8000-000000000001'}},res,error=>{throw error})
     assert.equal(res.statusCode,400)
     assert.match(res.body.message,/proveedor/i)
   })

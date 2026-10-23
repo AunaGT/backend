@@ -2,7 +2,7 @@ const crypto=require('node:crypto'),{Prisma}=require('@prisma/client')
 const {parsePreparationInput}=require('./validation'),{encodeLabelBarcode}=require('./encoding')
 const {assertAccess,authorizedScope,productWhere,error}=require('./access')
 const Units=require('../units')
-const {resolveLabelSelection}=require('./unitSelection')
+const {resolveLabelSelection,loadLabelUnitContext,configFields}=require('./unitSelection')
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])):value
 async function prepareBarcodeLabels(db,scope,raw){
   const input=parsePreparationInput(raw),hash=crypto.createHash('sha256').update(JSON.stringify(canonical(input))).digest('hex')
@@ -19,7 +19,7 @@ async function prepareBarcodeLabels(db,scope,raw){
       if(previous){if(previous.request_hash!==hash)error(409,'REQUEST_CONFLICT','Esta petición ya se utilizó con otra selección');if(previous.snapshot.snapshotVersion===2)return previous.snapshot}
       const ids=[...new Set(input.items.map(i=>i.productId))].sort()
       await tx.$queryRaw(Prisma.sql`SELECT id FROM products WHERE company_id=${scope.companyId}::uuid AND id IN (${Prisma.join(ids.map(id=>Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`)
-      const rows=await tx.product.findMany({where:{...productWhere(scope,filter),id:{in:ids}},select:{id:true,name:true,barcode:true,kind:true,price:true,brand:true,size:true}})
+      const rows=await tx.product.findMany({where:{...productWhere(scope,filter),id:{in:ids}},select:{id:true,name:true,barcode:true,kind:true,price:true,brand:true,size:true,...configFields}})
       const byId=new Map(rows.map(p=>[p.id,p]))
       for(const id of ids)if(!byId.has(id))error(404,'PRODUCT_UNAVAILABLE','El producto ya no es un bien disponible para venta en este alcance',id)
       if(previous){
@@ -27,7 +27,8 @@ async function prepareBarcodeLabels(db,scope,raw){
         for(const p of previous.snapshot.products)if(byId.get(p.id)?.barcode!==p.barcode)error(409,'STALE_BARCODE','El código cambió; prepara una impresión nueva',p.id)
         return previous.snapshot
       }
-      const selections=await Promise.all(input.items.map(item=>resolveLabelSelection(tx,scope,byId.get(item.productId),item,unitCodes)))
+      const context=await loadLabelUnitContext(tx,scope,rows,unitCodes)
+      const selections=await Promise.all(input.items.map(item=>resolveLabelSelection(tx,scope,byId.get(item.productId),item,unitCodes,context)))
       const products=[],assignedProductIds=[],values=new Map(),bar=input.design.elements.find(e=>e.kind==='barcode')
       for(const [index,item] of input.items.entries()){
         const p=selections[index],current=p.barcode?.trim()?p.barcode:null

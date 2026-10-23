@@ -8,10 +8,11 @@ async function resolveCommercialLines(tx, scope, items, { tier = 'LIST', approve
   if (!Array.isArray(items) || !items.length) throw Object.assign(new Error('Debe incluir al menos un producto'), { status: 400 })
   const ids = [...new Set(items.map(item => String(item.product_id || '')))].sort()
   if (ids.includes('')) throw Object.assign(new Error('Producto requerido'), { status: 400 })
-  const products = await tx.product.findMany({where:{id:{in:ids},company_id:scope.companyId,deleted:false},include:{kit_components:true}})
+  const cached=require('../checkoutContext').checkoutProducts(tx,ids,scope)
+  const products = cached?[...cached.values()].filter(p=>!p.deleted):await tx.product.findMany({where:{id:{in:ids},company_id:scope.companyId,deleted:false},include:{kit_components:true}})
   const byId = new Map(products.map(product=>[String(product.id),product]))
   const enabled = products.some(p=>p.base_unit_id) || await Units.unitsEnabled(tx,scope.companyId)
-  if (enabled) {
+  if (enabled&&!cached) {
     const locks=[...new Set([...ids,...products.flatMap(p=>p.kind==='KIT'&&!p.stock_assembled?(p.kit_components||[]).map(c=>c.component_product_id):[])])].sort()
     await tx.$executeRaw`SELECT id FROM products WHERE company_id=${scope.companyId}::uuid AND id IN (${Prisma.join(locks.map(id=>Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`
     const locked=await tx.product.findMany({where:{id:{in:ids},company_id:scope.companyId,deleted:false},include:{kit_components:true}})

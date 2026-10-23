@@ -4,6 +4,8 @@ function confirmedSaleWhere(extra={}){return {AND:[{status:{name:CONFIRMED_SALE_
 function assertGenericSaleStatusChange(sale,target){
   const fail=(code,message)=>{throw Object.assign(Error(message),{code,status:409})}
   if(target==='Borrador')fail('INVALID_TRANSITION','Una venta registrada no puede convertirse en borrador')
+  if(sale.settlement_source==='MANUAL_SALE'&&sale.status?.name!==target&&!(sale.status?.name==='Completada'&&target==='Cancelada'))
+    fail('MANUAL_SALE_ACTION_REQUIRED','Gestiona este documento desde el editor de venta; no puede restaurarse con un cambio de estado')
   if((sale.origin_engagement_id||commercialState(sale.status?.name)==='DRAFT')&&sale.status?.name!==target)
     fail('ENGAGEMENT_OWNS_SALE','Gestiona esta venta desde su contratación de Agenda')
 }

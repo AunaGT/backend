@@ -100,19 +100,28 @@ function snapshotCosts(snapshot,line){
 }
 
 async function persistSalePhysicalSnapshots(tx,saleId,items,snapshots){
+  const {Prisma}=require('@prisma/client')
   const {isV2}=require('./commercial')
   const saved=await tx.saleItem.findMany({where:{sale_id:saleId},orderBy:{id:'asc'}})
   if(saved.length!==items.length)fail('Las partidas físicas no coinciden con la venta')
-  for(let index=0;index<saved.length;index++){
+  const updates=saved.map((row,index)=>{
     const cost=snapshotCosts(snapshots[index],items[index])
-    await tx.saleItem.update({where:{id:saved[index].id},data:{physical_snapshot:snapshots[index],unit_cost:cost.commercial,
-      ...(isV2(items[index])?{base_unit_cost:cost.base}:{})}})
+    return Prisma.sql`(${row.id}::int,${JSON.stringify(snapshots[index])}::jsonb,${cost.commercial}::numeric,${cost.base}::numeric,${isV2(items[index])}::boolean)`
+  })
+  for(let index=0;index<updates.length;index+=200){
+    const chunk=updates.slice(index,index+200)
+    const changed=await tx.$queryRaw`UPDATE sale_items AS s SET physical_snapshot=v.snapshot,unit_cost=v.cost,
+      base_unit_cost=CASE WHEN v.v2 THEN v.base ELSE s.base_unit_cost END
+      FROM (VALUES ${Prisma.join(chunk)}) AS v(id,snapshot,cost,base,v2)
+      WHERE s.id=v.id AND s.sale_id=${saleId}::uuid RETURNING s.id`
+    if(changed.length!==chunk.length)fail('Las partidas físicas cambiaron durante el cobro')
   }
 }
 
 async function lockCommercialProducts(tx,lines,{companyId,branchId,allowArchivedServices=false}){
   const {loadProductsWithBom}=require('../bomStock'),{lockPhysicalProducts}=require('./physical')
   const ids=[...new Set(lines.map(line=>line.product_id))]
+  if(require('../checkoutContext').checkoutProducts(tx,ids,{companyId,branchId}))return loadProductsWithBom(tx,ids,{companyId,allowArchivedServices})
   let products=await loadProductsWithBom(tx,ids,{companyId,allowArchivedServices})
   const physical=[...products.values()].filter(product=>product.kind!=='SERVICE')
   const lockedIds=[...new Set(physical.flatMap(product=>[product.id,...(product.kind==='KIT'&&!product.stock_assembled?(product.kit_components||[]).map(component=>component.component_product_id):[])]))].sort()

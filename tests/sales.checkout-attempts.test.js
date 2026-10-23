@@ -4,6 +4,18 @@ const path=require('node:path'),fs=require('node:fs')
 const target=path.resolve(__dirname,'../src/modules/sales/checkoutAttempts.js')
 const api=()=>fs.existsSync(target)?require(target):{}
 const scope={companyId:'A',branchId:'B',user:{sub:'U'}}
+test('expected missing attempt responds directly, while database failures reach the error handler',async()=>{
+ const model=require.resolve('../src/models/prisma'),controller=require.resolve('../src/modules/sales/controller')
+ let failure=null
+ await withMocks({[model]:{prisma:{sale:{findFirst:async()=>{if(failure)throw failure;return null}}}}},controller,async sales=>{
+  const res=jsonResponse();let next
+  await sales.checkoutAttempt({...scope,params:{key:'attempt'}},res,error=>{next=error})
+  assert.equal(res.statusCode,404);assert.equal(res.body.code,'CHECKOUT_NOT_OBSERVED');assert.equal(next,undefined)
+  failure=Object.assign(Error('db offline'),{code:'P1001'})
+  await sales.checkoutAttempt({...scope,params:{key:'attempt'}},jsonResponse(),error=>{next=error})
+  assert.equal(next,failure)
+ })
+})
 test('checkout hash binds money, lines and origin, not object order or decimal formatting',()=>{
  const {checkoutHash}=api();assert.equal(typeof checkoutHash,'function')
  const a={items:[{product_id:'P',qty:'1.50',price:'2.00'}],payment_method_id:1}

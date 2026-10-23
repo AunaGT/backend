@@ -7,7 +7,7 @@ function loadMiddleware(t, userQuery) {
   const modelPath = require.resolve('../src/models/prisma')
   const tenantPath = require.resolve('../src/middlewares/tenant')
   const previousModel = require.cache[modelPath], previousTenant = require.cache[tenantPath]
-  require.cache[modelPath] = { exports: { prisma: { user: { findUnique: userQuery } } } }
+  require.cache[modelPath] = { exports: { prisma: { $queryRaw:async()=>{const row=await userQuery();return row?[{...row,_session_roles:[],_session_valid:true,_password_required:false}]:[]} } } }
   delete require.cache[tenantPath]
   t.after(() => {
     if (previousModel) require.cache[modelPath] = previousModel; else delete require.cache[modelPath]

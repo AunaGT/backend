@@ -11,8 +11,8 @@ function commercialStore() {
   const box = { id: 'BOX', product_id: 'P', company_id: 'A', active: true, version: 1, name: 'Caja', label: 'caja',
     quantity_decimals: 0, factor: '24', sale_enabled: true, price: '40', price_wholesale: '30' }
   const tx = { $executeRaw: async () => 1, systemSetting: { findUnique: async () => ({key:'inventory_units_enabled',value:'true'}) },
-    product: { findMany: async () => [product], findFirst: async () => product }, measureUnit: { findFirst: async () => unit },
-    productPresentation: { findFirst: async ({where}) => where.id === box.id && box.active ? box : null } }
+    product: { findMany: async () => [product], findFirst: async () => product }, measureUnit: { findFirst: async () => unit, findMany:async()=>[unit] },
+    productPresentation: { findFirst: async ({where}) => where.id === box.id && box.active ? box : null, findMany:async()=>box.active?[box]:[] } }
   return {tx,product,box}
 }
 
@@ -231,6 +231,7 @@ test('the real POS transaction deducts aggregate base stock once and persists ac
   assert.deepEqual(f.state.saleItems.map(line=>line.physical_snapshot.entries.map(e=>[e.location_id,e.base_qty,e.lots.map(l=>[l.lot_code,l.qty])])),[
     [['L1','3',[['A','3']]],['L2','4',[['B','4']]]],[['L2','1',[['B','1']]]]])
   assert.deepEqual(f.state.lots.map(l=>l.qty_remaining),['0','2'])
+  assert.deepEqual(f.state.outbox,[{sale_id:f.state.sales[0].id,company_id:'A',branch_id:'B',product_ids:['P']}])
 })
 
 test('accepted quote to engagement and draft retains six-place goods and eighteen-place derived price',async()=>{

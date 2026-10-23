@@ -1,0 +1,282 @@
+TAP version 13
+# Subtest: hook exposes explicit recovery with the same request key and never retries just by rendering
+ok 1 - hook exposes explicit recovery with the same request key and never retries just by rendering
+  ---
+  duration_ms: 865.042895
+  type: 'test'
+  ...
+# Subtest: hook locks concurrent tabs with shared storage, captures scope headers and ignores a revoked owner
+ok 2 - hook locks concurrent tabs with shared storage, captures scope headers and ignores a revoked owner
+  ---
+  duration_ms: 342.392412
+  type: 'test'
+  ...
+# Subtest: cookie session actor changed in another tab invalidates pending confirmation with no bearer token
+ok 3 - cookie session actor changed in another tab invalidates pending confirmation with no bearer token
+  ---
+  duration_ms: 137.103667
+  type: 'test'
+  ...
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+ok 4 - normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+  ---
+  duration_ms: 1213.085607
+  type: 'test'
+  ...
+# Subtest: restored submitting checkout keeps recovery visible while register selection has no payment button
+ok 5 - restored submitting checkout keeps recovery visible while register selection has no payment button
+  ---
+  duration_ms: 2710.705642
+  type: 'test'
+  ...
+# Subtest: payment button announces processing and blocks repeat submission while the normal request is pending
+ok 6 - payment button announces processing and blocks repeat submission while the normal request is pending
+  ---
+  duration_ms: 1816.19927
+  type: 'test'
+  ...
+# Subtest: successful checkout leaves no persistent notice, including while its ticket downloads
+ok 7 - successful checkout leaves no persistent notice, including while its ticket downloads
+  ---
+  duration_ms: 100.752915
+  type: 'test'
+  ...
+# Subtest: recovery exposes the original error, saved lines and explicit same-operation retry
+ok 8 - recovery exposes the original error, saved lines and explicit same-operation retry
+  ---
+  duration_ms: 79.520181
+  type: 'test'
+  ...
+# Subtest: unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+ok 9 - unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+  ---
+  duration_ms: 91.681257
+  type: 'test'
+  ...
+# Subtest: lost checkout retains the original failure after reload and lookup failures
+ok 10 - lost checkout retains the original failure after reload and lookup failures
+  ---
+  duration_ms: 1076.567485
+  type: 'test'
+  ...
+# Subtest: manual SALE retry uses the frozen original key and payload, not a new checkout
+ok 11 - manual SALE retry uses the frozen original key and payload, not a new checkout
+  ---
+  duration_ms: 227.323222
+  type: 'test'
+  ...
+# Subtest: manual ORDER retry uses the frozen original key and payload, not a new checkout
+ok 12 - manual ORDER retry uses the frozen original key and payload, not a new checkout
+  ---
+  duration_ms: 214.061873
+  type: 'test'
+  ...
+# Subtest: retry checks a committed sale first and never reposts it
+ok 13 - retry checks a committed sale first and never reposts it
+  ---
+  duration_ms: 132.774196
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: other route
+ok 14 - retry refuses to post after lookup failure: other route
+  ---
+  duration_ms: 140.165463
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: unauthorized
+ok 15 - retry refuses to post after lookup failure: unauthorized
+  ---
+  duration_ms: 180.034022
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: server
+ok 16 - retry refuses to post after lookup failure: server
+  ---
+  duration_ms: 90.348006
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: offline
+ok 17 - retry refuses to post after lookup failure: offline
+  ---
+  duration_ms: 246.519427
+  type: 'test'
+  ...
+# Subtest: double retry while lookup is pending posts the original operation only once
+ok 18 - double retry while lookup is pending posts the original operation only once
+  ---
+  duration_ms: 180.66362
+  type: 'test'
+  ...
+# Subtest: scope revoked during retry lookup prevents submitting or clearing the saved attempt
+ok 19 - scope revoked during retry lookup prevents submitting or clearing the saved attempt
+  ---
+  duration_ms: 243.225128
+  type: 'test'
+  ...
+# Subtest: completion in another tab during retry lookup cannot be downgraded or posted again
+ok 20 - completion in another tab during retry lookup cannot be downgraded or posted again
+  ---
+  duration_ms: 205.725439
+  type: 'test'
+  ...
+# Subtest: legacy metadata and confirmed markers are not retryable requests
+ok 21 - legacy metadata and confirmed markers are not retryable requests
+  ---
+  duration_ms: 467.422712
+  type: 'test'
+  ...
+# Subtest: retry cannot overwrite a newer attempt while its lookup was pending
+ok 22 - retry cannot overwrite a newer attempt while its lookup was pending
+  ---
+  duration_ms: 135.576707
+  type: 'test'
+  ...
+# Subtest: retry stops before posting when saving the recovery marker fails
+ok 23 - retry stops before posting when saving the recovery marker fails
+  ---
+  duration_ms: 89.896643
+  type: 'test'
+  ...
+# Subtest: retry definitive rejection releases only its attempt
+ok 24 - retry definitive rejection releases only its attempt
+  ---
+  duration_ms: 100.140696
+  type: 'test'
+  ...
+# Subtest: retry conflict preserves the existing recovery
+ok 25 - retry conflict preserves the existing recovery
+  ---
+  duration_ms: 102.069868
+  type: 'test'
+  ...
+# Subtest: submit rejection cleanup rechecks concurrent confirmation inside the final lock
+ok 26 - submit rejection cleanup rechecks concurrent confirmation inside the final lock
+  ---
+  duration_ms: 93.669367
+  type: 'test'
+  ...
+# Subtest: retry rejection cleanup rechecks concurrent confirmation inside the final lock
+ok 27 - retry rejection cleanup rechecks concurrent confirmation inside the final lock
+  ---
+  duration_ms: 105.467627
+  type: 'test'
+  ...
+# Subtest: submit rejection never treats an unrelated lookup 404 as authoritative absence
+ok 28 - submit rejection never treats an unrelated lookup 404 as authoritative absence
+  ---
+  duration_ms: 103.759887
+  type: 'test'
+  ...
+# Subtest: retry rejection never treats an unrelated lookup 404 as authoritative absence
+ok 29 - retry rejection never treats an unrelated lookup 404 as authoritative absence
+  ---
+  duration_ms: 83.5692
+  type: 'test'
+  ...
+# Subtest: automatic recovery surfaces the lookup failure separately from the persisted send failure
+ok 30 - automatic recovery surfaces the lookup failure separately from the persisted send failure
+  ---
+  duration_ms: 43.371755
+  type: 'test'
+  ...
+# Subtest: double submit before render sends one checkout and confirms once
+ok 31 - double submit before render sends one checkout and confirms once
+  ---
+  duration_ms: 66.896466
+  type: 'test'
+  ...
+# Subtest: lost response recovers committed sale without a second checkout
+ok 32 - lost response recovers committed sale without a second checkout
+  ---
+  duration_ms: 98.530948
+  type: 'test'
+  ...
+# Subtest: not-observed after timeout remains unknown and cannot start a different checkout
+ok 33 - not-observed after timeout remains unknown and cannot start a different checkout
+  ---
+  duration_ms: 56.68155
+  type: 'test'
+  ...
+# Subtest: definite rejected input releases the attempt only after no sale is observed
+ok 34 - definite rejected input releases the attempt only after no sale is observed
+  ---
+  duration_ms: 41.147262
+  type: 'test'
+  ...
+# Subtest: old owner response is persisted for recovery but cannot clear the new owner cart
+ok 35 - old owner response is persisted for recovery but cannot clear the new owner cart
+  ---
+  duration_ms: 211.21746
+  type: 'test'
+  ...
+# Subtest: storage failure prevents mutation and confirmation cleanup failure never reposts
+ok 36 - storage failure prevents mutation and confirmation cleanup failure never reposts
+  ---
+  duration_ms: 133.994851
+  type: 'test'
+  ...
+# Subtest: a definitive business rejection does not leave a permanent unknown checkout
+ok 37 - a definitive business rejection does not leave a permanent unknown checkout
+  ---
+  duration_ms: 32.967483
+  type: 'test'
+  ...
+# Subtest: completion during lost-response recovery cannot be downgraded when cleanup fails
+ok 38 - completion during lost-response recovery cannot be downgraded when cleanup fails
+  ---
+  duration_ms: 43.158582
+  type: 'test'
+  ...
+# Subtest: a second tab queued before completion cannot charge again after the pending marker clears
+ok 39 - a second tab queued before completion cannot charge again after the pending marker clears
+  ---
+  duration_ms: 57.824827
+  type: 'test'
+  ...
+# Subtest: restoring a locally confirmed attempt still checks its authorized server result
+ok 40 - restoring a locally confirmed attempt still checks its authorized server result
+  ---
+  duration_ms: 120.558652
+  type: 'test'
+  ...
+# Subtest: late old checkout confirmation preserves a newer attempt
+ok 41 - late old checkout confirmation preserves a newer attempt
+  ---
+  duration_ms: 79.791018
+  type: 'test'
+  ...
+# Subtest: late old checkout failure preserves a newer attempt
+ok 42 - late old checkout failure preserves a newer attempt
+  ---
+  duration_ms: 111.156393
+  type: 'test'
+  ...
+1..42
+# tests 42
+# suites 0
+# pass 42
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7332.042381

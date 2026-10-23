@@ -9,7 +9,7 @@ async function createInTransaction(db,state,input){
   try{
     const data={name:'Café',kind:'STANDARD',stock:0,min_stock:'0',price:'2',...input}
     const finish=await units.prepareProductWrite(db,scope,null,input,data,{create:true})
-    Object.assign(state.product,{...data,base_unit_id:null,quantity_decimals:0,unit_revision:1})
+    Object.assign(state.product,{base_unit_id:null,quantity_decimals:0,unit_revision:1,...data})
     const product=await finish(state.product)
     return {product,data,stock:finish.initialStock}
   }catch(error){Object.assign(state,snapshot);throw error}
@@ -23,6 +23,18 @@ test('new product saves base, presentations and local defaults in its create tra
   assert.equal(product.default_sale_presentation_id,null)
   assert.equal(stock,'0.123456');assert.equal(data.min_stock,'0.000001')
   assert.equal(data.units_configuration,undefined);assert.equal(state.presentations[0].client_key,undefined)
+})
+test('initial units are inserted with a new product without querying nonexistent history',async()=>{
+  for(const withPresentation of [false,true]){
+    const {db,state}=database();state.product.base_unit_id=null
+    for(const model of ['saleItem','commercialDocumentLine','purchaseLog','incomingMerchandiseItem','stockMovement','productLot','stockTransferLine','inventoryCountLine','returnItem','returnReplacementItem','orderDeliveryLine','stockReservation','appointmentEngagementLine','appointmentSession','productBomLine','productStock','productStockLocation'])db[model].findFirst=async()=>assert.fail(`New product must not scan ${model}`)
+    const config=configuration();if(!withPresentation){config.presentations=[];config.default_purchase_key=null}
+    const {product,data}=await createInTransaction(db,state,{units_configuration:config})
+    assert.equal(data.base_unit_id,'kg');assert.equal(data.quantity_decimals,6);assert.equal(data.unit_metadata_version,2)
+    assert.equal(product.base_unit_id,'kg');assert.equal(product.presentations.length,withPresentation?1:0)
+    assert.equal(product.default_purchase_presentation_id,withPresentation?product.presentations[0].id:null)
+    if(withPresentation)assert.equal(product.presentations[0].factor,'24')
+  }
 })
 test('failed presentation or unknown default aborts the complete new-product transaction',async()=>{
   for(const modify of [c=>c.presentations[0].factor='0',c=>c.default_sale_key='missing',c=>c.presentations.push({...c.presentations[0]}),c=>c.base_unit_id='foreign']){
@@ -50,6 +62,12 @@ test('new physical inputs follow the catalog base precision rather than arbitrar
     await assert.rejects(createInTransaction(db,state,{kind,stock,units_configuration:{...configuration(),quantity_decimals:precision}}),e=>e.status===400)
   }
 })
+test('initial precision limits use the normalized kind that will be inserted',async()=>{
+  for(const [raw,kind,quantity_decimals] of [['kit','KIT',1],[' kit ','KIT',1],['service','SERVICE',5],[' service ','SERVICE',5]]){
+    const {db}=database(),config={...configuration(),quantity_decimals,presentations:[],default_purchase_key:null}
+    await assert.rejects(units.prepareProductWrite(db,scope,null,{kind:raw,units_configuration:config},{kind},{create:true}),e=>e.status===400)
+  }
+})
 test('detail-only base lock reports old history at zero stock and any archived presentation',async()=>{
   const {db,state}=database();state.product.stock='0';state.history=true
   assert.equal(await units.productBaseLocked(db,scope,state.product),true)
@@ -75,7 +93,7 @@ test('configured product DTO sends tiny derived12 costs as plain decimal strings
 })
 test('actual product create freezes measured initial stock only after all configuration; failure rolls back',async()=>{
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs'),{Prisma}=require('@prisma/client')
-  for(const invalid of [false,true]){
+  for(const [invalid,noSupplier] of [[false,false],[true,false],[false,true]]){
     const {db,state}=database();state.product.base_unit_id=null;state.product.quantity_decimals=0
     state.movements=[];state.purchases=[];state.branch={stock:0,min_stock:0}
     db.product.create=async({data})=>{state.product={id:'P',deleted:false,tracks_expiry:false,quantity_decimals:0,unit_revision:1,...data};return {...state.product}}
@@ -89,12 +107,17 @@ test('actual product create freezes measured initial stock only after all config
     db.purchaseLog={...db.purchaseLog,create:async({data})=>{state.purchases.push(data);return data}}
     db.status={findFirst:async()=>null};db.alertType={findMany:async()=>[]};db.alertPriority={findMany:async()=>[]}
     db.$queryRaw=async(sql,...args)=>{if(String(sql).includes('SELECT l.id'))return[{id:'LOC'}];const values=args.flatMap(x=>x?.values||[]);return[{product_id:'P',location_id:'LOC',qty:values[2],balance:'0.123456'}]}
-    db.$transaction=async fn=>{const before=structuredClone(state);try{return await fn(db)}catch(e){Object.assign(state,before);throw e}}
+    db.$transaction=async(fn,options)=>{const before=structuredClone(state);try{
+      const result=await fn(db)
+      // A six-second database round trip must fit the controller's bounded transaction budget.
+      if((options?.timeout??5000)<6000)throw Object.assign(new Error('Transaction expired after 5000ms'),{code:'P2028'})
+      return result
+    }catch(e){Object.assign(state,before);throw e}}
     const config=configuration();if(invalid)config.presentations[0].factor='0'
     await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db,prismaTransaction:db}},require.resolve('../src/modules/inventory/products.controller'),async controller=>{
-      const response=jsonResponse(),request={companyId:'A',branchId:'B',user:{sub:'U',permissions:['products.create']},body:{name:'Café',category_id:1,supplier_id:'00000000-0000-0000-0000-000000000001',kind:'STANDARD',price:'2',cost:'1.123456',stock:'0.123456',min_stock:'0.000001',units_configuration:config}}
+      const response=jsonResponse(),request={companyId:'A',branchId:'B',user:{sub:'U',permissions:['products.create']},body:{name:'Café',category_id:1,...(noSupplier?{}:{supplier_id:'00000000-0000-0000-0000-000000000001'}),kind:'STANDARD',price:'2',cost:'1.123456',stock:'0.123456',min_stock:'0.000001',units_configuration:config}}
       if(invalid){await assert.rejects(controller.create(request,response,e=>{throw e}),e=>e.status===400);assert.equal(state.product.base_unit_id,null);assert.equal(state.presentations.length,0);assert.equal(state.movements.length,0);assert.equal(state.purchases.length,0)}
-      else{await controller.create(request,response,e=>{throw e});assert.equal(response.statusCode,201);assert.equal(response.body.product.base_unit_id,'kg');assert.equal(String(state.branch.stock),'0.123456');assert.equal(state.purchases[0].base_qty,'0.123456');assert.equal(state.purchases[0].base_unit_cost,'1.123456000000');assert.equal(state.movements[0].unit_snapshot.version,2);assert.equal(state.movements[0].unit_snapshot.baseUnit.id,'kg');assert.equal(state.purchases[0].unit_snapshot.baseUnit.decimals,6)}
+      else{await controller.create(request,response,e=>{throw e});assert.equal(response.statusCode,201);assert.equal(response.body.product.base_unit_id,'kg');assert.equal(String(state.branch.stock),'0.123456');assert.equal(state.movements[0].unit_snapshot.version,2);assert.equal(state.movements[0].unit_snapshot.baseUnit.id,'kg');assert.equal(state.purchases[0].base_qty,'0.123456');assert.equal(state.purchases[0].base_unit_cost,'1.123456000000');assert.equal(state.purchases[0].unit_snapshot.baseUnit.decimals,6);if(noSupplier){assert.equal(state.purchases[0].supplier_id,null);assert.equal(state.product.supplier_id,null)}}
     })
   }
 })

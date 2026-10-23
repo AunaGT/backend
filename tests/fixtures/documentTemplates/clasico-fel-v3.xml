@@ -1,0 +1,32 @@
+<plantilla-factura version="1">
+  <tema fontFamily="Helvetica" fontSize="10" accentColor="#1F4E79" textColor="#111111" spacing="8"/>
+  <bloque tipo="HEADER" condicion="ALWAYS">
+    <opciones title="FACTURA" showLogo="true" alignment="left">
+      <images/>
+    </opciones>
+  </bloque>
+  <bloque tipo="EMITTER" condicion="ALWAYS"/>
+  <bloque tipo="RECEIVER" condicion="ALWAYS"/>
+  <bloque tipo="DETAILS" condicion="ALWAYS">
+    <opciones>
+      <columns>
+        <column key="linea" label="No." width="6" align="left"/>
+        <column key="cantidad" label="Cant." width="10" align="left"/>
+        <column key="descripcion" label="Descripción" width="44" align="left"/>
+        <column key="precio" label="P. Unitario" width="14" align="right"/>
+        <column key="descuento" label="Descuento" width="12" align="right" condicion="HAS_DISCOUNT"/>
+        <column key="total" label="Total (Q)" width="14" align="right"/>
+      </columns>
+    </opciones>
+  </bloque>
+  <bloque tipo="TOTALS" condicion="ALWAYS"/>
+  <bloque tipo="NOTES" condicion="HAS_NOTE">
+    <opciones text="Observaciones del documento"/>
+  </bloque>
+  <bloque tipo="FISCAL" condicion="ALWAYS"/>
+  <bloque tipo="FOOTER" condicion="ALWAYS">
+    <opciones text="Documento Tributario Electrónico (DTE). Representación gráfica de la factura electrónica certificada por SAT.">
+      <images/>
+    </opciones>
+  </bloque>
+</plantilla-factura>

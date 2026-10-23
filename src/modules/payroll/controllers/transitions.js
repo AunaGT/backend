@@ -55,6 +55,8 @@ exports.confirm = async (req, res, next) => {
       if (run.status === 'CONFIRMADA' || run.status === 'PAGADA') fail(409, 'La planilla ya fue confirmada')
       if (run.status === 'ANULADA') fail(409, 'La planilla está anulada')
 
+      await require('../../../services/payroll/deductions').claimDeductions(tx, { run, userId: req.user?.sub })
+
       const claim = await tx.payrollRun.updateMany({
         where: { id: run.id, status: 'BORRADOR' },
         data: { status: 'CONFIRMADA', confirmed_by: req.user?.sub || null, confirmed_at: new Date() },
@@ -133,6 +135,7 @@ exports.cancel = async (req, res, next) => {
       if (claim.count !== 1) fail(409, 'La planilla cambió de estado, recarga la página')
 
       if (estabaConfirmada) {
+        await require('../../../services/payroll/deductions').restoreDeductions(tx, { run, userId: req.user?.sub })
         // Restituir el saldo con el importe EXACTO que se descontó, no con uno
         // recalculado: las tasas o la cuota pudieron cambiar desde entonces.
         for (const slip of run.payslips) {

@@ -71,6 +71,7 @@ function fixture({ enabled = true, configured = true, shortLots = false } = {}) 
       },
       $queryRaw: async (sql, ...args) => {
         const s = String(sql), values = args.flatMap(value => value?.values || [])
+        if(s.includes('UPDATE product_lots')){write();const rows=[];for(let i=0;i<values.length;i+=3){const [id,qty,product_id]=values.slice(i,i+3),row=state.lots.find(l=>l.id===id&&l.product_id===product_id);if(row&&dec(row.qty_remaining).gte(qty)){row.qty_remaining=dec(row.qty_remaining).sub(qty).toFixed();rows.push({id})}}return rows}
         if (s.includes('SELECT l.id')) return s.includes('LIMIT 1') ? [{id:'KITLOC'}] : values.filter(id=>['KITLOC','L1','L2','OTHER'].includes(id)).map(id=>({id}))
         if (s.includes('SELECT psl.product_id')) return Object.entries(state.locations).filter(([key, stock]) => key.startsWith('c|') && dec(stock).gt(0)).map(([key, stock]) => ({ product_id: 'c', location_id: key.split('|')[1], stock }))
         if (s.includes('FOR UPDATE OF ps')) return values.filter(id => catalog[id]).map(id => ({ ...product(id), deleted: false }))

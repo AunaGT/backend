@@ -14,6 +14,14 @@ const Sales = require('./controller')
 const { requirePromotionsForSale } = require('./middleware')
 
 const router = Router()
+router.use('/:id/documents', require('./documents/routes'))
+const Manual=require('./manualSales.controller')
+router.post('/drafts',Auth,hasPermission('sales.create'),Manual.save)
+router.post('/drafts/preview',Auth,hasPermission('sales.create'),Manual.preview)
+router.get('/:id/draft',Auth,hasPermission('sales.create','sales.view_detail'),Manual.read)
+router.put('/:id/draft',Auth,hasPermission('sales.create'),Manual.save)
+router.post('/:id/confirm',Auth,hasPermission('sales.create'),Manual.confirm)
+router.post('/:id/cancel-draft',Auth,hasPermission('sales.cancel'),Manual.cancel)
 
 /**
  * @openapi

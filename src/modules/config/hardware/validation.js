@@ -24,11 +24,12 @@ function validateWorkstation(input) {
 function validateDevice(input) {
   object(input,['code','name','notes','state','kind','connection','profile','expectedVersion'])
   const kind=choice(input.kind,KINDS,'kind'),connection=choice(input.connection,kind==='SCANNER'?['HID']:kind==='CASH_DRAWER'?['PRINTER_PORT']:['SYSTEM_PRINTER'],'connection')
-  const allowed=kind==='SCANNER'?['scannerSuffix','scannerMinLength','scannerMaxLength']:kind==='CASH_DRAWER'?['parentPrinterId']:['widthMm','heightMm','dpi','orientation','offsetXMm','offsetYMm','copies']
+  const allowed=kind==='SCANNER'?['scannerSuffix','scannerPrefix','scannerMinLength','scannerMaxLength']:kind==='CASH_DRAWER'?['parentPrinterId']:['widthMm','heightMm','dpi','orientation','offsetXMm','offsetYMm','copies']
   const raw=object(input.profile||{},allowed,'profile'),profile={}
   for(const key of Object.keys(raw)) {
     const value=raw[key];if(value===undefined)continue
     if(key==='parentPrinterId')profile[key]=uuid(value,`profile.${key}`)
+    else if(key==='scannerPrefix'){if(typeof value!=='string'||value.length>8||/[^\x21-\x7e]/.test(value))invalid('profile.scannerPrefix','Usa hasta 8 caracteres visibles sin espacios');profile[key]=value}
     else if(key==='orientation')profile[key]=choice(value,['portrait','landscape'],`profile.${key}`)
     else if(key==='scannerSuffix')profile[key]=choice(value,['ENTER','TAB','NONE'],`profile.${key}`)
     else {const [min,max,int]=key==='dpi'?[100,1200,true]:key==='copies'?[1,100,true]:key.startsWith('scanner')?[1,128,true]:key.startsWith('offset')?[-20,20,false]:[10,420,false];profile[key]=number(value,`profile.${key}`,min,max,int)}

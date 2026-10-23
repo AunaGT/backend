@@ -151,12 +151,19 @@ function checkedLineTotal(qty,price) {
 }
 
 async function moveSaleStock(tx, items, branchId, ctx) {
+  const alerts=async products=>{
+    const {checkoutProducts}=require('../../services/checkoutContext')
+    if(ctx.refType==='sale'&&checkoutProducts(tx,items.map(i=>i.product_id),{companyId:ctx.companyId,branchId})){
+      return require('../../services/saleStockAlertOutbox').enqueueSaleStockAlerts(tx,{saleId:ctx.refId,companyId:ctx.companyId,branchId,productIds:products.map(p=>p.id)})
+    }
+    return ensureStockAlertsBatch(tx,products,branchId)
+  }
   if(items.some(isV2)||await Units.unitsEnabled(tx,ctx.companyId)){
     const {updated,snapshots}=await require('../../services/units/commercialPhysical').dispatchCommercialLines(tx,items,branchId,{...ctx,groupId:randomUUID()})
     if(ctx.refType==='sale'){
       await require('../../services/units/commercialPhysical').persistSalePhysicalSnapshots(tx,ctx.refId,items,snapshots)
     }
-    await ensureStockAlertsBatch(tx,updated,branchId)
+    await alerts(updated)
     return updated
   }
   const stockMap = await expandLinesToStockMap(tx, items, {companyId:ctx.companyId,allowArchivedServices:ctx.allowArchivedServices===true})
@@ -164,7 +171,7 @@ async function moveSaleStock(tx, items, branchId, ctx) {
   const groupId = randomUUID()
   const products = await deductStockMap(tx, stockMap, branchId, { ...ctx, groupId })
   await consumeLotsFEFO(tx, stockMap, branchId, await dispatchedByRef(tx, { groupId }))
-  await ensureStockAlertsBatch(tx, products, branchId)
+  await alerts(products)
   return products
 }
 

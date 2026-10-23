@@ -29,7 +29,7 @@ const advancedItem=item=>item.unit_metadata_version===2&&item.unit_snapshot?.ver
 const exact=value=>new Prisma.Decimal(String(value)).toFixed()
 function incomingItem(item,product=item.product){
   const legacy={id:item.id,product,quantity:item.quantity,unit_cost:item.unit_cost}
-  if(!advancedItem(item))return {...legacy,subtotal:Number(item.quantity)*Number(item.unit_cost)}
+  if(!advancedItem(item))return {...legacy,...(item.line_total!=null?{line_total:new Prisma.Decimal(String(item.line_total)).toFixed(2),subtotal:new Prisma.Decimal(String(item.line_total)).toFixed(2)}:{subtotal:Number(item.quantity)*Number(item.unit_cost)})}
   return {...legacy,quantity:exact(item.quantity),unit_cost:exact(item.unit_cost),unit_metadata_version:2,unit_snapshot:item.unit_snapshot,unit_label:item.unit_snapshot.presentation?.label??item.unit_snapshot.baseUnit.label,base_qty:exact(item.base_qty),base_unit_cost:exact(item.base_unit_cost),line_total:new Prisma.Decimal(String(item.line_total)).toFixed(2),subtotal:new Prisma.Decimal(String(item.line_total)).toFixed(2)}
 }
 
@@ -126,11 +126,12 @@ function shapeIncomingDetail (record) {
   const exactBalance=advanced?balanceOf(record):null
   const balance = exactBalance?{payment_status:exactBalance.status==='REVIEW'?record.payment_status:exactBalance.status,totalValue:exactBalance.total,amount_paid_total:exactBalance.documentedPaid,legacy_settled_amount:exactBalance.legacySettled,amount_pending:exactBalance.balance,payment_balance_review_required:exactBalance.status==='REVIEW',payment_revision:exactBalance.revision}:shapePaymentBalance(record)
   const entries = record.paymentEntries || []
-  const { supplier_payment_terms: termLinks = [], ...supplier } = record.supplier || {}
+  const { supplier_payment_terms: termLinks = [], ...supplier } = record.supplier || {id:null,name:record.source==='PRODUCTION'?'Fabricación propia':'Existencias iniciales'}
   return {
     id: record.id,
     ...(advanced?{unit_metadata_version:2,itemsCount:record.items.length}:{}),
     source: record.source,
+    production_details: record.production_details || null,
     supplier,
     payment_terms: termLinks.map(link => link.payment_term),
     registeredBy: record.registeredBy,
@@ -201,6 +202,7 @@ exports.list = async (req, res, next) => {
 
     if (payment_status === 'PENDING' || payment_status === 'PAID' || payment_status === 'PARTIAL') {
       where.payment_status = payment_status
+      where.source = 'PURCHASE'
     }
 
     // Filter by date range
@@ -223,13 +225,14 @@ exports.list = async (req, res, next) => {
       ]
     }
 
-    const totalItems = await prisma.incomingMerchandise.count({ where })
+    let totalItems
     let summary
     if (req.query.includeSummary === 'true') {
-      const groups = await prisma.incomingMerchandise.groupBy({ by: ['payment_status'], where, _count: { _all: true } })
-      const counts = Object.fromEntries(groups.map(group => [group.payment_status, group._count._all]))
+      const groups = await prisma.incomingMerchandise.groupBy({ by: ['source','payment_status'], where, _count: { _all: true } })
+      totalItems = groups.reduce((total, group) => total + group._count._all, 0)
+      const counts = groups.filter(group=>(group.source||'PURCHASE')==='PURCHASE').reduce((all,group)=>{all[group.payment_status]=(all[group.payment_status]||0)+group._count._all;return all},{})
       summary = { total: totalItems, paid: counts.PAID ?? 0, partial: counts.PARTIAL ?? 0, pending: counts.PENDING ?? 0 }
-    }
+    } else totalItems = await prisma.incomingMerchandise.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
@@ -270,7 +273,7 @@ exports.list = async (req, res, next) => {
           }
         }
       },
-      orderBy: { date: 'desc' },
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
       skip: (safePage - 1) * pageSize,
       take: pageSize,
     })
@@ -278,17 +281,18 @@ exports.list = async (req, res, next) => {
     // Calculate total value for each record
     const adapted = records.map(record => {
       const advanced=record.items.some(advancedItem)
-      const totalValue = advanced?balanceOf(record).total:record.items.reduce((sum, item) => {
+      const totalValue = advanced||record.source==='PRODUCTION'||record.source==='INITIAL'?balanceOf(record).total:record.items.reduce((sum, item) => {
         return sum + (Number(item.quantity) * Number(item.unit_cost))
       }, 0)
 
       return {
         id: record.id,
+        source: record.source,
         ...(advanced?{unit_metadata_version:2}:{}),
         supplier: {
-          id: record.supplier.id,
-          name: record.supplier.name,
-          contact: record.supplier.contact
+          id: record.supplier?.id || null,
+          name: record.supplier?.name || (record.source==='PRODUCTION'?'Fabricación propia':'Existencias iniciales'),
+          contact: record.supplier?.contact || null
         },
         registeredBy: {
           id: record.registeredBy.id,
@@ -390,6 +394,7 @@ exports.generateReport = async (req, res, next) => {
 
     if (payment_status === 'PENDING' || payment_status === 'PAID' || payment_status === 'PARTIAL') {
       where.payment_status = payment_status
+      where.source = 'PURCHASE'
     }
 
     if (start_date || end_date) {
@@ -448,19 +453,21 @@ exports.generateReport = async (req, res, next) => {
     setupReportPdf(doc, { branding, title: 'Reporte de Ingresos de Mercancía', metadata })
     let totalGeneral = 0
     for (const [index, record] of records.entries()) {
-      const recordTotal = record.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unit_cost), 0)
+      const recordTotal = record.items.reduce((sum, item) => sum.add(item.line_total??new Prisma.Decimal(String(item.quantity)).mul(String(item.unit_cost))),new Prisma.Decimal(0)).toNumber()
       totalGeneral += recordTotal
       ensureReportSpace(doc, 110)
       doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_COLORS.navy).text(`Registro #${index + 1}`)
       const details = [
         `Fecha: ${new Date(record.date).toLocaleDateString('es-GT')}`,
-        `Proveedor: ${record.supplier.name}`,
+        `Origen / proveedor: ${record.supplier?.name || (record.source==='PRODUCTION'?'Fabricación propia':'Existencias iniciales')}`,
         `Registrado por: ${record.registeredBy.name}`,
-        `Término de pago: ${record.paymentTerm?.name || '—'}`,
-        `Estado: ${record.payment_status === 'PAID' ? 'Pagado' : record.payment_status === 'PARTIAL' ? 'Pago parcial' : 'Pendiente de pago'}`,
-        ...(record.paid_at ? [`Fecha de pago: ${new Date(record.paid_at).toLocaleString('es-GT')}`] : []),
-        ...(record.due_date ? [`Vencimiento: ${new Date(record.due_date).toLocaleDateString('es-GT')}`] : []),
-        ...(record.payment_reference ? [`Referencia: ${record.payment_reference}`] : []),
+        ...((record.source||'PURCHASE')==='PURCHASE'?[
+          `Término de pago: ${record.paymentTerm?.name || '—'}`,
+          `Estado: ${record.payment_status === 'PAID' ? 'Pagado' : record.payment_status === 'PARTIAL' ? 'Pago parcial' : 'Pendiente de pago'}`,
+          ...(record.paid_at ? [`Fecha de pago: ${new Date(record.paid_at).toLocaleString('es-GT')}`] : []),
+          ...(record.due_date ? [`Vencimiento: ${new Date(record.due_date).toLocaleDateString('es-GT')}`] : []),
+          ...(record.payment_reference ? [`Referencia: ${record.payment_reference}`] : []),
+        ]:['Estado: Sin cuentas por pagar']),
         ...(record.notes ? [`Notas: ${record.notes}`] : []),
       ]
       doc.font('Helvetica').fontSize(9).fillColor(PDF_COLORS.muted)

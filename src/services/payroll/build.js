@@ -30,7 +30,7 @@ const monthOf = (date) => date.getUTCMonth() + 1
  * @param {Array<{ id, installment, balance }>} p.advances anticipos pendientes
  * @param {{ taxable, igss, isr }} p.ytd acumulados del año en corridas confirmadas o pagadas
  */
-function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], ytd = { taxable: 0, igss: 0, isr: 0 } }) {
+function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], deductions = [], ytd = { taxable: 0, igss: 0, isr: 0 } }) {
   const lines = []
   /** Las líneas en cero no se guardan: ensucian el recibo y el asiento. */
   const push = (concept, type, description, amount, extra = {}) => {
@@ -43,6 +43,7 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
       quantity: extra.quantity ?? null,
       amount: value,
       advance_id: extra.advance_id ?? null,
+      ...(extra.deduction_id ? { deduction_id: extra.deduction_id, deduction_snapshot: extra.deduction_snapshot } : {}),
       sort_order: lines.length,
     })
   }
@@ -101,6 +102,13 @@ function buildPayslip({ employee, run, rates, overtimeHours = 0, advances = [], 
       push('ANTICIPO', 'DEDUCCION', 'Cuota de anticipo', cuota, { advance_id: advance.id })
       disponible = round2(disponible - cuota)
     }
+
+    const manualTotal = deductions.reduce((sum, row) => sum + Math.round(Number(row.amount) * 100), 0)
+    if (manualTotal > Math.round(disponible * 100)) {
+      const name = [employee.first_name, employee.last_name].filter(Boolean).join(' ')
+      throw Object.assign(new Error(`Los descuentos de ${name || 'este empleado'} superan su neto disponible después de las otras deducciones. Ajusta o reprograma los descuentos antes de continuar.`), { status: 422 })
+    }
+    for (const row of deductions) push('OTRA_DEDUCCION', 'DEDUCCION', row.reason.slice(0, 150), Number(row.amount), { deduction_id: row.id, deduction_snapshot: require('./deductions').snapshot(row) })
 
     // Con igss_base en 0 los tres salen en 0 y `push` no los agrega.
     const employer = employerCost(igss_base, rates)

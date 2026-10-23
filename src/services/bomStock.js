@@ -42,7 +42,8 @@ async function loadProductsWithBom(tx, productIds, { companyId,allowArchivedServ
   const client = dbClient(tx)
   const ids = [...new Set(productIds.filter(Boolean).map(String))]
   if (ids.length === 0) return new Map()
-  const rows = await client.product.findMany({
+  const cached=require('./checkoutContext').checkoutProducts(client,ids,{companyId})
+  const rows = cached?[...cached.values()].filter(p=>!p.deleted||allowArchivedServices&&p.kind==='SERVICE'):await client.product.findMany({
     where: { id: { in: ids }, ...(allowArchivedServices ? {OR:[{deleted:false},{kind:'SERVICE'}]} : {deleted:false}), ...(companyId ? {company_id:companyId} : {}) },
     select: {
       id: true,
@@ -231,7 +232,7 @@ async function applyStockMirrorDelta(client,entries,b) {
   const values = Prisma.join(
     entries.map(([id, qty]) => Prisma.sql`(${id}::uuid, ${qty.toFixed()}::numeric)`)
   )
-  return client.$queryRaw`
+  const result=await client.$queryRaw`
     WITH v(id, qty) AS (VALUES ${values}),
     upd AS (
       UPDATE product_stocks ps
@@ -249,6 +250,8 @@ async function applyStockMirrorDelta(client,entries,b) {
     SELECT u.product_id AS id, p.name, u.stock, u.min_stock
     FROM upd u JOIN products p ON p.id = u.product_id
   `
+  require('./checkoutContext').checkoutStockDelta(client,entries,b)
+  return result
 }
 
 // Count locations are one server-derived operation: only its final net reaches mirrors.

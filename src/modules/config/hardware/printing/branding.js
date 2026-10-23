@@ -6,6 +6,7 @@ async function cleanupPrintLogo(db,url,remove){
    // Uploaded logos have unique, non-overwritten paths. Keep a historical asset while any print snapshot references it.
    const references=await tx.hardwarePrintJob.count({where:{snapshot:{path:['options','logoUrl'],equals:url}}})
    if(references)return undefined
+   if(await tx.documentSnapshot.count({where:{branding:{path:['logoRef'],equals:url}}}))return undefined
    if(await remove(url)===false)throw Error('No eliminado')
   },{maxWait:10000,timeout:20000})
  }catch{return 'No se pudo limpiar un archivo de logo en Storage. La referencia confirmada se conserva.'}

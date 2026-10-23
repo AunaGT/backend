@@ -25,7 +25,7 @@ const DEFAULT_ACCOUNT_KEYS = [
 
 // Opcionales: no deben volver obligatoria su configuración para operaciones
 // que no los utilizan.
-const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort', 'badDebt','customerAdvances']
+const OPTIONAL_ACCOUNT_KEYS = ['cashOverShort', 'badDebt','customerAdvances', 'payrollOtherDeductions']
 
 /**
  * Cuentas que necesita el posteo de nómina. Deliberadamente separadas de

@@ -25,7 +25,8 @@ test('services have commercial availability without a stock query or location',a
   })
 })
 test('shared physical writes reject service IDs before creating any stock or location row',async()=>{
-  const tx={product:{findMany:async()=>[{id:'s',kind:'SERVICE'}]},$executeRaw:async()=>assert.fail('No writes'),$queryRaw:async()=>assert.fail('No stock locks')}
+  let productLocks=0
+  const tx={product:{findMany:async()=>[{id:'s',kind:'SERVICE'}]},$executeRaw:async sql=>{assert.match(String(sql),/^SELECT id FROM products .*ORDER BY id FOR UPDATE$/);productLocks++;return 1},$queryRaw:async()=>assert.fail('No stock locks')}
   const stock=require.resolve('../src/services/stockAvailability')
   const locations=require.resolve('../src/services/stockLocations')
   await withMocks({[model]:{prisma:tx}},stock,async service=>{
@@ -35,6 +36,7 @@ test('shared physical writes reject service IDs before creating any stock or loc
     await assert.rejects(service.applyLocationDeltas(tx,[{product_id:'s',location_id:'L',qty:1}],{branchId:'B'}),/servicio/i)
     await assert.rejects(service.applyBranchDelta(tx,[['s',1]],'B',1),/servicio/i)
   })
+  assert.equal(productLocks,3)
 })
 test('direct product physical routes reject services before any write',async()=>{
   const tx={product:{findFirst:async()=>({id:'s',kind:'SERVICE'}),update:async()=>assert.fail('Must reject before converting to KIT')},$transaction:async run=>run(tx)}

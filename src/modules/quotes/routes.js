@@ -16,6 +16,7 @@ router.get('/:id/share-link', Auth, hasPermission('quotes.view'), Quotes.getShar
 router.get('/:id', Auth, hasPermission('quotes.view'), Quotes.getById)
 router.put('/:id', Auth, hasPermission('quotes.create'), Quotes.update)
 router.patch('/:id/status', Auth, hasPermission('quotes.manage'), Quotes.updateStatus)
+router.post('/:id/convert-to-sale',Auth,hasPermission('quotes.manage'),hasPermission('sales.create'),Quotes.convertToSale)
 router.post(
   '/:id/convert-to-order',
   Auth,

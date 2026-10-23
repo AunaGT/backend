@@ -12,7 +12,7 @@ function shelfPricesForProduct(product,tiers,primaryTier='LIST',now=new Date()){
   return{prices,warnings}
 }
 const crypto=require('node:crypto')
-const Units=require('../units'),{resolveLabelSelection}=require('./unitSelection')
+const Units=require('../units'),{resolveLabelSelection,loadLabelUnitContext,configFields}=require('./unitSelection')
 const {parseShelfPreparationInput}=require('./validation')
 const {assertAccess,authorizedScope,productWhere,error}=require('./access')
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v
@@ -26,10 +26,11 @@ async function prepareShelfLabels(db,scope,raw){
     const enabled=await Units.unitsEnabled(tx,scope.companyId)
     if(enabled){await Units.lockCompany(tx,scope.companyId);await Units.assertEnabled(tx,scope);for(const id of [...new Set(input.items.map(i=>i.productId))].sort())await Units.lockProduct(tx,scope,id)}
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`barcode-labels:${scope.companyId}`},0))`
-    const rows=await tx.product.findMany({where:{...productWhere(scope,filter),id:{in:input.items.map(i=>i.productId)}},select:{id:true,name:true,kind:true,price:true,price_wholesale:true,price_promotion:true,promotion_valid_until:true,barcode:true,brand:true,size:true}}),byId=new Map(rows.map(p=>[p.id,p])),now=new Date()
+    const rows=await tx.product.findMany({where:{...productWhere(scope,filter),id:{in:input.items.map(i=>i.productId)}},select:{id:true,name:true,kind:true,price:true,price_wholesale:true,price_promotion:true,promotion_valid_until:true,barcode:true,brand:true,size:true,...configFields}}),byId=new Map(rows.map(p=>[p.id,p])),now=new Date()
+    const context=await loadLabelUnitContext(tx,scope,rows,enabled,now)
     const products=await Promise.all(input.items.map(async item=>{
       const current=byId.get(item.productId);if(!current)error(404,'PRODUCT_UNAVAILABLE','El producto no está disponible en este alcance',item.productId)
-      const p=await resolveLabelSelection(tx,scope,current,item,enabled)
+      const p=await resolveLabelSelection(tx,scope,current,item,enabled,context)
       const {prices,warnings}=shelfPricesForProduct(p,item.priceTiers||input.design.priceTiers,input.design.primaryTier,now)
       if(!prices.length)error(400,'PRICE_UNAVAILABLE','No hay ninguna tarifa seleccionada disponible. Revisa el producto o elige otro precio',p.id)
       return{id:p.id,selectionId:p.selectionId,...(p.unit_snapshot?{presentation_id:p.presentation_id,unit_revision:p.unit_revision,unit_label:p.unit_label,unit_snapshot:p.unit_snapshot}:{}),name:p.name,price:p.price.toString(),barcode:p.barcode||'',brand:p.brand,size:p.size,copies:item.copies,shelfPrices:prices,warnings,promotionValidUntil:prices.some(price=>price.tier==='PROMOTION')&&p.promotion_valid_until?new Date(p.promotion_valid_until).toISOString():null}

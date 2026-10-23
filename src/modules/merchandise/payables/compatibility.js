@@ -31,6 +31,7 @@ async function entry(db, scope, id) {
   return r;
 }
 async function individual(tx, scope, row, body, key) {
+  if (row.source && row.source !== 'PURCHASE') fail('Esta entrada no es una compra ni genera cuentas por pagar');
   const settings = await tx.systemSetting.findMany({
     where: { company_id: scope.companyId, key: "currency_code" },
     select: { key: true, value: true },
@@ -80,8 +81,8 @@ async function changePaymentConditions(db, scope, id, body, key) {
         },
       },
       data = {};
-    if (row.source === "INITIAL")
-      fail("La carga inicial no es una cuenta por pagar");
+    if (row.source && row.source !== "PURCHASE")
+      fail("La fabricación y la carga inicial no son cuentas por pagar");
     if (
       body.payment_status !== undefined &&
       !["PAID", "PENDING", "PARTIAL"].includes(body.payment_status)

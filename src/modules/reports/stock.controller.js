@@ -164,6 +164,7 @@ const REASON_ES = {
   TRANSFER_CANCEL: 'Traslado cancelado', INTERNAL_MOVE: 'Movimiento interno',
   COUNT_ADJUST: 'Ajuste por conteo', MANUAL_ADJUST: 'Ajuste manual',
   KIT_ASSEMBLE: 'Kit armado', KIT_DISASSEMBLE: 'Kit desarmado',
+  PRODUCTION: 'Fabricación propia',
 }
 
 /** Movimientos del alcance en el período, del más viejo al más nuevo. */

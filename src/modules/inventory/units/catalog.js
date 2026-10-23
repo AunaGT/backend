@@ -30,7 +30,8 @@ async function saveUnit(tx,scope,input,id=null) {
 }
 async function hasProductHistory(tx,productId) {
   for(const model of ['saleItem','commercialDocumentLine','purchaseLog','incomingMerchandiseItem','stockMovement','productLot','stockTransferLine','inventoryCountLine','returnItem','returnReplacementItem','orderDeliveryLine','stockReservation','appointmentEngagementLine','appointmentSession']) {
-    if(await tx[model].findFirst({where:{product_id:productId},select:{id:true}}))return true
+    const where=model==='orderDeliveryLine'?{document_line:{product_id:productId}}:{product_id:productId}
+    if(await tx[model].findFirst({where,select:{id:true}}))return true
   }
   if(await tx.productBomLine.findFirst({where:{OR:[{kit_product_id:productId},{component_product_id:productId}]},select:{id:true}}))return true
   for(const model of ['productStock','productStockLocation'])if(await tx[model].findFirst({where:{product_id:productId,stock:{not:0}},select:{id:true}}))return true

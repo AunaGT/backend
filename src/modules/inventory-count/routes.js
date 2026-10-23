@@ -28,6 +28,7 @@ router.get(
   InventoryCounts.listLines
 )
 router.post('/:id/start', Auth, hasPermission('inventory_count.create'), InventoryCounts.start)
+router.get('/:id/scan',Auth,hasPermission('inventory_count.count'),async(req,res,next)=>{try{res.json(await require('./scanner').findCountScan(require('../../models/prisma').prisma,{companyId:req.companyId,branchId:req.branchId},req.params.id,req.query.code))}catch(e){next(e)}})
 router.patch(
   '/:id/lines/:lineId',
   Auth,

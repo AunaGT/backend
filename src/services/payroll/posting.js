@@ -20,7 +20,7 @@
  * de una transacción interactiva, y Prisma no expone savepoints para tragarlo.
  */
 
-const { createEntry, getPayrollAccounts } = require('../accounting/core')
+const { createEntry, getPayrollAccounts, getOptionalAccount } = require('../accounting/core')
 const { round2 } = require('./calc')
 
 /** Suma de los importes de ciertos conceptos en toda la corrida. */
@@ -84,6 +84,11 @@ async function postPayrollRun(tx, { run, userId }) {
   const igssLaboral = totalOf(run, ['IGSS_LABORAL'])
   const isr = totalOf(run, ['ISR_RETENIDO'])
   const anticipos = totalOf(run, ['ANTICIPO'])
+  const manualDeductions = totalOf(run, ['OTRA_DEDUCCION'])
+  const deductionAccount = manualDeductions ? await getOptionalAccount(tx, run.company_id, 'payrollOtherDeductions') : null
+  if (manualDeductions && (!deductionAccount || deductionAccount.type !== 'LIABILITY')) {
+    throw Object.assign(new Error('Configura una cuenta de pasivo activa para descuentos de nómina (payrollOtherDeductions) antes de confirmar'), { status: 422 })
+  }
   const neto = round2(run.payslips.reduce((s, p) => s + Number(p.net_pay), 0))
 
   const lines = []
@@ -104,6 +109,7 @@ async function postPayrollRun(tx, { run, userId }) {
   add(acc.payrollIsrPayable, 0, isr, 'ISR retenido por pagar')
   add(acc.payrollProvisionsPayable, 0, provisiones, 'Provisiones por pagar')
   add(acc.payrollAdvances, 0, anticipos, 'Recuperación de anticipos')
+  if (deductionAccount) add(deductionAccount, 0, manualDeductions, 'Descuentos de nómina por conciliar')
   add(acc.payrollWagesPayable, 0, neto, 'Sueldos por pagar')
 
   if (lines.length === 0) return null

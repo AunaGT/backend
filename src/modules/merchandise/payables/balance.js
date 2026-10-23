@@ -41,7 +41,7 @@ function balanceOf(row) {
         : paid + legacy > 0
           ? "PARTIAL"
           : "PENDING",
-    excluded: row.source === "INITIAL",
+    excluded: (row.source || 'PURCHASE') !== 'PURCHASE',
     reason,
     revision: row.payment_revision || 0,
   };

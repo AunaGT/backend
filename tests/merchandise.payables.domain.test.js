@@ -36,6 +36,7 @@ test("PAID is not evidence of historical settlement after migration", () => {
 });
 test("initial stock and unresolved historic records cannot become invented payable amounts", () => {
   assert.equal(balanceOf({ ...row, source: "INITIAL" }).excluded, true);
+  assert.equal(balanceOf({ ...row, source: "PRODUCTION" }).excluded, true);
   assert.equal(
     balanceOf({ ...row, payment_balance_review_required: true }).balance,
     null,

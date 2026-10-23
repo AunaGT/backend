@@ -197,12 +197,12 @@ function validateRow(row, i, categoriesMap, suppliersMap, existingBarcodes, batc
         }
     }
 
-    // Required: supplier (proveedor SUPPLIER en BD, o aprobado para crear)
+    // Optional habitual supplier; purchases keep their actual supplier on the receipt.
     const proveedor = String(normalizedRow.supplier || '').trim()
     if (isService) {
         data.supplier_id = null
     } else if (!proveedor) {
-        errors.push('El campo "proveedor" es requerido')
+        data.supplier_id = null
     } else {
         const supplierId = suppliersMap.get(proveedor.toLowerCase())
         if (supplierId) {

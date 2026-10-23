@@ -4,6 +4,7 @@ const {engagementWhere}=require('./commercialQueries')
 function requestAgendaScope(req){return {companyId:req.companyId,branchId:req.branchId||null,branchIds:req.branchIds||req.userBranchIds||[],userId:req.user.sub,permissions:req.user.permissions||[],isAdmin:hasPerm({...req.user,permissions:[]},'appointments.view')}}
 async function quoteAgendaContext(db,req,quote){
   const denied=reason=>({engagementId:null,agenda:{canOpen:false,canCreate:false,reason}})
+  if(quote.documentSales?.length)return denied('La cotización ya tiene una venta vinculada')
   if(!hasPerm(req.user,'appointments.view'))return denied('Necesitas acceso a Agenda')
   const modules=resolveEffectiveModules(await db.companyModule.findMany({where:{company_id:req.companyId}}))
   if(!modules.find(m=>m.code==='appointments')?.effectiveEnabled)return denied('Agenda no está habilitada para esta empresa')

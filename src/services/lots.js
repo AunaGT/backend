@@ -93,7 +93,7 @@ function fefoSort(a, b) {
 
 /**
  * Descuenta qty_remaining de los lotes, FEFO, para cada producto del stockMap.
- * Best-effort: nunca lanza.
+ * Falla si falta cobertura obligatoria o cambia el saldo bloqueado.
  * @param {object} tx cliente Prisma (transacción o no)
  * @param {Map<string, number>} stockMap product_id -> qty vendida
  * @param {Map<string, Array<{location_id, qty}>>} [byLocation] de qué ubicación
@@ -119,7 +119,7 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
     await require('./catalogItemRules').assertPhysicalProducts(client,productIds,branchId)
     // Solo los productos con caducidad exigen cobertura total de lotes.
     const tracked = new Set(
-      (await client.product.findMany({
+      (require('./checkoutContext').checkoutProducts(client,productIds,{branchId})?[...require('./checkoutContext').checkoutProducts(client,productIds,{branchId}).values()].filter(p=>p.tracks_expiry):await client.product.findMany({
         where: { id: { in: productIds }, tracks_expiry: true },
         select: { id: true },
       })).map((p) => p.id)
@@ -132,6 +132,7 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
       },
     })
     const byId = new Map(lots.map((l) => [l.id, l]))
+    const decrements=new Map()
     for (const [productId, qty] of stockMap.entries()) {
       const productLots = lots.filter((l) => l.product_id === productId)
       const plan = byLocation?.get(productId)?.length
@@ -148,10 +149,7 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
         const { plan: takes, short: falta } = planConsume(chunk.lots.slice().sort(fefoSort), chunk.qty)
         short = short.add(falta)
         for (const { lotId, take } of takes) {
-          await client.productLot.update({
-            where: { id: lotId },
-            data: { qty_remaining: { decrement: take } },
-          })
+          decrements.set(lotId,decimal(decrements.get(lotId)||0).add(take).toFixed())
           const lot = byId.get(lotId)
           lot.qty_remaining = decimal(lot.qty_remaining).sub(take).toFixed()
           if (!consumed.has(productId)) consumed.set(productId, [])
@@ -174,6 +172,15 @@ async function consumeLotsFEFO(tx, stockMap, branchId, byLocation) {
         err.status = 409
         throw err
       }
+    }
+    const {Prisma}=require('@prisma/client')
+    const updates=[...decrements].sort(([a],[b])=>a.localeCompare(b)).map(([id,qty])=>Prisma.sql`(${id}::uuid,${qty}::numeric,${byId.get(id).product_id}::uuid)`)
+    for(let index=0;index<updates.length;index+=200){
+      const chunk=updates.slice(index,index+200)
+      const changed=await client.$queryRaw`UPDATE product_lots AS l SET qty_remaining=l.qty_remaining-v.qty
+        FROM (VALUES ${Prisma.join(chunk)}) AS v(id,qty,product_id)
+        WHERE l.id=v.id AND l.product_id=v.product_id AND l.branch_id=${branchId}::uuid AND l.qty_remaining >= v.qty RETURNING l.id`
+      if(changed.length!==chunk.length)throw Object.assign(new Error('El saldo de los lotes cambió; vuelve a intentar'),{status:409,code:'LOT_STOCK_CHANGED'})
     }
   }
   return consumed

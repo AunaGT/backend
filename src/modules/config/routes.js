@@ -18,6 +18,7 @@ const {
 } = require('./controller')
 
 const router = Router()
+router.use('/document-templates', require('./documentTemplates/routes').createRouter())
 router.use('/hardware/operations', require('./hardware/printing/routes'))
 router.use('/hardware/operations', require('./hardware/drawer/routes'))
 router.use('/hardware', require('./hardware/routes'))

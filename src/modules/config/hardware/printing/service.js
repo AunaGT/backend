@@ -1,7 +1,7 @@
 const {createHash}=require('node:crypto')
 const {fail,uuid}=require('../validation')
 const {operationScope,originPermission,resolveWorkstation,has}=require('../operations')
-const {jobInput,eventInput,reprintInput}=require('./validation')
+const {jobInput,eventInput,reprintInput,downloadInput}=require('./validation')
 const {resolvePrintSource,authorizeSource}=require('./sources')
 const {lockPrintBranding}=require('./branding')
 const {fetchLogoForHttp}=require('../../../../utils/pdfBranding')
@@ -39,32 +39,91 @@ async function insert(tx,scope,input,snapshot,parent=null,reason=null,requestHas
  if(input.document==='GUIDE'&&(input.source.kind!=='LABEL_PREPARATION'||!snapshot.prepared.paper.includeGuide))fail(400,'Este origen no tiene guía')
  return tx.hardwarePrintJob.create({data:{...operationScope(scope),actor_id:scope.actorId,request_key:input.requestKey,request_hash:requestHash,source_kind:input.source.kind,source_id:input.source.id,snapshot,route_snapshot:route||{},workstation_id:route?.workstationId||null,parent_id:parent,reason,document:input.document,pages:[],state:'CREATED'}})
 }
-async function createJob(db,scope,raw){
+const documentFor=(row,scope)=>({...row.snapshot,branding:{jobId:row.id,companyId:scope.companyId,branchId:scope.branchId,...(row.snapshot.renderer==='SALE_DOCUMENT_V2'?{userId:scope.actorId}:{})}})
+async function createJob(db,scope,raw,{includeDocument=false,includeLogo=false}={}){
+ if(includeLogo&&!includeDocument)fail(400,'El logo necesita el documento')
  const input=jobInput(raw);operationScope(scope)
- return atomic(db,async tx=>{
+ const result=row=>includeDocument?{job:dto(row),document:documentFor(row,scope)}:dto(row)
+ let preparedDocument=null
+ if(input.source.kind==='SALE_TICKET'){
+   const replay=await db.hardwarePrintJob.findFirst({where:{company_id:scope.companyId,actor_id:scope.actorId,request_key:input.requestKey}})
+   if(!replay){
+    try{
+     const artifact=await require('../../../sales/documents/artifacts').requestArtifact(db,scope,{saleId:input.source.id,purpose:'INTERNAL_RECEIPT',format:'RECEIPT_80',requestKey:input.requestKey})
+     const snapshot=await db.documentSnapshot.findFirst({where:{company_id:scope.companyId,id:artifact.snapshotId},select:{branding:true}})
+     preparedDocument={version:2,renderer:'SALE_DOCUMENT_V2',saleId:input.source.id,snapshotId:artifact.snapshotId,artifactId:artifact.id,format:'RECEIPT_80',cashRegisterId:snapshot?.branding?.cashRegisterId||null}
+    }catch(error){
+     if(!error.status||error.status>=500)throw Object.assign(Error('La venta sigue guardada. No se pudo preparar su documento; vuelve a intentarlo.'),{status:409,code:'DOCUMENT_PREPARATION_FAILED'})
+     throw error
+    }
+   }
+ }
+ const prepared=await atomic(db,async tx=>{
   await lock(tx,scope,input.requestKey)
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`hardware:${scope.companyId}:${scope.branchId}`},0))`
   const existing=await tx.hardwarePrintJob.findFirst({where:{company_id:scope.companyId,actor_id:scope.actorId,request_key:input.requestKey}})
-  if(existing){if(existing.branch_id!==scope.branchId||existing.request_hash!==hash(input)||existing.parent_id)fail(409,'La petición ya corresponde a otro trabajo');await authorizeSource(tx,scope,source(existing));return dto(existing)}
+  if(existing){if(existing.branch_id!==scope.branchId||existing.request_hash!==hash(input)||existing.parent_id)fail(409,'La petición ya corresponde a otro trabajo');await authorizeSource(tx,scope,source(existing));return result(existing)}
   if(input.source.kind==='SALE_TICKET')await lockPrintBranding(tx)
-  const snapshot=await resolvePrintSource(tx,scope,input.source)
-  return dto(await insert(tx,scope,input,snapshot))
+  if(preparedDocument)await authorizeSource(tx,scope,input.source)
+  const snapshot=preparedDocument||await resolvePrintSource(tx,scope,input.source)
+  return result(await insert(tx,scope,input,snapshot))
  })
+ if(includeLogo&&prepared.document.renderer==='SALE_TICKET_V1'){
+  const document=prepared.document,controller=new AbortController();let logo=null,timer
+  try{
+   if(document.options.logoUrl)logo=await Promise.race([
+    fetchLogoForHttp(document.options.logoUrl,{signal:controller.signal,maxBytes:1048576}).catch(()=>null),
+    new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(null)},1500)}),
+   ])
+  }finally{if(timer)clearTimeout(timer);controller.abort()}
+  const data=logo?.buffer?.length<=1048576&&['image/png','image/jpeg'].includes(logo?.contentType)?`data:${logo.contentType};base64,${logo.buffer.toString('base64')}`:''
+  document.options={...document.options,logoDataUrl:data}
+ }
+ return prepared
 }
 const getJob=async(db,scope,id)=>dto(await ownJob(db,scope,id))
-async function jobDocument(db,scope,id){const row=await ownJob(db,scope,id);return{...row.snapshot,branding:{jobId:row.id,companyId:scope.companyId,branchId:scope.branchId}}}
+async function jobDocument(db,scope,id){return documentFor(await ownJob(db,scope,id),scope)}
 async function jobLogo(db,scope,id){const row=await ownJob(db,scope,id),url=row.snapshot.options?.logoUrl;if(!url)fail(404,'Este documento no tiene logo');const logo=await fetchLogoForHttp(url);if(!logo)fail(404,'El logo original no está disponible');return logo}
-async function recordEvent(db,scope,id,raw){
- const input=eventInput(raw)
- return atomic(db,async tx=>{
-  await lock(tx,scope,id);const row=await ownJob(tx,scope,id)
+async function appendEvent(tx,scope,row,input){
+  const id=row.id
   const previous=await tx.hardwarePrintEvent.findFirst({where:{job_id:id,request_key:input.requestKey}})
-  if(previous){if(previous.event!==input.event||previous.error_code!==input.errorCode)fail(409,'La referencia del evento ya fue utilizada');return dto(row)}
+  if(previous){if(previous.event!==input.event||previous.error_code!==input.errorCode)fail(409,'La referencia del evento ya fue utilizada');return row}
   const allowed={CREATED:['PREPARED','FAILED'],PREPARED:['DOWNLOAD_REQUESTED','FAILED'],DOWNLOAD_REQUESTED:['DOWNLOAD_REQUESTED','FAILED'],FAILED:[]}
   if(!allowed[row.state]?.includes(input.event))fail(409,'Este trabajo necesita una nueva copia para continuar')
   await tx.hardwarePrintEvent.create({data:{job_id:id,company_id:scope.companyId,branch_id:scope.branchId,actor_id:scope.actorId,request_key:input.requestKey,event:input.event,error_code:input.errorCode}})
-  await tx.hardwarePrintJob.updateMany({where:{id,state:row.state},data:{state:input.event}})
-  return dto({...row,state:input.event})
+  const changed=await tx.hardwarePrintJob.updateMany({where:{id,state:row.state},data:{state:input.event}})
+  if(changed.count!==1)fail(409,'El trabajo cambió; vuelve a consultar su estado')
+  return {...row,state:input.event}
+}
+async function recordEvent(db,scope,id,raw){
+ const input=eventInput(raw)
+ return atomic(db,async tx=>{
+  await lock(tx,scope,id)
+  return dto(await appendEvent(tx,scope,await ownJob(tx,scope,id),input))
+ })
+}
+async function recordPreparedDownload(db,scope,id,raw){
+ const input=downloadInput(raw)
+ return atomic(db,async tx=>{
+  await lock(tx,scope,id);let row=await ownJob(tx,scope,id)
+  if(row.state==='FAILED')fail(409,'Este trabajo necesita una nueva copia para continuar')
+  const requested=[{requestKey:input.preparedRequestKey,event:'PREPARED'},{requestKey:input.downloadRequestKey,event:'DOWNLOAD_REQUESTED'}]
+  const previous=await tx.hardwarePrintEvent.findMany({where:{job_id:id,request_key:{in:requested.map(e=>e.requestKey)}}})
+  const pending=[];let state=row.state
+  const allowed={CREATED:['PREPARED','FAILED'],PREPARED:['DOWNLOAD_REQUESTED','FAILED'],DOWNLOAD_REQUESTED:['DOWNLOAD_REQUESTED','FAILED'],FAILED:[]}
+  for(const event of requested){
+   const old=previous.find(e=>e.request_key===event.requestKey)
+   if(old){if(old.event!==event.event||old.error_code!==null)fail(409,'La referencia del evento ya fue utilizada');continue}
+   if(!allowed[state]?.includes(event.event))fail(409,'Este trabajo necesita una nueva copia para continuar')
+   pending.push({job_id:id,company_id:scope.companyId,branch_id:scope.branchId,actor_id:scope.actorId,request_key:event.requestKey,event:event.event,error_code:null})
+   state=event.event
+  }
+  if(pending.length){
+   await tx.hardwarePrintEvent.createMany({data:pending})
+   const changed=await tx.hardwarePrintJob.updateMany({where:{id,state:row.state},data:{state}})
+   if(changed.count!==1)fail(409,'El trabajo cambió; vuelve a consultar su estado')
+  }
+  return dto({...row,state})
  })
 }
 async function reprintJob(db,scope,id,raw){
@@ -96,4 +155,4 @@ async function printHistory(db,scope,raw={}){
  })
  return{items,page:current,pageSize,totalItems,totalPages}
 }
-module.exports={createJob,getJob,jobDocument,jobLogo,recordEvent,reprintJob,printHistory}
+module.exports={createJob,getJob,jobDocument,jobLogo,recordEvent,recordPreparedDownload,reprintJob,printHistory}

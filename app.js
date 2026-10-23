@@ -44,6 +44,7 @@ const corsConfig = {
 
 // CORS must be applied FIRST before any other middleware
 app.use(cors(corsConfig))
+app.use(require('./src/utils/requestTiming').requestTiming)
 
 // Other middleware
 app.use(cookieParser())

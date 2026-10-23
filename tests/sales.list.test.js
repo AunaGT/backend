@@ -208,7 +208,7 @@ test('sale detail selects product images while preserving reference lookup and c
     assert.equal(query.include.sale_dtes, true)
     assert.deepEqual(response, { ...record,line_count:0, customerContact: null,
       commercial:{state:'LEGACY',originEngagementId:null,version:1,confirmedAt:null,fiscalState:'DISABLED'},
-      capabilities:{confirm:false,requestInvoice:false,collect:false,reason:'Selecciona la sucursal de la venta para realizar acciones'},
+      capabilities:{confirm:false,requestInvoice:false,collect:false,editManual:false,confirmManual:false,cancelManual:false,reason:'Selecciona la sucursal de la venta para realizar acciones'},
     })
   } finally {
     prisma.sale.findFirst = previousFind

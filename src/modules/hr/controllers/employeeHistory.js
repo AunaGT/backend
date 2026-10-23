@@ -8,9 +8,10 @@ async function scope(req) {
   if (!item) fail(404, 'Empleado no encontrado')
   return { company_id, employee_id }
 }
+const deductionPrivacy = req => hasPerm(req.user, 'hr.deductions.view') ? {} : { event: { not: { startsWith: 'DEDUCTION_' } } }
 exports.list = async (req, res, next) => {
   try {
-    const where = await scope(req)
+    const where = { ...await scope(req), ...deductionPrivacy(req) }
     const positive = (value, fallback) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback
     const pageSize = Math.min(32, positive(req.query.pageSize, 10)), totalItems = await prisma.employeeHistory.count({ where }), totalPages = Math.max(1, Math.ceil(totalItems / pageSize)), page = Math.min(totalPages, positive(req.query.page, 1))
     const items = await prisma.employeeHistory.findMany({ where, select: { id: true, event: true, changes: true, actor: { select: { id: true, name: true } }, created_at: true }, orderBy: [{ created_at: 'desc' }, { id: 'desc' }], take: pageSize, skip: (page - 1) * pageSize })
@@ -39,7 +40,7 @@ exports.overview = async (req, res, next) => {
       const missingRequired = types.filter(type => !documents.some(document => document.type_id === type.id))
       result.documents = { complete: !missingRequired.length, missingRequired }
     }
-    result.history.count = await prisma.employeeHistory.count({ where: { ...where, created_at: { gte: DateTime.now().minus({ months: 3 }).toJSDate() } } })
+    result.history.count = await prisma.employeeHistory.count({ where: { ...where, ...deductionPrivacy(req), created_at: { gte: DateTime.now().minus({ months: 3 }).toJSDate() } } })
     res.set('Cache-Control', 'private, no-store'); res.json(result)
   } catch (error) { next(error) }
 }

@@ -282,6 +282,7 @@ exports.summary = async (req, res, next) => {
         initialInventoryCount += 1
         continue
       }
+      if (inc.source === 'PRODUCTION') continue
       const paid = inc.paymentEntries.reduce((s, e) => s + number(e.amount), 0)
       const month = new Date(inc.date).getUTCMonth() + 1
       purchasesMonthly.set(month, purchasesMonthly.get(month) + total)

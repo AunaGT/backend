@@ -1,7 +1,7 @@
 const { prisma } = require('../../../models/prisma')
 const { requireCompany, branchWhere, hasPerm } = require('../../../middlewares/tenant')
 const { fail, toUuid } = require('../domain/validation')
-const PURPOSES = { attendance: ['hr.attendance.view', 'hr.attendance.manage'], advance: ['hr.advances.manage'], supervisor: ['hr.employees.create', 'hr.employees.edit'] }
+const PURPOSES = { deduction: ['hr.deductions.manage'], attendance: ['hr.attendance.view', 'hr.attendance.manage'], advance: ['hr.advances.manage'], supervisor: ['hr.employees.create', 'hr.employees.edit'] }
 exports.list = async (req, res, next) => {
   try {
     const company_id = requireCompany(req), purpose = req.query.purpose

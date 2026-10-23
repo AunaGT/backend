@@ -389,6 +389,15 @@ model AppointmentRequest {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  document_templates DocumentTemplate[]
+  document_versions DocumentTemplateVersion[]
+  document_defaults DocumentTemplateDefault[]
+  document_assets DocumentTemplateAsset[]
+  document_snapshots DocumentSnapshot[]
+  document_artifacts DocumentArtifact[]
+  document_events DocumentEvent[]
+  sale_stock_alert_jobs SaleStockAlertJob[]
+  employee_deductions EmployeeDeduction[]
   measure_units MeasureUnit[]
   product_presentations ProductPresentation[]
   product_barcodes ProductBarcode[]
@@ -505,6 +514,9 @@ model UserCompany {
 /// Sucursal. Toda entidad transaccional lleva branch_id; la empresa se deriva
 /// de la sucursal.
 model Branch {
+  document_snapshots DocumentSnapshot[]
+  sale_stock_alert_jobs SaleStockAlertJob[]
+  employee_deductions EmployeeDeduction[]
   hardwarePrintJobs HardwarePrintJob[]
   hardwareDrawerIntents HardwareDrawerIntent[]
   hardware_workstations HardwareWorkstation[]
@@ -687,6 +699,7 @@ model ProductStockLocation {
 enum StockMovementReason {
   INITIAL
   PURCHASE
+  PRODUCTION
   SALE
   SALE_RETURN
   ORDER_FULFILL
@@ -1318,6 +1331,9 @@ model RolePermission {
 }
 
 model User {
+  deductions_created EmployeeDeduction[] @relation("DeductionCreatedBy")
+  deductions_updated EmployeeDeduction[] @relation("DeductionUpdatedBy")
+  deductions_cancelled EmployeeDeduction[] @relation("DeductionCancelledBy")
   hardwarePrintJobs HardwarePrintJob[]
   hardwareDrawerIntents HardwareDrawerIntent[]
   hardware_tests HardwareTestRun[]
@@ -1463,6 +1479,8 @@ model Alert {
 }
 
 model Sale {
+  document_snapshots DocumentSnapshot[]
+  stock_alert_job SaleStockAlertJob?
   unit_metadata_version Int @default(1)
   settlement_source String @default("LEGACY") @db.VarChar(30)
   appointment_engagement AppointmentEngagement? @relation("EngagementConfirmedSale")
@@ -1770,6 +1788,23 @@ sale Sale @relation(fields:[branch_id,sale_id],references:[branch_id,id],onDelet
   @@map("sale_history")
 }
 
+model SaleStockAlertJob {
+  id BigInt @id @default(autoincrement())
+  sale_id String @unique @db.Uuid
+  sale Sale @relation(fields:[sale_id],references:[id],onDelete:Cascade)
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Cascade)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields:[branch_id],references:[id],onDelete:Cascade)
+  product_ids Json
+  created_at DateTime @default(now()) @db.Timestamp(3)
+  available_at DateTime @default(now()) @db.Timestamp(3)
+  attempts Int @default(0)
+  last_error String? @db.VarChar(60)
+  @@index([available_at,id])
+  @@map("sale_stock_alert_outbox")
+}
+
 model SaleItem {
   physical_snapshot Json?
   unit_metadata_version Int @default(1)
@@ -1807,6 +1842,7 @@ model SaleItem {
 enum MerchandiseSource {
   PURCHASE
   INITIAL
+  PRODUCTION
 }
 
 model PurchaseLog {
@@ -1818,8 +1854,8 @@ model PurchaseLog {
   id          Int               @id @default(autoincrement())
   product_id  String            @db.Uuid
   product     Product           @relation(fields: [product_id], references: [id])
-  supplier_id String            @db.Uuid
-  supplier    Supplier          @relation(fields: [supplier_id], references: [id])
+  supplier_id String?           @db.Uuid
+  supplier    Supplier?         @relation(fields: [supplier_id], references: [id])
   qty         Decimal @db.Decimal(20, 6)
   date        DateTime          @default(now())
   cost        Decimal @db.Decimal(24, 12)
@@ -1844,6 +1880,7 @@ model SupplierCategory {
 
 /// Registro de auditoría para ingresos de mercancía
 model IncomingMerchandise {
+  production_details Json?
   request_company_id String? @db.Uuid
   request_key String? @db.VarChar(64)
   request_hash String? @db.VarChar(64)
@@ -1857,8 +1894,8 @@ model IncomingMerchandise {
   id                 String                            @id @default(uuid()) @db.Uuid
   branch_id          String                            @db.Uuid
   branch             Branch                            @relation(fields: [branch_id], references: [id], onDelete: Restrict)
-  supplier_id        String                            @db.Uuid
-  supplier           Supplier                          @relation(fields: [supplier_id], references: [id])
+  supplier_id        String?                           @db.Uuid
+  supplier           Supplier?                         @relation(fields: [supplier_id], references: [id])
   registered_by      String                            @db.Uuid
   registeredBy       User                              @relation("MerchandiseRegisteredBy", fields: [registered_by], references: [id])
   date               DateTime                          @default(now())
@@ -2801,6 +2838,145 @@ model InventoryCountLine {
 // Configuración del sistema (módulo Configuración)
 // ========================================
 
+model DocumentTemplate {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  name String @db.VarChar(150)
+  purpose String @db.VarChar(30)
+  format String @db.VarChar(20)
+  base_id String @db.VarChar(30)
+  state String @default("ACTIVE") @db.VarChar(20)
+  revision Int @default(1)
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  versions DocumentTemplateVersion[]
+  assets DocumentTemplateAsset[]
+  @@unique([company_id,id])
+  @@index([company_id,state,updated_at,id])
+  @@map("document_templates")
+}
+
+model DocumentTemplateVersion {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  template_id String @db.Uuid
+  template DocumentTemplate @relation(fields:[company_id,template_id], references:[company_id,id], onDelete:Restrict)
+  number Int
+  state String @default("DRAFT") @db.VarChar(20)
+  schema_version Int @default(1)
+  design Json
+  resource_refs Json @default("{}")
+  source String @db.Text
+  design_hash String @db.VarChar(64)
+  created_by String @db.Uuid
+  published_at DateTime?
+  created_at DateTime @default(now())
+  defaults DocumentTemplateDefault[]
+  assets DocumentTemplateAsset[]
+  @@unique([company_id,id])
+  @@unique([company_id,template_id,number])
+  @@map("document_template_versions")
+}
+
+model DocumentTemplateDefault {
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  purpose String @db.VarChar(30)
+  format String @db.VarChar(20)
+  version_id String @db.Uuid
+  version DocumentTemplateVersion @relation(fields:[company_id,version_id], references:[company_id,id], onDelete:Restrict)
+  @@id([company_id,purpose,format])
+  @@map("document_template_defaults")
+}
+
+model DocumentTemplateAsset {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  template_id String @db.Uuid
+  template DocumentTemplate @relation(fields:[company_id,template_id], references:[company_id,id], onDelete:Restrict)
+  version_id String @db.Uuid
+  version DocumentTemplateVersion @relation(fields:[company_id,version_id], references:[company_id,id], onDelete:Restrict)
+  actor_id String @db.Uuid
+  path String @unique @db.VarChar(500)
+  sha256 String @db.VarChar(64)
+  width Int
+  height Int
+  bytes Int
+  created_at DateTime @default(now())
+  @@unique([company_id,id])
+  @@map("document_template_assets")
+}
+
+model DocumentSnapshot {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  branch_id String? @db.Uuid
+  branch Branch? @relation(fields:[company_id,branch_id], references:[company_id,id], onDelete:Restrict)
+  sale_id String? @db.Uuid
+  sale Sale? @relation(fields:[branch_id,sale_id], references:[branch_id,id], onDelete:Restrict)
+  purpose String @db.VarChar(30)
+  source_kind String @db.VarChar(20)
+  actor_id String @db.Uuid
+  scenario String? @db.VarChar(20)
+  expires_at DateTime?
+  data Json
+  profiles Json
+  branding Json
+  created_at DateTime @default(now())
+  artifacts DocumentArtifact[]
+  @@unique([company_id,id])
+  @@index([company_id,branch_id,sale_id])
+  @@map("document_snapshots")
+}
+
+model DocumentArtifact {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  snapshot_id String @db.Uuid
+  snapshot DocumentSnapshot @relation(fields:[company_id,snapshot_id], references:[company_id,id], onDelete:Restrict)
+  format String @db.VarChar(20)
+  profile_hash String @db.VarChar(64)
+  renderer_version String @db.VarChar(30)
+  profile Json
+  state String @default("QUEUED") @db.VarChar(20)
+  attempts Int @default(0)
+  available_at DateTime @default(now())
+  lease_token String? @db.Uuid
+  lease_until DateTime?
+  error_code String? @db.VarChar(80)
+  path String? @unique @db.VarChar(500)
+  sha256 String? @db.VarChar(64)
+  bytes Int?
+  page_count Int?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  @@unique([company_id,id])
+  @@unique([company_id,snapshot_id,format,profile_hash,renderer_version], map:"document_artifact_identity")
+  @@map("document_artifacts")
+}
+
+model DocumentEvent {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  actor_id String @db.Uuid
+  action String @db.VarChar(40)
+  request_key String @db.VarChar(120)
+  input_hash String @db.VarChar(64)
+  entity_id String? @db.Uuid
+  result Json
+  created_at DateTime @default(now())
+  @@unique([company_id,actor_id,action,request_key])
+  @@index([company_id,created_at,id])
+  @@map("document_events")
+}
+
 model SystemSetting {
   id          Int      @id @default(autoincrement())
   company_id  String   @db.Uuid
@@ -3024,6 +3200,7 @@ enum AdvanceStatus {
 /// Expediente laboral. `user_id` es opcional: no todo empleado tiene login, y
 /// borrar el login no borra el expediente.
 model Employee {
+  deductions EmployeeDeduction[]
   id                     String                @id @default(uuid()) @db.Uuid
   company_id             String                @db.Uuid
   company                Company               @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -3241,6 +3418,8 @@ enum PayrollConcept {
 /// Corrida de planilla. Los totales están denormalizados para no recorrer los
 /// recibos en cada listado.
 model PayrollRun {
+  targeted_deductions EmployeeDeduction[] @relation("DeductionTarget")
+  applied_deductions EmployeeDeduction[] @relation("DeductionApplication")
   id                  String        @id @default(uuid()) @db.Uuid
   company_id          String        @db.Uuid
   company             Company       @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -3279,6 +3458,7 @@ model PayrollRun {
   @@unique([company_id, code])
   @@index([branch_id, status])
   @@index([company_id, pay_date])
+  @@unique([company_id, id])
   @@map("payroll_runs")
 }
 
@@ -3330,6 +3510,9 @@ model Payslip {
 /// Desglose auditable del recibo. El signo lo da `type`, el importe siempre es
 /// positivo.
 model PayslipLine {
+  deduction_id String? @db.Uuid
+  deduction EmployeeDeduction? @relation(fields: [deduction_id], references: [id], onDelete: Restrict)
+  deduction_snapshot Json?
   id          String           @id @default(uuid()) @db.Uuid
   payslip_id  String           @db.Uuid
   payslip     Payslip          @relation(fields: [payslip_id], references: [id], onDelete: Cascade)
@@ -3345,7 +3528,49 @@ model PayslipLine {
 
   @@index([payslip_id])
   @@index([advance_id])
+  @@index([deduction_id])
   @@map("payslip_lines")
+}
+
+enum EmployeeDeductionStatus {
+  PENDIENTE
+  APLICADO
+  CANCELADO
+}
+
+model EmployeeDeduction {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  employee_id String @db.Uuid
+  employee Employee @relation(fields: [company_id, employee_id], references: [company_id, id], onDelete: Restrict)
+  amount Decimal @db.Decimal(12, 2)
+  reason String @db.Text
+  status EmployeeDeductionStatus @default(PENDIENTE)
+  revision Int @default(1)
+  target_run_id String? @db.Uuid
+  target_run PayrollRun? @relation("DeductionTarget", fields: [company_id, target_run_id], references: [company_id, id], onDelete: Restrict)
+  applied_run_id String? @db.Uuid
+  applied_run PayrollRun? @relation("DeductionApplication", fields: [company_id, applied_run_id], references: [company_id, id], onDelete: Restrict)
+  created_by String? @db.Uuid
+  createdBy User? @relation("DeductionCreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+  updated_by String? @db.Uuid
+  updatedBy User? @relation("DeductionUpdatedBy", fields: [updated_by], references: [id], onDelete: SetNull)
+  cancelled_by String? @db.Uuid
+  cancelledBy User? @relation("DeductionCancelledBy", fields: [cancelled_by], references: [id], onDelete: SetNull)
+  cancelled_reason String? @db.Text
+  applied_at DateTime?
+  cancelled_at DateTime?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  payslip_lines PayslipLine[]
+  @@index([company_id, branch_id, status])
+  @@index([employee_id, status])
+  @@index([target_run_id])
+  @@index([applied_run_id])
+  @@map("employee_deductions")
 }
 
 model AppointmentEngagement {

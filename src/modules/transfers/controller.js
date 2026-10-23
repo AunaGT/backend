@@ -59,20 +59,21 @@ exports.list = async (req, res, next) => {
       toBranchId,
     })
 
-    const totalItems = await prisma.stockTransfer.count({ where })
+    let totalItems
     let summary
     if (req.query.includeSummary === 'true') {
       const groups = await prisma.stockTransfer.groupBy({ by: ['status'], where, _count: { _all: true } })
+      totalItems = groups.reduce((total, group) => total + group._count._all, 0)
       const counts = Object.fromEntries(groups.map(group => [group.status, group._count._all]))
       summary = { total: totalItems, inTransit: counts.EN_TRANSITO ?? 0, received: counts.RECIBIDA ?? 0, cancelled: counts.CANCELADA ?? 0 }
-    }
+    } else totalItems = await prisma.stockTransfer.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
 
     const items = await prisma.stockTransfer.findMany({
       where,
       include: TRANSFER_INCLUDE,
-      orderBy: { sent_at: 'desc' },
+      orderBy: [{ sent_at: 'desc' }, { id: 'desc' }],
       skip: (safePage - 1) * pageSize,
       take: pageSize,
     })

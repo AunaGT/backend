@@ -125,6 +125,8 @@ async function main() {
     { code: 'stock_moves.adjust', name: 'Ajustar existencias', description: 'Puede corregir existencias sin documento (merma, daño)' },
 
     // RRHH
+    { code: 'hr.deductions.view', name: 'Ver descuentos de salario', description: 'Puede consultar descuentos manuales y su historial' },
+    { code: 'hr.deductions.manage', name: 'Gestionar descuentos de salario', description: 'Puede registrar, editar y cancelar descuentos pendientes' },
     { code: 'hr.employees.view', name: 'Ver empleados', description: 'Puede ver el expediente de los empleados' },
     { code: 'hr.documents.view', name: 'Ver documentos de empleados', description: 'Puede abrir y descargar documentos privados del expediente' },
     { code: 'hr.documents.manage', name: 'Gestionar documentos de empleados', description: 'Puede cargar y reemplazar documentos del expediente' },
@@ -214,6 +216,7 @@ async function main() {
     { code: 'catalogs.manage', name: 'Gestionar datos maestros', description: 'Puede crear y editar datos maestros (categorías, términos de pago, etc.)' },
 
     // Configuración del sistema
+    ...require('../src/modules/config/documentTemplates/permissions').permissions,
     { code: 'settings.view', name: 'Ver configuración', description: 'Puede ver la configuración del sistema' },
     { code: 'settings.manage', name: 'Gestionar configuración', description: 'Puede modificar configuración (denominaciones, moneda, empresa)' },
 

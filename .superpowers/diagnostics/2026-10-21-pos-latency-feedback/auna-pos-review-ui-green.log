@@ -1,0 +1,881 @@
+TAP version 13
+# Subtest: hook exposes explicit recovery with the same request key and never retries just by rendering
+ok 1 - hook exposes explicit recovery with the same request key and never retries just by rendering
+  ---
+  duration_ms: 149.69321
+  type: 'test'
+  ...
+# Subtest: hook locks concurrent tabs with shared storage, captures scope headers and ignores a revoked owner
+ok 2 - hook locks concurrent tabs with shared storage, captures scope headers and ignores a revoked owner
+  ---
+  duration_ms: 106.34162
+  type: 'test'
+  ...
+# Subtest: cookie session actor changed in another tab invalidates pending confirmation with no bearer token
+ok 3 - cookie session actor changed in another tab invalidates pending confirmation with no bearer token
+  ---
+  duration_ms: 64.795753
+  type: 'test'
+  ...
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+ok 4 - normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+  ---
+  duration_ms: 155.204081
+  type: 'test'
+  ...
+# Subtest: restored submitting checkout keeps recovery visible while register selection has no payment button
+ok 5 - restored submitting checkout keeps recovery visible while register selection has no payment button
+  ---
+  duration_ms: 995.410745
+  type: 'test'
+  ...
+# Subtest: payment button announces processing and blocks repeat submission while the normal request is pending
+ok 6 - payment button announces processing and blocks repeat submission while the normal request is pending
+  ---
+  duration_ms: 423.69934
+  type: 'test'
+  ...
+# Subtest: successful checkout leaves no persistent notice, including while its ticket downloads
+ok 7 - successful checkout leaves no persistent notice, including while its ticket downloads
+  ---
+  duration_ms: 22.263117
+  type: 'test'
+  ...
+# Subtest: recovery exposes the original error, saved lines and explicit same-operation retry
+ok 8 - recovery exposes the original error, saved lines and explicit same-operation retry
+  ---
+  duration_ms: 19.891289
+  type: 'test'
+  ...
+# Subtest: unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+ok 9 - unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+  ---
+  duration_ms: 21.221595
+  type: 'test'
+  ...
+# Subtest: lost checkout retains the original failure after reload and lookup failures
+ok 10 - lost checkout retains the original failure after reload and lookup failures
+  ---
+  duration_ms: 191.261441
+  type: 'test'
+  ...
+# Subtest: manual SALE retry uses the frozen original key and payload, not a new checkout
+ok 11 - manual SALE retry uses the frozen original key and payload, not a new checkout
+  ---
+  duration_ms: 91.31196
+  type: 'test'
+  ...
+# Subtest: manual ORDER retry uses the frozen original key and payload, not a new checkout
+ok 12 - manual ORDER retry uses the frozen original key and payload, not a new checkout
+  ---
+  duration_ms: 59.240329
+  type: 'test'
+  ...
+# Subtest: retry checks a committed sale first and never reposts it
+ok 13 - retry checks a committed sale first and never reposts it
+  ---
+  duration_ms: 42.936768
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: other route
+ok 14 - retry refuses to post after lookup failure: other route
+  ---
+  duration_ms: 42.567623
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: unauthorized
+ok 15 - retry refuses to post after lookup failure: unauthorized
+  ---
+  duration_ms: 58.718606
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: server
+ok 16 - retry refuses to post after lookup failure: server
+  ---
+  duration_ms: 37.80968
+  type: 'test'
+  ...
+# Subtest: retry refuses to post after lookup failure: offline
+ok 17 - retry refuses to post after lookup failure: offline
+  ---
+  duration_ms: 53.63483
+  type: 'test'
+  ...
+# Subtest: double retry while lookup is pending posts the original operation only once
+ok 18 - double retry while lookup is pending posts the original operation only once
+  ---
+  duration_ms: 25.40294
+  type: 'test'
+  ...
+# Subtest: scope revoked during retry lookup prevents submitting or clearing the saved attempt
+ok 19 - scope revoked during retry lookup prevents submitting or clearing the saved attempt
+  ---
+  duration_ms: 46.626528
+  type: 'test'
+  ...
+# Subtest: completion in another tab during retry lookup cannot be downgraded or posted again
+ok 20 - completion in another tab during retry lookup cannot be downgraded or posted again
+  ---
+  duration_ms: 55.889647
+  type: 'test'
+  ...
+# Subtest: legacy metadata and confirmed markers are not retryable requests
+ok 21 - legacy metadata and confirmed markers are not retryable requests
+  ---
+  duration_ms: 133.785059
+  type: 'test'
+  ...
+# Subtest: retry cannot overwrite a newer attempt while its lookup was pending
+ok 22 - retry cannot overwrite a newer attempt while its lookup was pending
+  ---
+  duration_ms: 31.442488
+  type: 'test'
+  ...
+# Subtest: retry stops before posting when saving the recovery marker fails
+ok 23 - retry stops before posting when saving the recovery marker fails
+  ---
+  duration_ms: 33.847799
+  type: 'test'
+  ...
+# Subtest: retry definitive rejection releases only its attempt
+ok 24 - retry definitive rejection releases only its attempt
+  ---
+  duration_ms: 27.258217
+  type: 'test'
+  ...
+# Subtest: retry conflict preserves the existing recovery
+ok 25 - retry conflict preserves the existing recovery
+  ---
+  duration_ms: 31.141872
+  type: 'test'
+  ...
+# Subtest: submit rejection cleanup rechecks concurrent confirmation inside the final lock
+ok 26 - submit rejection cleanup rechecks concurrent confirmation inside the final lock
+  ---
+  duration_ms: 32.090909
+  type: 'test'
+  ...
+# Subtest: retry rejection cleanup rechecks concurrent confirmation inside the final lock
+ok 27 - retry rejection cleanup rechecks concurrent confirmation inside the final lock
+  ---
+  duration_ms: 45.645222
+  type: 'test'
+  ...
+# Subtest: submit rejection never treats an unrelated lookup 404 as authoritative absence
+ok 28 - submit rejection never treats an unrelated lookup 404 as authoritative absence
+  ---
+  duration_ms: 23.122486
+  type: 'test'
+  ...
+# Subtest: retry rejection never treats an unrelated lookup 404 as authoritative absence
+ok 29 - retry rejection never treats an unrelated lookup 404 as authoritative absence
+  ---
+  duration_ms: 31.47536
+  type: 'test'
+  ...
+# Subtest: automatic recovery surfaces the lookup failure separately from the persisted send failure
+ok 30 - automatic recovery surfaces the lookup failure separately from the persisted send failure
+  ---
+  duration_ms: 10.332233
+  type: 'test'
+  ...
+# Subtest: double submit before render sends one checkout and confirms once
+ok 31 - double submit before render sends one checkout and confirms once
+  ---
+  duration_ms: 9.756648
+  type: 'test'
+  ...
+# Subtest: lost response recovers committed sale without a second checkout
+ok 32 - lost response recovers committed sale without a second checkout
+  ---
+  duration_ms: 15.503584
+  type: 'test'
+  ...
+# Subtest: not-observed after timeout remains unknown and cannot start a different checkout
+ok 33 - not-observed after timeout remains unknown and cannot start a different checkout
+  ---
+  duration_ms: 12.011476
+  type: 'test'
+  ...
+# Subtest: definite rejected input releases the attempt only after no sale is observed
+ok 34 - definite rejected input releases the attempt only after no sale is observed
+  ---
+  duration_ms: 10.627619
+  type: 'test'
+  ...
+# Subtest: old owner response is persisted for recovery but cannot clear the new owner cart
+ok 35 - old owner response is persisted for recovery but cannot clear the new owner cart
+  ---
+  duration_ms: 37.466765
+  type: 'test'
+  ...
+# Subtest: storage failure prevents mutation and confirmation cleanup failure never reposts
+ok 36 - storage failure prevents mutation and confirmation cleanup failure never reposts
+  ---
+  duration_ms: 22.46119
+  type: 'test'
+  ...
+# Subtest: a definitive business rejection does not leave a permanent unknown checkout
+ok 37 - a definitive business rejection does not leave a permanent unknown checkout
+  ---
+  duration_ms: 9.754765
+  type: 'test'
+  ...
+# Subtest: completion during lost-response recovery cannot be downgraded when cleanup fails
+ok 38 - completion during lost-response recovery cannot be downgraded when cleanup fails
+  ---
+  duration_ms: 16.270428
+  type: 'test'
+  ...
+# Subtest: a second tab queued before completion cannot charge again after the pending marker clears
+ok 39 - a second tab queued before completion cannot charge again after the pending marker clears
+  ---
+  duration_ms: 21.97264
+  type: 'test'
+  ...
+# Subtest: restoring a locally confirmed attempt still checks its authorized server result
+ok 40 - restoring a locally confirmed attempt still checks its authorized server result
+  ---
+  duration_ms: 29.909661
+  type: 'test'
+  ...
+# Subtest: late old checkout confirmation preserves a newer attempt
+ok 41 - late old checkout confirmation preserves a newer attempt
+  ---
+  duration_ms: 30.58338
+  type: 'test'
+  ...
+# Subtest: late old checkout failure preserves a newer attempt
+ok 42 - late old checkout failure preserves a newer attempt
+  ---
+  duration_ms: 28.294939
+  type: 'test'
+  ...
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# You should call navigate() in a React.useEffect(), not when your component is first rendered.
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: successful sale uses the existing notification with a finite short duration
+ok 43 - successful sale uses the existing notification with a finite short duration
+  ---
+  duration_ms: 1156.252096
+  type: 'test'
+  ...
+# Subtest: POS after a successful sale has no permanent success panel or drawer simulator
+ok 44 - POS after a successful sale has no permanent success panel or drawer simulator
+  ---
+  duration_ms: 423.164482
+  type: 'test'
+  ...
+# Subtest: ticket routing info is a short notification, not a persistent POS message
+ok 45 - ticket routing info is a short notification, not a persistent POS message
+  ---
+  duration_ms: 580.333164
+  type: 'test'
+  ...
+# Subtest: reloaded checkout without selected register still shows saved products, cause and recovery action
+ok 46 - reloaded checkout without selected register still shows saved products, cause and recovery action
+  ---
+  duration_ms: 520.925813
+  type: 'test'
+  ...
+# Subtest: explicit payment navigation focuses its heading once without adding a tab stop
+ok 47 - explicit payment navigation focuses its heading once without adding a tab stop
+  ---
+  duration_ms: 501.214688
+  type: 'test'
+  ...
+# Subtest: returning from payment restores focus to the review button in the mobile sale panel
+ok 48 - returning from payment restores focus to the review button in the mobile sale panel
+  ---
+  duration_ms: 501.751372
+  type: 'test'
+  ...
+# Subtest: initial rendering and blocked payment navigation do not steal keyboard focus
+ok 49 - initial rendering and blocked payment navigation do not steal keyboard focus
+  ---
+  duration_ms: 720.727163
+  type: 'test'
+  ...
+# Subtest: a focus request from another company context is discarded
+ok 50 - a focus request from another company context is discarded
+  ---
+  duration_ms: 492.327059
+  type: 'test'
+  ...
+# Subtest: removing another real cart line preserves a pending selected quantity and payment guard
+ok 51 - removing another real cart line preserves a pending selected quantity and payment guard
+  ---
+  duration_ms: 819.225332
+  type: 'test'
+  ...
+# Subtest: rejected duplicate presentation retains actual selected line and pending edit
+ok 52 - rejected duplicate presentation retains actual selected line and pending edit
+  ---
+  duration_ms: 1006.064106
+  type: 'test'
+  ...
+# Subtest: rejected availability presentation retains actual selected line and pending edit
+ok 53 - rejected availability presentation retains actual selected line and pending edit
+  ---
+  duration_ms: 1026.730782
+  type: 'test'
+  ...
+# Subtest: accepted presentation follows the changed real line rather than the last cart line
+ok 54 - accepted presentation follows the changed real line rather than the last cart line
+  ---
+  duration_ms: 517.540327
+  type: 'test'
+  ...
+# Subtest: loading methods does not select one, retired methods clear, explicit selections survive refresh
+ok 55 - loading methods does not select one, retired methods clear, explicit selections survive refresh
+  ---
+  duration_ms: 703.828797
+  type: 'test'
+  ...
+# Subtest: entering payment is navigation only, keeps cart and does not require selecting payment early
+ok 56 - entering payment is navigation only, keeps cart and does not require selecting payment early
+  ---
+  duration_ms: 553.399709
+  type: 'test'
+  ...
+# Subtest: unapplied quantity blocks payment and applies exact text to the selected line only
+ok 57 - unapplied quantity blocks payment and applies exact text to the selected line only
+  ---
+  duration_ms: 624.849038
+  type: 'test'
+  ...
+# Subtest: availability authorization in progress cannot be bypassed by payment navigation
+ok 58 - availability authorization in progress cannot be bypassed by payment navigation
+  ---
+  duration_ms: 245.567194
+  type: 'test'
+  ...
+# Subtest: separate unit presentations retain exact identity during quantity edit and removal
+ok 59 - separate unit presentations retain exact identity during quantity edit and removal
+  ---
+  duration_ms: 632.961535
+  type: 'test'
+  ...
+# Subtest: tenant reset clears the payment method, amount and page step without choosing an alternative
+ok 60 - tenant reset clears the payment method, amount and page step without choosing an alternative
+  ---
+  duration_ms: 294.816136
+  type: 'test'
+  ...
+# Subtest: a stale unavailable method cannot be submitted before selection cleanup effect runs
+ok 61 - a stale unavailable method cannot be submitted before selection cleanup effect runs
+  ---
+  duration_ms: 334.888162
+  type: 'test'
+  ...
+# Subtest: fractional services use their configured precision through the touch editor
+ok 62 - fractional services use their configured precision through the touch editor
+  ---
+  duration_ms: 562.344505
+  type: 'test'
+  ...
+# Subtest: new confirmed sale resets payment and composing step without retaining cash as default
+ok 63 - new confirmed sale resets payment and composing step without retaining cash as default
+  ---
+  duration_ms: 320.74747
+  type: 'test'
+  ...
+# Subtest: removing a loaded order starts composing without reusing its chosen payment
+ok 64 - removing a loaded order starts composing without reusing its chosen payment
+  ---
+  duration_ms: 355.572815
+  type: 'test'
+  ...
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: explicit draft recovery restores only a still available payment method
+ok 65 - explicit draft recovery restores only a still available payment method
+  ---
+  duration_ms: 713.631533
+  type: 'test'
+  ...
+1..65
+# tests 65
+# suites 0
+# pass 65
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 14027.976468

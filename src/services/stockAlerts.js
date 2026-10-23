@@ -16,6 +16,22 @@ let catalogCache = null
 let cacheTime = null
 const CACHE_TTL = 60000 // 1 minuto
 
+async function lockStockAlertProducts(tx,productIds,branchId,{tryOnly=false}={}){
+  const {Prisma}=require('@prisma/client')
+  const keys=[...new Set(productIds.map(id=>`stock-alert:${branchId}:${id}`))].sort()
+  if(!keys.length)return true
+  const values=Prisma.join(keys.map(key=>Prisma.sql`(${key}::text)`))
+  // Sort before invoking volatile locks; these guard alerts, not POS stock rows.
+  if(tryOnly){
+    const rows=await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtextextended(key,0)) AS locked
+      FROM (SELECT key FROM (VALUES ${values}) AS v(key) ORDER BY key) AS ordered`
+    return rows.length===keys.length&&rows.every(row=>row.locked)
+  }
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(key,0))
+    FROM (SELECT key FROM (VALUES ${values}) AS v(key) ORDER BY key) AS ordered`
+  return true
+}
+
 async function getCatalogs(tx) {
   const now = Date.now()
   if (catalogCache && cacheTime && (now - cacheTime) < CACHE_TTL) {
@@ -41,18 +57,31 @@ async function getCatalogs(tx) {
 
 // Procesamiento en lote para múltiples productos. Las alertas de stock son
 // POR SUCURSAL: stock/min_stock vienen de product_stocks de esa sucursal.
-async function ensureStockAlertsBatch(tx, products, branchId) {
+async function ensureStockAlertsBatch(tx, products, branchId, {strict=false,transactionBound=false,guardHeld=false}={}) {
   if (!products || products.length === 0) return
   if (!branchId) {
+    if(strict)throw Object.assign(new Error('Sucursal requerida'),{code:'ALERT_BRANCH_REQUIRED'})
     console.error('[ensureStockAlertsBatch] branchId faltante; alertas omitidas')
     return
   }
 
   try {
+    if(typeof tx.$transaction==='function'&&!transactionBound){
+      return await tx.$transaction(client=>ensureStockAlertsBatch(client,products,branchId,{strict,transactionBound:true}),{timeout:30000,maxWait:5000})
+    }
     // Obtener catálogos una sola vez para todo el lote
     const catalogs = await getCatalogs(tx)
     const { statusActive, statusResolved } = catalogs
-    if (!statusActive || !statusResolved) return
+    if (!statusActive || !statusResolved) {
+      if(strict)throw Object.assign(new Error('Catálogos de alertas incompletos'),{code:'ALERT_CATALOG_REQUIRED'})
+      return
+    }
+
+    if(!guardHeld){
+      await lockStockAlertProducts(tx,products.map(p=>p.id),branchId)
+      const current=await tx.productStock.findMany({where:{branch_id:branchId,product_id:{in:products.map(p=>p.id)}},select:{product_id:true,stock:true,min_stock:true}})
+      products=current.map(({product_id,...row})=>({id:product_id,...row}))
+    }
 
     const timestamp = DateTime.now().setZone('America/Guatemala').toJSDate()
 
@@ -124,6 +153,7 @@ async function ensureStockAlertsBatch(tx, products, branchId) {
 
       const type = catalogs.alertTypes[typeName]
       const priority = catalogs.alertPriorities[priorityName]
+      if(strict&&(!type||!priority))throw Object.assign(new Error('Catálogos de alertas incompletos'),{code:'ALERT_CATALOG_REQUIRED'})
 
       const alertData = {
         current_stock: storageQuantity(stock),
@@ -167,6 +197,7 @@ async function ensureStockAlertsBatch(tx, products, branchId) {
 
     await Promise.all(operations)
   } catch (e) {
+    if(strict)throw e
     console.error('[ensureStockAlertsBatch] ERROR:', e.message)
   }
 }
@@ -176,4 +207,4 @@ async function ensureStockAlert(tx, productId, newStock, minStock, branchId) {
   return ensureStockAlertsBatch(tx, [{ id: productId, stock: newStock, min_stock: minStock }], branchId)
 }
 
-module.exports = { ensureStockAlert, ensureStockAlertsBatch }
+module.exports = { ensureStockAlert, ensureStockAlertsBatch, lockStockAlertProducts }

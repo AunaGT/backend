@@ -19,7 +19,7 @@ test('private settings return revision metadata but not another domain or unknow
 })
 test('logo conflict rolls back references and removes only the newly uploaded object',async()=>{
   const removed=[],row={key:'company_logo_url',value:'https://owned/old.png',revision:2}
-  const db={systemSetting:{findFirst:async()=>row},$transaction:async fn=>fn({$queryRaw:async()=>[],$executeRaw:async()=>0,hardwarePrintJob:{count:async()=>0},systemSetting:{findFirst:async()=>row,updateMany:async()=>({count:0})},company:{update:async()=>{throw Error('No cambiar Company')}}})}
+  const db={systemSetting:{findFirst:async()=>row},$transaction:async fn=>fn({$queryRaw:async()=>[],$executeRaw:async()=>0,hardwarePrintJob:{count:async()=>0},documentSnapshot:{count:async()=>0},systemSetting:{findFirst:async()=>row,updateMany:async()=>({count:0})},company:{update:async()=>{throw Error('No cambiar Company')}}})}
   const storage=require.resolve('../src/services/supabaseStorage')
   await withMocks({[model]:{prisma:db,prismaTransaction:db},[storage]:{COMPANY_LOGO_BUCKET:'logo',uploadImageBuffer:async()=>'https://owned/new.png',removePublicObject:async url=>removed.push(url)}},target,async controller=>{
     const res=jsonResponse();await controller.uploadLogo({companyId:'A',body:{expectedRevision:'1'},user:{sub:null},file:{mimetype:'image/png',buffer:Buffer.from('png')}},res,e=>{throw e})

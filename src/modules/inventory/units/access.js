@@ -19,12 +19,14 @@ function authorize(scope, permissions, write=false) {
 }
 async function unitsEnabled(db,companyId) {
   if (!companyId) return false
-  const row=await db.systemSetting?.findUnique?.({where:{company_id_key:{company_id:companyId,key:KEY}},select:{key:true,value:true}})
+  const row=await require('../../../services/checkoutContext').checkoutSetting(db,companyId,KEY,()=>db.systemSetting?.findUnique?.({where:{company_id_key:{company_id:companyId,key:KEY}},select:{key:true,value:true}}))
   return row?.key===KEY&&String(row.value??'false').toLowerCase()==='true'
 }
 async function assertEnabled(db,scope) { if(!await unitsEnabled(db,scope.companyId)) fail(403,'Las unidades y presentaciones están desactivadas') }
 async function lockCompany(tx,companyId) { await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`inventory-units:${companyId}`},0))` }
 async function lockProduct(tx,scope,id) {
+  const cached=require('../../../services/checkoutContext').checkoutProducts(tx,[id],scope)?.get(String(id))
+  if(cached){if(cached.deleted)fail(404,'Producto no encontrado');return cached}
   await tx.$executeRaw`SELECT id FROM products WHERE id=${id}::uuid AND company_id=${scope.companyId}::uuid FOR UPDATE`
   return scopedProduct(tx,scope,id)
 }

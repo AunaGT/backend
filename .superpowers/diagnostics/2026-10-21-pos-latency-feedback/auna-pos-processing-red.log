@@ -1,0 +1,91 @@
+TAP version 13
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+not ok 1 - normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+  ---
+  duration_ms: 120.104493
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:2:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + '<div role="alert" class="relative w-full rounded-lg border p-4 [&amp;&gt;svg~*]:pl-7 [&amp;&gt;svg+div]:translate-y-[-3px] [&amp;&gt;svg]:absolute [&amp;&gt;svg]:left-4 [&amp;&gt;svg]:top-4 [&amp;&gt;svg]:text-foreground bg-background text-foreground mb-4" aria-live="polite"><h5 class="mb-1 font-medium leading-none tracking-tight">Comprobando el cobro</h5><div class="text-sm [&amp;_p]:leading-relaxed"><p>No vuelvas a cobrar esta operación. Comprueba el resultado antes de continuar.</p><div class="mt-3 flex flex-wrap gap-2"><button class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 auna-form-action-outline border h-10 px-4 py-2 auna-form-action auna-form-action-outline" type="button" disabled="">Comprobar resultado</button></div></div></div>'
+    - ''
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: ''
+  actual: '<div role="alert" class="relative w-full rounded-lg border p-4 [&amp;&gt;svg~*]:pl-7 [&amp;&gt;svg+div]:translate-y-[-3px] [&amp;&gt;svg]:absolute [&amp;&gt;svg]:left-4 [&amp;&gt;svg]:top-4 [&amp;&gt;svg]:text-foreground bg-background text-foreground mb-4" aria-live="polite"><h5 class="mb-1 font-medium leading-none tracking-tight">Comprobando el cobro</h5><div class="text-sm [&amp;_p]:leading-relaxed"><p>No vuelvas a cobrar esta operación. Comprueba el resultado antes de continuar.</p><div class="mt-3 flex flex-wrap gap-2"><button class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 auna-form-action-outline border h-10 px-4 py-2 auna-form-action auna-form-action-outline" type="button" disabled="">Comprobar resultado</button></div></div></div>'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:5:9)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: payment button announces processing and blocks repeat submission while the normal request is pending
+not ok 2 - payment button announces processing and blocks repeat submission while the normal request is pending
+  ---
+  duration_ms: 691.711266
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:10:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:14:68)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: successful checkout leaves no persistent notice, including while its ticket downloads
+ok 3 - successful checkout leaves no persistent notice, including while its ticket downloads
+  ---
+  duration_ms: 17.569689
+  type: 'test'
+  ...
+# Subtest: recovery exposes the original error, saved lines and explicit same-operation retry
+ok 4 - recovery exposes the original error, saved lines and explicit same-operation retry
+  ---
+  duration_ms: 22.145681
+  type: 'test'
+  ...
+# Subtest: unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+ok 5 - unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+  ---
+  duration_ms: 16.616667
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 3
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1122.369907

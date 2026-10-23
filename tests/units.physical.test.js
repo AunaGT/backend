@@ -32,6 +32,8 @@ test('count start freezes physical unit metadata while holding the product lock'
 test('stock alerts compare numeric strings by value and recognize a decimal zero',async()=>{
   const created=[],healthy=[]
   const db={status:{findFirst:async({where})=>({id:where.name})},alertType:{findMany:async()=>[{name:'Sin Stock',id:'zero'},{name:'Stock Bajo',id:'low'}]},alertPriority:{findMany:async()=>[]},alert:{updateMany:async({where})=>healthy.push(...where.product_id.in),findMany:async()=>[],createMany:async({data})=>created.push(...data)}}
+  db.$executeRaw=async sql=>{assert.match(String(sql),/pg_advisory_xact_lock/);return 1}
+  db.productStock={findMany:async({where})=>{assert.equal(where.branch_id,'B');return[{product_id:'healthy',stock:'10',min_stock:'2'},{product_id:'zero',stock:'0.000000',min_stock:'0.1'}].filter(row=>where.product_id.in.includes(row.product_id))}}
   await withMocks({},require.resolve('../src/services/stockAlerts'),async c=>{
     await c.ensureStockAlertsBatch(db,[{id:'healthy',stock:'10',min_stock:'2'},{id:'zero',stock:'0.000000',min_stock:'0.1'}],'B')
     assert.deepEqual(healthy,['healthy'])

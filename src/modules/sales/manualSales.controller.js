@@ -1,0 +1,9 @@
+const {prisma,prismaTransaction}=require('../../models/prisma')
+const {requireBranch,requireCompany,hasPerm}=require('../../middlewares/tenant')
+const api=require('./manualSales')
+function scope(req){return{companyId:requireCompany(req),branchId:requireBranch(req),userId:req.user.sub,permissions:req.user.permissions||[],isAdmin:hasPerm({...req.user,permissions:[]},'sales.create')}}
+exports.read=async(req,res,next)=>{try{res.json(await api.readManualSale(prisma,scope(req),req.params.id))}catch(e){next(e)}}
+exports.preview=async(req,res,next)=>{try{res.json(await api.previewManualSale(prismaTransaction,scope(req),req.body))}catch(e){next(e)}}
+exports.save=async(req,res,next)=>{try{res.json(await api.saveManualSale(prismaTransaction,scope(req),req.params.id||null,req.body))}catch(e){next(e)}}
+exports.confirm=async(req,res,next)=>{try{res.json(await api.confirmManualSale(prismaTransaction,scope(req),req.params.id,req.body))}catch(e){next(e)}}
+exports.cancel=async(req,res,next)=>{try{res.json(await api.cancelManualSale(prismaTransaction,scope(req),req.params.id,req.body))}catch(e){next(e)}}

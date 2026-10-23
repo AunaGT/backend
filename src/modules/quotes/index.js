@@ -7,7 +7,7 @@ async function lockQuote(tx,scope,quoteId){
   const locked=await tx.$queryRaw`SELECT d.id FROM commercial_documents d JOIN branches b ON b.id=d.branch_id WHERE d.id=${quoteId}::uuid AND d.branch_id=${scope.branchId}::uuid AND b.company_id=${scope.companyId}::uuid AND d.doc_type='QUOTE' FOR UPDATE OF d`
   if(!locked.length) fail(404,'NOT_FOUND','Cotización no encontrada')
   const quote=await tx.commercialDocument.findFirst({where:{id:quoteId,branch_id:scope.branchId,branch:{company_id:scope.companyId},doc_type:'QUOTE'},
-    include:{lines:{orderBy:{sort_order:'asc'}},customerContact:true,convertedChildren:{where:{doc_type:'ORDER'},include:{documentSales:true}},quoted_engagement:{select:{id:true,sale_id:true}}}})
+    include:{lines:{orderBy:{sort_order:'asc'}},customerContact:true,documentSales:{select:{sale_id:true}},convertedChildren:{where:{doc_type:'ORDER'},include:{documentSales:true}},quoted_engagement:{select:{id:true,sale_id:true}}}})
   return quote&&{...quote,lines:require('../../services/commercialDocumentFulfillment').netDocumentLines(quote)}
 }
 async function assertQuoteSourceAccess(tx,scope){
@@ -19,6 +19,7 @@ async function loadQuoteSource(tx,scope,quoteId){
   await assertQuoteSourceAccess(tx,scope)
   const quote=await lockQuote(tx,scope,quoteId)
   if(quote.status!=='ACCEPTED') fail(409,'QUOTE_NOT_ACCEPTED','Solo puedes agendar una cotización aceptada')
+  if(quote.documentSales?.length)fail(409,'QUOTE_ALREADY_LINKED','La cotización ya tiene una venta vinculada')
   if(!quote.customerContact||quote.customerContact.company_id!==scope.companyId||quote.customerContact.deleted||quote.customerContact.party_type!=='CUSTOMER') fail(400,'CONTACT_REQUIRED','Vincula un cliente registrado a la cotización antes de agendar')
   const setting=await tx.systemSetting.findUnique({where:{company_id_key:{company_id:scope.companyId,key:'currency_code'}}})
   return {id:quote.id,branchId:quote.branch_id,customerId:quote.customer_contact_id,currencyCode:setting?.value||'GTQ',total:quote.total.toFixed(2),

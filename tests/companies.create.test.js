@@ -28,6 +28,7 @@ for (const failModules of [false, true]) {
         return { id: model === 'company' ? 'company-a' : model === 'account' ? `account-${data.code}` : 'branch-a', ...data }
       }
       const tx = {
+        $executeRaw:async()=>1,
         $queryRaw:async()=>{query('settingsActor',null);return[]},
         paymentMethod: { findMany: async () => [1,2,3,4].map(id=>({id})) },
         companyPaymentMethod: { createMany: async ({data}) => query('paymentPreferences',data) },
@@ -40,9 +41,10 @@ for (const failModules of [false, true]) {
           findMany:async()=>pending.filter(row=>row.model==='systemSetting').map(row=>({...row.data,revision:1})),
           upsert: async ({ create }) => query('systemSetting', create),
           createMany: async ({ data }) => query('settings', data),
-          findUnique: async () => { query('readSettings', null); return null },
+          findUnique: async ({where}) => { query('readSettings', null); const row=pending.findLast(row=>row.model==='systemSetting'&&row.data.key===where.company_id_key.key);return row?{...row.data,revision:1}:null },
+          updateMany: async ({where,data}) => {const row=pending.findLast(row=>row.model==='systemSetting'&&row.data.key===where.key);if(!row)return{count:0};Object.assign(row.data,data);return{count:1}},
         },
-        account: { upsert: async ({ create }) => query('account', create) },
+        account: { upsert: async ({ create }) => query('account', create), findFirst:async({where})=>pending.find(row=>row.model==='account'&&row.data.code===where.code)?.data||null,create:async({data})=>query('account',data) },
         companyModule: { createMany: async ({ data }) => {
           query('modules', data)
           if (failModules) throw moduleError
@@ -69,13 +71,14 @@ for (const failModules of [false, true]) {
     assert.equal(committed.find(row=>row.model==='paymentPreferences').data.length,4)
     assert.equal(response.code, 'QA')
     assert.deepEqual(response.branches, [{ id: 'branch-a', company_id: 'company-a', name: 'Principal', code: 'PRIN', is_default: true }])
-    assert.equal(committed.filter(row => row.model === 'account').length, 34)
+    assert.equal(committed.filter(row => row.model === 'account').length, 35)
     assert.equal(committed.find(row => row.model === 'account' && row.data.code === '1101').data.parent_id, 'account-1')
     assert.deepEqual(committed.find(row => row.model === 'userCompany').data, { user_id: 'actor', company_id: 'company-a' })
     assert.deepEqual(committed.find(row => row.model === 'userBranch').data, { user_id: 'actor', branch_id: 'branch-a' })
     const settings = committed.filter(row => row.model === 'systemSetting' || row.model === 'settings').flatMap(row => row.data)
     assert.equal(settings.find(row => row.key === 'company_name').value, 'Empresa A')
     assert.equal(JSON.parse(settings.find(row => row.key === 'accounting.defaultAccounts').value).cash, '1101')
+    assert.equal(JSON.parse(settings.find(row => row.key === 'accounting.defaultAccounts').value).payrollOtherDeductions, '2108')
     const modules = committed.find(row => row.model === 'modules').data
     assert.ok(modules.length > 0)
     assert.ok(modules.every(row => row.company_id === 'company-a'))

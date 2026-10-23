@@ -45,7 +45,16 @@ const uploadImage = multer({
 })
 
 const router = Router()
+const scannerRead=method=>async(req,res,next)=>{try{res.json(await require('./scanner')[method](require('../../models/prisma').prisma,{companyId:req.companyId,branchId:req.branchId,user:req.user},req.query))}catch(e){next(e)}}
+router.get('/scan',Auth,scannerRead('resolveScan'))
+router.get('/scanner-profile',Auth,scannerRead('scannerProfile'))
 router.use(require('./units/routes'))
+const posCatalog=require('./posCatalog')
+const posRead=(method,body=false)=>async(req,res,next)=>{try{const {prisma}=require('../../models/prisma');res.json(await method(prisma,{companyId:req.companyId,branchId:req.branchId,user:req.user},body?req.body:req.query))}catch(error){next(error)}}
+router.get('/pos-catalog/categories',Auth,hasPermission('sales.create'),posRead(posCatalog.listPosCategories))
+router.get('/pos-catalog/resolve-code',Auth,hasPermission('sales.create'),posRead(posCatalog.resolvePosCode))
+router.post('/pos-catalog/items',Auth,hasPermission('sales.create'),posRead(posCatalog.posCatalogItems,true))
+router.get('/pos-catalog',Auth,hasPermission('sales.create'),posRead(posCatalog.listPosCatalog))
 const BarcodeLabels = require('./barcodeLabels/controller')
 router.get('/shelf-labels/layout', Auth, hasPermission('products.view'), BarcodeLabels.shelfLayout)
 router.put('/shelf-labels/layout', Auth, hasPermission('products.view'), hasPermission('settings.manage'), BarcodeLabels.shelfSaveLayout)
@@ -414,7 +423,7 @@ router.post('/:id/branch-stock', Auth, hasPermission('products.edit', 'products.
  * /products/register-incoming:
  *   post:
  *     tags: [Products]
- *     summary: Registrar ingreso de mercancía desde un proveedor
+ *     summary: Registrar compra, fabricación propia o existencias iniciales
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -424,10 +433,13 @@ router.post('/:id/branch-stock', Auth, hasPermission('products.edit', 'products.
  *           schema:
  *             type: object
  *             required:
- *               - supplier_id
  *               - items
  *             properties:
- *               supplier_id: { type: string, format: uuid }
+ *               source: { type: string, enum: [PURCHASE, INITIAL, PRODUCTION], default: PURCHASE, description: "Compra, existencias iniciales o fabricación propia. Las entradas propias no admiten campos de pago ni proveedor." }
+ *               supplier_id: { type: string, format: uuid, description: "Obligatorio solo en PURCHASE. Puede ser distinto del proveedor habitual del producto." }
+ *               request_key: { type: string, maxLength: 64, description: "Clave estable para reintentos; requerida en entradas propias." }
+ *               components: { type: array, description: "Solo PRODUCTION: insumos físicos en su unidad base.", items: { type: object, properties: { product_id: { type: string, format: uuid }, quantity: { type: string } } } }
+ *               costs: { type: object, description: "Solo PRODUCTION: importes del lote completo, no por unidad.", properties: { materials: { type: string }, labor: { type: string }, other: { type: string } } }
  *               items:
  *                 type: array
  *                 items:
@@ -435,11 +447,10 @@ router.post('/:id/branch-stock', Auth, hasPermission('products.edit', 'products.
  *                   required:
  *                     - product_id
  *                     - quantity
- *                     - unit_cost
  *                   properties:
  *                     product_id: { type: string, format: uuid }
- *                     quantity: { type: integer, minimum: 1 }
- *                     unit_cost: { type: number, minimum: 0 }
+ *                     quantity: { type: string, description: "Cantidad decimal exacta. Unidad base en INITIAL/PRODUCTION; presentación elegida en PURCHASE." }
+ *                     unit_cost: { type: string, description: "Requerido en PURCHASE e INITIAL. PRODUCTION lo calcula el servidor." }
  *               notes: { type: string }
  *     responses:
  *       200: { description: OK }

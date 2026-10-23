@@ -55,19 +55,20 @@ test('users: status counts retain effective company role and search scope, with 
 test('products: opt-in counts preserve catalog, category and company scope', async t => {
   const filters = []
   const controller = load(t, '../src/modules/inventory/products.controller', { product: {
-    count: async ({ where }) => { filters.push(where); return filters.length === 1 ? 18 : 3 }, findMany: async () => [],
+    groupBy: async ({ where }) => { filters.push(where); return [{available_for_sale:true,kind:'KIT',tracks_expiry:true,_count:{_all:3}},{available_for_sale:false,kind:'STANDARD',tracks_expiry:false,_count:{_all:15}}] }, findMany: async ({where}) => { filters.push(where); return [] },
   } })
   let response
   await controller.list({ companyId: 'company', query: { branch_id: 'all', search: 'ana', category: 'bebidas', pageSize: '1', includeSummary: 'true' } }, { json: value => { response = value } }, e => { throw e })
   assert.deepEqual(response.summary, { total: 18, forSale: 3, kits: 3, tracksExpiry: 3 })
-  for (const where of filters.slice(1)) assert.deepEqual(where.AND[0], filters[0])
+  assert.equal(filters.length, 2)
+  assert.deepEqual(filters[1], filters[0])
 })
 
 test('deleted products: filter before paging and count the entire filtered archive', async t => {
   const counts = []
   let selection, response
   const controller = load(t, '../src/modules/inventory/products.controller', { product: {
-    count: async ({ where }) => { counts.push(where); return counts.length === 1 ? 45 : 3 },
+    groupBy: async ({ where }) => { counts.push(where); return [{available_for_sale:true,kind:'KIT',tracks_expiry:true,_count:{_all:3}},{available_for_sale:false,kind:'STANDARD',tracks_expiry:false,_count:{_all:42}}] },
     findMany: async args => { selection = args; return [] },
   } })
   await controller.list({ companyId: 'company', query: { deletedOnly: 'true', includeDeleted: 'true', search: 'agua', category: 'Bebidas', page: '2', pageSize: '20', includeSummary: 'true' } }, { json: value => { response = value } }, e => { throw e })
@@ -81,7 +82,8 @@ test('deleted products: filter before paging and count the entire filtered archi
   assert.equal(response.totalPages, 3)
   assert.equal(response.page, 2)
   assert.deepEqual(response.summary, { total: 45, forSale: 3, kits: 3, tracksExpiry: 3 })
-  for (const where of counts.slice(1)) assert.deepEqual(where.AND[0], selection.where)
+  assert.equal(counts.length, 1)
+  assert.deepEqual(counts[0], selection.where)
 })
 
 test('products: archive filtering leaves default and legacy catalog requests unchanged', async t => {

@@ -3,6 +3,10 @@ const v = require('../src/modules/config/hardware/validation')
 const id = '10000000-0000-4000-8000-000000000001'
 const workstation = {code:' PC-1 ',name:' Mostrador ',state:'DRAFT',cashRegisterId:null}
 const scanner = {code:'L1',name:'Lector',kind:'SCANNER',connection:'HID',state:'DRAFT',profile:{scannerSuffix:'ENTER',scannerMinLength:1,scannerMaxLength:128}}
+test('scanner accepts an optional printable prefix but not controls or oversized prefixes',()=>{
+ assert.equal(v.validateDevice({...scanner,profile:{...scanner.profile,scannerPrefix:'~'}}).profile.scannerPrefix,'~')
+ for(const scannerPrefix of ['\n','012345678',12])assert.throws(()=>v.validateDevice({...scanner,profile:{...scanner.profile,scannerPrefix}}),e=>e.status===400)
+})
 test('workstation normalizes names without accepting client tenant or stale versions',()=>{
   assert.deepEqual(v.validateWorkstation(workstation),{...workstation,code:'PC-1',name:'Mostrador',notes:''})
   for(const input of [{...workstation,companyId:id},{...workstation,expectedVersion:0},{...workstation,cashRegisterId:'no'},{...workstation,name:' '}]) assert.throws(()=>v.validateWorkstation(input),e=>e.status===400&&!!e.fields)

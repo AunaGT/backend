@@ -41,6 +41,7 @@ const Units=require('../inventory/units')
 const {resolveCommercialLines}=require('../../services/units/saleLines')
 const {isV2,unitFields}=require('../../services/units/commercial')
 const {assertLinesAvailable}=require('../../services/stockAvailability')
+const {measureRequestPhase}=require('../../utils/requestTiming')
 
 /** Caja de la venta: la explícita (POS) > la asignada al usuario > la predeterminada. */
 async function resolveSaleRegister (client, explicitId, userId, branchId) {
@@ -121,10 +122,14 @@ const SALE_DETAIL_INCLUDE = {
 
 function commercialDto(sale,user,branchId,fiscalEnabled){
   const commercial=saleCommercialView(sale,{fiscalEnabled}),selected=!!branchId&&branchId===sale.branch_id
+  const manual=selected&&commercial.state==='DRAFT'&&!commercial.originEngagementId&&sale.settlement_source==='MANUAL_SALE'&&(sale.created_by===user.sub||hasPerm(user,'sales.view_detail'))
   return {commercial,capabilities:{
     confirm:selected&&commercial.state==='DRAFT'&&!!commercial.originEngagementId&&['appointments.view','appointments.issue_sale','sales.create','receivables.view'].every(p=>hasPerm(user,p)),
     requestInvoice:selected&&commercial.state==='CONFIRMED'&&commercial.fiscalState==='UNRECORDED'&&fiscalEnabled===true&&hasPerm(user,'sales.fiscal.register'),
     collect:selected&&commercial.state==='CONFIRMED'&&sale.payment_status!=='PAID'&&hasPerm(user,'receivables.manage'),
+    editManual:manual&&hasPerm(user,'sales.create'),
+    confirmManual:manual&&hasPerm(user,'sales.create'),
+    cancelManual:manual&&hasPerm(user,'sales.cancel'),
     reason:!selected?'Selecciona la sucursal de la venta para realizar acciones':'',
   }}
 }
@@ -417,12 +422,19 @@ exports.getById = async (req, res, next) => {
 }
 
 exports.checkoutAttempt=async(req,res,next)=>{
-  try{res.json(await lookupCheckoutAttempt(prisma,req,req.params.key))}catch(error){next(error)}
+  try{res.json(await lookupCheckoutAttempt(prisma,req,req.params.key))}catch(error){
+    if(error.status===404&&error.code==='CHECKOUT_NOT_OBSERVED')return res.status(404).json({message:error.message,code:error.code})
+    next(error)
+  }
 }
 
 exports.create = async (req, res, next) => {
   let committedSaleId=null
+  const compact=req.query?.response==='confirmation'
+  const representation=compact?{select:{id:true,created_by:true,idempotency_hash:true}}:{include:SALE_DETAIL_INCLUDE}
+  const respond=(sale,status)=>measureRequestPhase(req,'sale_response',async()=>res.status(status).json(compact?{id:sale.id,checkout_state:'CONFIRMED'}:await saleDetailDto(sale,req.companyId,req.user,req.branchId)))
   try {
+    if(req.query?.response!==undefined&&!compact)return res.status(400).json({message:'Opción de respuesta no admitida'})
     if(['settlement_source','settlement','engagement_id'].some(key=>Object.hasOwn(req.body||{},key)))return res.status(400).json({code:'INVALID_SETTLEMENT',message:'La liquidación de una contratación solo se genera desde Agenda'})
     const user = req.user
     if (!user || !user.sub) {
@@ -465,16 +477,16 @@ exports.create = async (req, res, next) => {
     // abajo.
     if (idempotencyKey) {
       const yaExiste = await prisma.sale.findFirst({
-        where: { branch_id: branchId, idempotency_key: idempotencyKey },
-        include: SALE_DETAIL_INCLUDE,
+        where: { branch_id: branchId, branch:{company_id:req.companyId},idempotency_key: idempotencyKey },
+        ...representation,
       })
-      if (yaExiste) return res.status(200).json(await saleDetailDto(assertCheckoutReplay(yaExiste,req,attemptHash), req.companyId, req.user,req.branchId))
+      if (yaExiste) return await respond(assertCheckoutReplay(yaExiste,req,attemptHash),200)
     }
 
-    const created = await prismaTransaction.$transaction(async (tx) => {
+    const created = await measureRequestPhase(req,'sale_tx',()=>prismaTransaction.$transaction(async (tx) => {
       if(idempotencyKey){
         await lockCheckoutAttempt(tx,branchId,idempotencyKey)
-        const previous=await tx.sale.findFirst({where:{branch_id:branchId,idempotency_key:idempotencyKey}})
+        const previous=await tx.sale.findFirst({where:{branch_id:branchId,branch:{company_id:req.companyId},idempotency_key:idempotencyKey}})
         if(previous)return assertCheckoutReplay(previous,req,attemptHash)
       }
       let cashSessionIdForSale = null
@@ -513,6 +525,7 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
+      return require('../../services/checkoutContext').withCheckoutContext(tx,{companyId:req.companyId,branchId},items,async()=>{
       const advanced=await Units.unitsEnabled(tx,req.companyId)
       const advancedLines=advanced?await resolveCommercialLines(tx,{companyId:req.companyId,branchId,actorId:user.sub,permissions:user.permissions||[],isAdmin},items,
         {tier:await resolvePriceTierForContext(tx,{companyId:req.companyId,customerContactId,salesChannel})}):null
@@ -530,7 +543,8 @@ exports.create = async (req, res, next) => {
         qtyByProduct.set(pid, (qtyByProduct.get(pid) || 0) + q)
       }
       const productIds = Array.from(qtyByProduct.keys())
-      const products = await tx.product.findMany({
+      const cachedProducts=require('../../services/checkoutContext').checkoutProducts(tx,productIds,{companyId:req.companyId,branchId})
+      const products = cachedProducts?[...cachedProducts.values()].filter(p=>!p.deleted):await tx.product.findMany({
         where: { id: { in: productIds }, deleted: false,company_id:req.companyId },
         select: {
           id: true,
@@ -952,12 +966,14 @@ exports.create = async (req, res, next) => {
 
       await require('./fiscalRequests').preparePosFiscalRequest(tx,{companyId:req.companyId,branchId,userId:user.sub},sale)
       return sale
+      })
     }, {
       timeout: 20000,
       maxWait: 10000
-    })
+    }))
 
     committedSaleId=created.id
+    if(compact)return await respond(created,201)
     const fullSale = await prisma.sale.findFirst({
       where: { id: created.id },
       include: SALE_DETAIL_INCLUDE
@@ -973,12 +989,12 @@ exports.create = async (req, res, next) => {
       const key = String(req.get?.('Idempotency-Key') || req.body?.idempotency_key || '').trim().slice(0, 64)
       const yaExiste = key && branchId
         ? await prisma.sale.findFirst({
-            where: { branch_id: branchId, idempotency_key: key },
-            include: SALE_DETAIL_INCLUDE,
+            where: { branch_id: branchId,branch:{company_id:req.companyId}, idempotency_key: key },
+            ...representation,
           })
         : null
       if (yaExiste) {
-        try{return res.status(200).json(await saleDetailDto(assertCheckoutReplay(yaExiste,req,checkoutHash('SALE',req.body)), req.companyId, req.user,req.branchId))}catch(replayError){return next(replayError)}
+        try{return await respond(assertCheckoutReplay(yaExiste,req,checkoutHash('SALE',req.body)),200)}catch(replayError){return next(replayError)}
       }
     }
     if (e && e.message === 'CASH_SESSION_REQUIRED') {
@@ -1054,11 +1070,11 @@ exports.updateStatus = async (req, res, next) => {
             sale_items: { include: { return_items: { include:{return:{select:{status:{select:{name:true}}}}} } } },
             cashRegisterSession: { select: { status: true } },
             paymentEntries: { select: { amount: true } },
-            orderLink: { select: { document: { select: { fulfillment_mode: true } } } },
+            orderLink: { select: { document: { select: { fulfillment_mode: true,doc_type:true } } } },
           },
         })
         if (!current) throw new Error('Venta no encontrada')
-        if (current.orderLink?.document?.fulfillment_mode === 'SEPARATE' && current.status_id !== Number(targetStatusId)) {
+        if (current.orderLink?.document?.doc_type !== 'QUOTE' && current.orderLink?.document?.fulfillment_mode === 'SEPARATE' && current.status_id !== Number(targetStatusId)) {
           throw Object.assign(new Error('Esta venta corresponde a entregas independientes. Registra una devolución para corregir productos entregados.'), { status: 409 })
         }
 

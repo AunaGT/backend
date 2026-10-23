@@ -1,0 +1,264 @@
+TAP version 13
+# Subtest: physical lock validates fresh scoped products with only one product read after the lock
+ok 1 - physical lock validates fresh scoped products with only one product read after the lock
+  ---
+  duration_ms: 2.980515
+  type: 'test'
+  ...
+# Subtest: physical lock rejects missing/foreign products and services before callers can write
+ok 2 - physical lock rejects missing/foreign products and services before callers can write
+  ---
+  duration_ms: 1.254281
+  type: 'test'
+  ...
+# Subtest: expected missing attempt responds directly, while database failures reach the error handler
+ok 3 - expected missing attempt responds directly, while database failures reach the error handler
+  ---
+  duration_ms: 136.171937
+  type: 'test'
+  ...
+# Subtest: checkout hash binds money, lines and origin, not object order or decimal formatting
+ok 4 - checkout hash binds money, lines and origin, not object order or decimal formatting
+  ---
+  duration_ms: 2.044105
+  type: 'test'
+  ...
+# Subtest: replay validates actor hash and legacy state before exposing a previous sale
+ok 5 - replay validates actor hash and legacy state before exposing a previous sale
+  ---
+  duration_ms: 0.824308
+  type: 'test'
+  ...
+# Subtest: attempt lookup scopes actor company and branch and reports not-observed without making a sale
+ok 6 - attempt lookup scopes actor company and branch and reports not-observed without making a sale
+  ---
+  duration_ms: 1.274129
+  type: 'test'
+  ...
+# Subtest: controller rejects changed payload and foreign actor rather than replaying their sale
+ok 7 - controller rejects changed payload and foreign actor rather than replaying their sale
+  ---
+  duration_ms: 2.892689
+  type: 'test'
+  ...
+# Subtest: compact POS confirms only after the real sale transaction and never loads a detail DTO
+ok 8 - compact POS confirms only after the real sale transaction and never loads a detail DTO
+  ---
+  duration_ms: 118.469979
+  type: 'test'
+  ...
+# Subtest: legacy sale response retains its full detail and post-commit failure remains confirmed
+ok 9 - legacy sale response retains its full detail and post-commit failure remains confirmed
+  ---
+  duration_ms: 8.728011
+  type: 'test'
+  ...
+# Subtest: compact replay preserves hash and actor checks and an unknown response option cannot mutate
+ok 10 - compact replay preserves hash and actor checks and an unknown response option cannot mutate
+  ---
+  duration_ms: 7.863688
+  type: 'test'
+  ...
+# Subtest: compact unique-key race recovers the original committed sale without loading detail or deducting again
+ok 11 - compact unique-key race recovers the original committed sale without loading detail or deducting again
+  ---
+  duration_ms: 4.480401
+  type: 'test'
+  ...
+# Subtest: direct product stock SET rejects company overflow under the lock and rolls scalar edits back
+ok 12 - direct product stock SET rejects company overflow under the lock and rolls scalar edits back
+  ---
+  duration_ms: 331.215041
+  type: 'test'
+  ...
+# Subtest: count start freezes physical unit metadata while holding the product lock
+ok 13 - count start freezes physical unit metadata while holding the product lock
+  ---
+  duration_ms: 3.662354
+  type: 'test'
+  ...
+# Subtest: stock alerts compare numeric strings by value and recognize a decimal zero
+ok 14 - stock alerts compare numeric strings by value and recognize a decimal zero
+  ---
+  duration_ms: 14.633798
+  type: 'test'
+  ...
+# Subtest: adjustments aggregate measured duplicates and minimum accepts measured base stock
+ok 15 - adjustments aggregate measured duplicates and minimum accepts measured base stock
+  ---
+  duration_ms: 3.757734
+  type: 'test'
+  ...
+# Subtest: lot correction preserves consumed measured quantities and adjusts its original location
+ok 16 - lot correction preserves consumed measured quantities and adjusts its original location
+  ---
+  duration_ms: 3.587833
+  type: 'test'
+  ...
+# Subtest: ordinary product edit keeps measured stock and branch minimum exact
+ok 17 - ordinary product edit keeps measured stock and branch minimum exact
+  ---
+  duration_ms: 4.025411
+  type: 'test'
+  ...
+# Subtest: product stock overlay adds Prisma Decimals across locations without concatenating
+ok 18 - product stock overlay adds Prisma Decimals across locations without concatenating
+  ---
+  duration_ms: 2.453479
+  type: 'test'
+  ...
+# Subtest: starting branch stock rejects a fractional minimum for indivisible products
+ok 19 - starting branch stock rejects a fractional minimum for indivisible products
+  ---
+  duration_ms: 3.17833
+  type: 'test'
+  ...
+# Subtest: lot correction reloads the current quantity after acquiring the product lock
+ok 20 - lot correction reloads the current quantity after acquiring the product lock
+  ---
+  duration_ms: 4.579799
+  type: 'test'
+  ...
+# Subtest: count accepts decimal strings, treats zero as counted and compares decimals by value
+ok 21 - count accepts decimal strings, treats zero as counted and compares decimals by value
+  ---
+  duration_ms: 1.927745
+  type: 'test'
+  ...
+# Subtest: count line DTO computes a measured difference and its money value exactly
+ok 22 - count line DTO computes a measured difference and its money value exactly
+  ---
+  duration_ms: 1.191533
+  type: 'test'
+  ...
+# Subtest: internal movement keeps .3 base split and duplicate lines cannot bypass availability
+ok 23 - internal movement keeps .3 base split and duplicate lines cannot bypass availability
+  ---
+  duration_ms: 2.38034
+  type: 'test'
+  ...
+# Subtest: two cancellations racing a measured transfer restore its frozen lots exactly once
+ok 24 - two cancellations racing a measured transfer restore its frozen lots exactly once
+  ---
+  duration_ms: 4.662024
+  type: 'test'
+  ...
+# Subtest: measured transfer receipt splits its frozen lots and locks products before recreating them
+ok 25 - measured transfer receipt splits its frozen lots and locks products before recreating them
+  ---
+  duration_ms: 3.895365
+  type: 'test'
+  ...
+# [prisma] Using DATABASE_URL (pooled) host: aws-1-us-east-2.pooler.supabase.com
+# [prisma] Transaction client initialized with DIRECT_URL
+# Subtest: aggregate bounds retain authorized negative stock but reject an excessive magnitude
+ok 26 - aggregate bounds retain authorized negative stock but reject an excessive magnitude
+  ---
+  duration_ms: 2.3372
+  type: 'test'
+  ...
+# Subtest: FEFO splits measured base quantities exactly and recreates their frozen base costs
+ok 27 - FEFO splits measured base quantities exactly and recreates their frozen base costs
+  ---
+  duration_ms: 1.789323
+  type: 'test'
+  ...
+# Subtest: automatically created measured lots freeze their base cost at the physical increase
+ok 28 - automatically created measured lots freeze their base cost at the physical increase
+  ---
+  duration_ms: 0.908117
+  type: 'test'
+  ...
+# Subtest: measured BOM components remain fractional while finished kits remain whole
+ok 29 - measured BOM components remain fractional while finished kits remain whole
+  ---
+  duration_ms: 1.091183
+  type: 'test'
+  ...
+# Subtest: BOM component precision follows its physical base unit
+ok 30 - BOM component precision follows its physical base unit
+  ---
+  duration_ms: 1.079722
+  type: 'test'
+  ...
+# Subtest: kit assembly cannot round a fractional finished quantity into a whole kit
+ok 31 - kit assembly cannot round a fractional finished quantity into a whole kit
+  ---
+  duration_ms: 0.80379
+  type: 'test'
+  ...
+# Subtest: stock expansion aggregates accepted base quantities from different presentations
+ok 32 - stock expansion aggregates accepted base quantities from different presentations
+  ---
+  duration_ms: 0.950918
+  type: 'test'
+  ...
+# Subtest: dispatch and stock ledger preserve exact fractional deltas and reject an unapproved negative location
+ok 33 - dispatch and stock ledger preserve exact fractional deltas and reject an unapproved negative location
+  ---
+  duration_ms: 6.741726
+  type: 'test'
+  ...
+# Subtest: availability and transit aggregate Decimal strings without concatenation or binary residue
+ok 34 - availability and transit aggregate Decimal strings without concatenation or binary residue
+  ---
+  duration_ms: 1.658857
+  type: 'test'
+  ...
+# Subtest: a reversal recovers frozen component movements without consulting the current BOM
+ok 35 - a reversal recovers frozen component movements without consulting the current BOM
+  ---
+  duration_ms: 0.569527
+  type: 'test'
+  ...
+# Subtest: reservations freeze fractional BOM allocations and consume them after the BOM changes
+ok 36 - reservations freeze fractional BOM allocations and consume them after the BOM changes
+  ---
+  duration_ms: 5.506842
+  type: 'test'
+  ...
+# Subtest: integer helper contracts remain numbers and transit value supports report rounding
+ok 37 - integer helper contracts remain numbers and transit value supports report rounding
+  ---
+  duration_ms: 0.568545
+  type: 'test'
+  ...
+# Subtest: actual delivery reversal restores the frozen measured component sum after BOM edits
+ok 38 - actual delivery reversal restores the frozen measured component sum after BOM edits
+  ---
+  duration_ms: 14.550931
+  type: 'test'
+  ...
+# Subtest: tracked measured kit assembly consumes actual location FEFO and freezes component allocation costs
+ok 39 - tracked measured kit assembly consumes actual location FEFO and freezes component allocation costs
+  ---
+  duration_ms: 304.87986
+  type: 'test'
+  ...
+# Subtest: legacy kit assembly consumes FEFO with units off and no new JSON columns
+ok 40 - legacy kit assembly consumes FEFO with units off and no new JSON columns
+  ---
+  duration_ms: 1.899992
+  type: 'test'
+  ...
+# Subtest: legacy kit assembly consumes FEFO with units enabled and frozen v1 lots
+ok 41 - legacy kit assembly consumes FEFO with units enabled and frozen v1 lots
+  ---
+  duration_ms: 1.799332
+  type: 'test'
+  ...
+# Subtest: kit assembly with insufficient tracked lots rolls back component stock and never credits finished kits
+ok 42 - kit assembly with insufficient tracked lots rolls back component stock and never credits finished kits
+  ---
+  duration_ms: 3.804934
+  type: 'test'
+  ...
+1..42
+# tests 42
+# suites 0
+# pass 42
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 541.19205

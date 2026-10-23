@@ -57,7 +57,8 @@ async function assertPhysicalProducts(tx, productIds, branchId) {
   const ids = [...new Set(productIds.map(String))]
   if (!ids.length) return
   if (!branchId) fail('Sucursal requerida para inventario físico')
-  const rows = await tx.product.findMany({
+  const cached=require('./checkoutContext').checkoutProducts(tx,ids,{branchId})
+  const rows = cached?[...cached.values()]:await tx.product.findMany({
     where: { id:{in:ids}, company:{branches:{some:{id:String(branchId)}}} },
     select:{id:true,kind:true},
   })

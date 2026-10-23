@@ -12,6 +12,10 @@
 
 /** code → permisos que otorga implícitamente. */
 const IMPLIES = {
+  'document_templates.view': ['settings.view'],
+  'document_templates.manage': ['document_templates.view'],
+  'document_templates.publish': ['document_templates.view'],
+  'hr.deductions.manage': ['hr.deductions.view'],
   'hardware.view': ['settings.view'],
   'hardware.manage': ['hardware.view'],
   'hardware.test_print': ['hardware.view'],

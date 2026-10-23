@@ -50,11 +50,14 @@ async function prepareProductWrite(tx,scope,current,input,data,{create=false}={}
     const base=await tx.measureUnit.findFirst({where:{id:creation.base_unit_id,company_id:scope.companyId,active:true}})
     if(!base)fail(404,'Unidad base no encontrada')
     const precision=creation.quantity_decimals??base.quantity_decimals
-    decimals(precision,(input.kind??data.kind)==='KIT'?0:(input.kind??data.kind)==='SERVICE'?4:6)
+    const kind=data.kind??input.kind
+    decimals(precision,kind==='KIT'?0:kind==='SERVICE'?4:6)
     if(precision>base.quantity_decimals)fail(400,'La precisión excede la unidad base')
     creation.quantity_decimals=precision
     initialStock=parseQuantity(input.stock??'0',{decimals:precision,allowZero:true}).toFixed()
     if(input.min_stock!==undefined)data.min_stock=parseQuantity(input.min_stock,{decimals:precision,allowZero:true}).toFixed()
+    // Initial units belong in the INSERT; an uncommitted new product has no history to scan.
+    Object.assign(data,{base_unit_id:base.id,quantity_decimals:precision,unit_metadata_version:2})
   }
   if(current)current=await lockProduct(tx,scope,current.id)
   if(current?.base_unit_id&&input.kind!==undefined&&input.kind!==current.kind)fail(409,'El tipo de un producto con unidad base no se puede cambiar')
@@ -69,7 +72,6 @@ async function prepareProductWrite(tx,scope,current,input,data,{create=false}={}
   const finish=async product=>{
     let saved=product
     if(creation){
-      saved=await configureProduct(tx,scope,product.id,{base_unit_id:creation.base_unit_id,quantity_decimals:creation.quantity_decimals,unit_revision:product.unit_revision??1})
       const ids=new Map()
       for(const {client_key,...presentation} of creation.presentations){
         const row=await savePresentation(tx,scope,product.id,{...presentation,unit_revision:saved.unit_revision})

@@ -14,6 +14,7 @@ if (process.env.NODE_ENV !== 'production') {
       startCommercialDocumentScheduler()
       require('./src/jobs/couponAssetCleanup').startCouponAssetCleanup()
       require('./src/jobs/appointmentAutoClose').startAppointmentAutoClose()
+      require('./src/jobs/saleStockAlerts').startSaleStockAlerts()
     } catch (e) {
       console.warn('[commercial-doc-expiry] scheduler no iniciado:', e.message)
     }

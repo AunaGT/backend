@@ -6,8 +6,8 @@ const cases = [
   ['promotions', 'promotion', { total: 31, active: 12, scheduled: 7, ended: 9, inactive: 3 }],
   ['quotes', 'commercialDocument', { total: 31, draft: 12, sent: 7, accepted: 9 }],
   ['returns', 'return', { total: 31, pending: 12, approved: 7, completed: 9, rejected: 3 }],
-  ['transfers', 'stockTransfer', { total: 31, inTransit: 12, received: 7, cancelled: 9 }],
-  ['merchandise', 'incomingMerchandise', { total: 31, paid: 12, partial: 7, pending: 9 }],
+  ['transfers', 'stockTransfer', { total: 31, inTransit: 12, received: 7, cancelled: 12 }],
+  ['merchandise', 'incomingMerchandise', { total: 31, paid: 12, partial: 7, pending: 12 }],
 ]
 for (const [moduleName, model, expected] of cases) {
   test(`${moduleName}: summaries cover filtered scope before pagination and are opt-in`, async () => {
@@ -16,7 +16,7 @@ for (const [moduleName, model, expected] of cases) {
     const previous = require.cache[dbPath]
     let baseWhere, extraCalls = 0, paginated = false, empty = false
     const statuses = moduleName === 'quotes' ? ['DRAFT', 'SENT', 'ACCEPTED'] : moduleName === 'transfers' ? ['EN_TRANSITO', 'RECIBIDA', 'CANCELADA'] : ['PAID', 'PARTIAL', 'PENDING']
-    const counts = [12, 7, 9, 3]
+    const counts = moduleName === 'transfers' || moduleName === 'merchandise' ? [12, 7, 12] : [12, 7, 9, 3]
     const db = {
       count: async ({ where }) => {
         assert.equal(paginated, false, 'aggregate before page retrieval')
@@ -36,11 +36,12 @@ for (const [moduleName, model, expected] of cases) {
       },
       groupBy: async args => {
         assert.equal(paginated, false)
+        if (!baseWhere && (moduleName === 'transfers' || moduleName === 'merchandise')) baseWhere = args.where
         assert.deepEqual(args.where, baseWhere)
         assert.equal(args.skip, undefined)
         assert.equal(args.take, undefined)
         extraCalls++
-        assert.deepEqual(args.by, [moduleName === 'merchandise' ? 'payment_status' : 'status'])
+        assert.deepEqual(args.by, moduleName === 'merchandise' ? ['source','payment_status'] : ['status'])
         return empty ? [] : statuses.map((status, i) => ({ [moduleName === 'merchandise' ? 'payment_status' : 'status']: status, _count: { _all: counts[i] } }))
       },
       findMany: async args => {

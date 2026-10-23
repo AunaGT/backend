@@ -8,7 +8,7 @@ function fixture(){
   const stored={incoming:[],items:[],logs:[],lots:[],movements:[],supplierTotal:new Prisma.Decimal(0),locks:[]}
   let chain=Promise.resolve()
   const db={
-    $transaction:async fn=>{const before=chain;let release;chain=new Promise(r=>release=r);await before;const priorProduct={...product},prior={...stored,...Object.fromEntries(['incoming','items','logs','lots','movements'].map(key=>[key,structuredClone(stored[key])]))};try{return await fn(db)}catch(error){Object.assign(product,priorProduct);Object.assign(stored,prior);throw error}finally{release()}},
+    $transaction:async fn=>{const before=chain;let release;chain=new Promise(r=>release=r);await before;const priorProduct={...product},prior={...stored,...Object.fromEntries(['incoming','items','logs','lots','movements'].map(key=>[key,structuredClone(stored[key])]))};const tx=Object.create(db);tx.$transaction=undefined;try{return await fn(tx)}catch(error){Object.assign(product,priorProduct);Object.assign(stored,prior);throw error}finally{release()}},
     $executeRaw:async (sql,...values)=>{stored.locks.push([String(sql),values]);return 1},
     $queryRaw:async(sql,...values)=>{
       const text=String(sql),v=values.flatMap(x=>x?.values||[])

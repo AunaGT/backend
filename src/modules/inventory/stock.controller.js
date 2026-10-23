@@ -86,12 +86,16 @@ exports.list = async (req, res, next) => {
       }
     }
 
-    const totalItems = paginated ? await prisma.stockMovement.count({ where }) : 0
+    let totalItems = 0
     let summary
     if (paginated && req.query.includeSummary === 'true') {
-      const counts = await Promise.all([{ qty: { gt: 0 } }, { qty: { lt: 0 } }].map(filter => prisma.stockMovement.count({ where: { AND: [where, filter] } })))
-      summary = { total: totalItems, incoming: counts[0], outgoing: counts[1] }
-    }
+      const counts = await Promise.all([
+        prisma.stockMovement.count({ where }),
+        ...[{ qty: { gt: 0 } }, { qty: { lt: 0 } }].map(filter => prisma.stockMovement.count({ where: { AND: [where, filter] } })),
+      ])
+      totalItems = counts[0]
+      summary = { total: totalItems, incoming: counts[1], outgoing: counts[2] }
+    } else if (paginated) totalItems = await prisma.stockMovement.count({ where })
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const page = Math.min(requestedPage, totalPages)
     const rows = await prisma.stockMovement.findMany({

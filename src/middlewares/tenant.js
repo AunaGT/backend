@@ -29,7 +29,7 @@ const jwt_simple = require('jwt-simple')
 const moment = require('moment')
 const { secret, ACCESS_COOKIE } = require('../config/security')
 const { prisma } = require('../models/prisma')
-const { loadSessionUser, effectiveUser } = require('../services/userAccess')
+const { loadSessionUser, effectiveUser, isActiveMembership } = require('../services/userAccess')
 const { isSystemAdmin } = require('../modules/users/roles/policy')
 
 // Igual que Auth pero sin responder 401: las rutas públicas y Auth se encargan.
@@ -57,7 +57,7 @@ function hasPerm(user, code) {
   return isAdmin(user) || (Array.isArray(user?.permissions) && user.permissions.includes(code))
 }
 
-async function resolveTenant(req, res, next) {
+async function resolveTenantContext(req, res, next) {
   try {
     // Renovar o cerrar una sesión no depende de que su access token siga vigente.
     if (/^\/auth\/(login|refresh|logout)$/.test(req.path)) return next()
@@ -75,31 +75,19 @@ async function resolveTenant(req, res, next) {
     // Sesión y permisos frescos, antes de comprobar acceso consolidado.
     let sessionUser
     try {
-      sessionUser = await loadSessionUser(user)
+      sessionUser = await loadSessionUser(user,{includeBranches:true})
     } catch (err) {
       if (soft) return next()
       if (err.status) return res.status(err.status).json({ message: err.message })
       return next(err)
     }
     req.sessionUser = sessionUser
-    const activeCompanies = sessionUser.user_companies.filter(m => m.status === 'ACTIVE').map(m => m.company_id)
+    const activeCompanies = sessionUser.user_companies.filter(isActiveMembership).map(m => m.company_id)
     const requestedCompany = req.headers['x-company-id']
     if (requestedCompany && !activeCompanies.includes(requestedCompany)) return fail(403, 'Sin acceso activo a esa empresa')
     req.user = effectiveUser(sessionUser, requestedCompany || undefined)
 
-    // ponytail: 1 query por request; cache por usuario si algún día pesa
-    const row = await prisma.user.findUnique({
-      where: { id: user.sub },
-      select: {
-        default_branch_id: true,
-        user_branches: {
-          select: {
-            branch: { select: { id: true, company_id: true, active: true, is_default: true } },
-          },
-        },
-      },
-    })
-    if (!row) return fail(401, 'No autenticado')
+    const row = sessionUser
 
     const branches = row.user_branches.map((m) => m.branch).filter((b) => b.active && activeCompanies.includes(b.company_id))
     if (branches.length === 0) {
@@ -207,4 +195,5 @@ function branchWhere(req) {
   return req.branchId ? { branch_id: req.branchId } : { branch_id: { in: req.branchIds || [] } }
 }
 
+const resolveTenant=(req,res,next)=>require('../utils/requestTiming').measureRequestPhase(req,'context',()=>resolveTenantContext(req,res,next))
 module.exports = { resolveTenant, requireBranch, requireCompany, targetBranch, branchWhere, hasPerm }

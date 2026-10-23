@@ -1,0 +1,86 @@
+TAP version 13
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Warning: useLayoutEffect does nothing on the server, because its effect cannot be encoded into the server renderer's output format. This will lead to a mismatch between the initial, non-hydrated UI and the intended UI. To avoid this, useLayoutEffect should only be used in components that render exclusively on the client. See https://reactjs.org/link/uselayouteffect-ssr for common fixes.
+#     at NewSalePage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/sales/NewSalePage.tsx:107:57)
+#     at Router (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1174:17)
+#     at MemoryRouter (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/node_modules/react-router/dist/umd/react-router.development.js:1069:7)
+# Subtest: normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+ok 1 - normal in-flight checkout leaves feedback in the payment button, without a recovery banner
+  ---
+  duration_ms: 131.917693
+  type: 'test'
+  ...
+# Subtest: restored submitting checkout keeps recovery visible while register selection has no payment button
+not ok 2 - restored submitting checkout keeps recovery visible while register selection has no payment button
+  ---
+  duration_ms: 775.276083
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:10:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /Comprobando el cobro/. Input:
+    
+    '<div class="p-4 sm:p-8"></div>'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: '<div class="p-4 sm:p-8"></div>'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/pos-checkout-notice.test.cjs:13:9)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: payment button announces processing and blocks repeat submission while the normal request is pending
+ok 3 - payment button announces processing and blocks repeat submission while the normal request is pending
+  ---
+  duration_ms: 423.976609
+  type: 'test'
+  ...
+# Subtest: successful checkout leaves no persistent notice, including while its ticket downloads
+ok 4 - successful checkout leaves no persistent notice, including while its ticket downloads
+  ---
+  duration_ms: 22.169382
+  type: 'test'
+  ...
+# Subtest: recovery exposes the original error, saved lines and explicit same-operation retry
+ok 5 - recovery exposes the original error, saved lines and explicit same-operation retry
+  ---
+  duration_ms: 19.120487
+  type: 'test'
+  ...
+# Subtest: unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+ok 6 - unknown checkout offers reconciliation, not a second charge; saved sale offers document retry
+  ---
+  duration_ms: 22.560589
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 5
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1688.394827
