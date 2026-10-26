@@ -22,6 +22,7 @@ function generatedClient({beforeMigration=false}={}){
 test('additive packages migration preserves existing documents, credentials and receipts',async t=>{
   assert.equal(psql(['-Atc',"SELECT count(*) FROM pg_tables WHERE schemaname='public'"]).trim(),'0','Use a fresh disposable database, never an existing application database')
   psql(['-c','CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE PUBLICATION supabase_realtime;'])
+  psql(['-c',"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF; END $$;"])
   const migrations=fs.readdirSync(path.join(root,'prisma/migrations'),{withFileTypes:true}).filter(entry=>entry.isDirectory()&&entry.name<migrationName).map(entry=>entry.name).sort()
   for(const name of migrations)psql(['-f',path.join(root,'prisma/migrations',name,'migration.sql')])
   const OldClient=generatedClient({beforeMigration:true}),beforeDb=new OldClient({datasources:{db:{url:target}}})
