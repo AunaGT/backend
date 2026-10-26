@@ -254,13 +254,19 @@ La propiedad del grupo reside en el documento y sucursal, no en los UUID aportad
 **Interfaces:**
 - Reutiliza el fixture PostgreSQL desechable y todas las interfaces anteriores. No necesita otra API ni utilidades operativas con credenciales reales.
 
-- [ ] **Step 1 — Aceptación sintética.** Crear productos de dos sabores, ingrediente, servicio y paquete con precio cerrado; guardar selección incompleta; completar 80+80 durante cotización; enviar/aceptar; cambiar catálogo; convertir por cada ruta admitida en escenarios separados; entregar/facturar/devolver parcialmente y comprobar importes, reserva y stock. Una selección no confirmada no genera pagos, horarios ni FEL.
-- [ ] **Step 2 — Aislamiento y condiciones adversas.** Dos empresas/sucursales; dos grupos con mismo producto; usuario sin permiso; producto/servicio deshabilitado; cambio de unidad; moneda no coincidente; conflicto de revisión; reintento tras respuesta perdida; excepciones intermedias con rollback. Datos antiguos y claves/recibos previos permanecen iguales.
-- [ ] **Step 3 — Verificación global.** En B `npm run test:unit` y `npm run test:modules`; en F `node --test tests/*.test.cjs tests/*.test.mjs`, `npm run test:modules` y `npm run build`. Registrar errores preexistentes separadamente, sin adjudicarlos ni ocultarlos. PostgreSQL aislado debe tener resultados de migración y concurrencia; si no puede levantarse, no declarar lista la migración.
-- [ ] **Step 4 — Revisar diff completo.** Comprobar que solo se añadieron cambios propios, que ningún endpoint usa precios/snapshots aportados como autoridad, que no existe nueva llamada a Infile y que el encabezado no duplica ingresos. Revisar el alcance respecto de la spec, incluyendo todos los destinos y no solo el alta de catálogo.
-- [ ] **Step 5 — Documentar y entregar.** Explicar dónde se crean paquetes, cómo se acuerdan cantidades y cómo se distinguen kits físicos de servicios/equipos; documentar límites y lo pendiente de bloques 2/3. Proporcionar resultados de tests/build/pruebas aisladas, rutas de pantallas y archivos. Solicitar autorización de aplicación de la migración a la base activa solamente después de esos resultados; no inferirla de aprobaciones antiguas. No afirmar que DonShot ya está conectado.
+- [x] **Step 1 — Aceptación sintética.** Crear productos de dos sabores, ingrediente, servicio y paquete con precio cerrado; guardar selección incompleta; completar 80+80 durante cotización; enviar/aceptar; cambiar catálogo; convertir por cada ruta admitida en escenarios separados; entregar/facturar/devolver parcialmente y comprobar importes, reserva y stock. Una selección no confirmada no genera pagos, horarios ni FEL.
+- [x] **Step 2 — Aislamiento y condiciones adversas.** Dos empresas/sucursales; dos grupos con mismo producto; usuario sin permiso; producto/servicio deshabilitado; cambio de unidad; moneda no coincidente; conflicto de revisión; reintento tras respuesta perdida; excepciones intermedias con rollback. Datos antiguos y claves/recibos previos permanecen iguales.
+- [x] **Step 3 — Verificación global.** En B `npm run test:unit` y `npm run test:modules`; en F `node --test tests/*.test.cjs tests/*.test.mjs`, `npm run test:modules` y `npm run build`. Registrar errores preexistentes separadamente, sin adjudicarlos ni ocultarlos. PostgreSQL aislado debe tener resultados de migración y concurrencia; si no puede levantarse, no declarar lista la migración.
+- [x] **Step 4 — Revisar diff completo.** Comprobar que solo se añadieron cambios propios, que ningún endpoint usa precios/snapshots aportados como autoridad, que no existe nueva llamada a Infile y que el encabezado no duplica ingresos. Revisar el alcance respecto de la spec, incluyendo todos los destinos y no solo el alta de catálogo.
+- [x] **Step 5 — Documentar y entregar.** Explicar dónde se crean paquetes, cómo se acuerdan cantidades y cómo se distinguen kits físicos de servicios/equipos; documentar límites y lo pendiente de bloques 2/3. Proporcionar resultados de tests/build/pruebas aisladas, rutas de pantallas y archivos. Solicitar autorización de aplicación de la migración a la base activa solamente después de esos resultados; no inferirla de aprobaciones antiguas. No afirmar que DonShot ya está conectado.
 
 ## Criterio de salida y continuación
+
+Verificación funcional local de las ocho tareas realizada. Resultado final y
+decisiones: `docs/inventario/paquetes-verificacion.md`. La revisión independiente
+se interrumpió después de tres hallazgos corregidos; su dictamen completo sigue
+pendiente. No confundir las casillas funcionales con aprobación de producción
+o fusión. La migración activa ya tuvo autorización explícita durante la tarea 3.
 
 El bloque 1 estará terminado cuando un usuario autorizado pueda crear un paquete,
 acordar su composición en una cotización, reabrirla, compartirla y convertirla sin
