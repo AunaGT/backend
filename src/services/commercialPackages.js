@@ -1,4 +1,6 @@
-const {D,cumulativeAmount}=require('./units/commercial')
+const {D,cumulativeAmount,partialUnitLine}=require('./units/commercial')
+const {isDeepStrictEqual}=require('node:util')
+const {createHash}=require('node:crypto')
 const {parsePackageSelections,validatePackageSelection}=require('../modules/inventory/packages/selection')
 const {allocatePackagePrice}=require('../modules/inventory/packages/pricing')
 const {loadPackageVersion}=require('../modules/inventory/packages/catalog')
@@ -61,6 +63,8 @@ function readGroups(raw){
         if(!D(c.unitPrice).isFinite()||D(c.unitPrice).lt(0)||D(c.unitPrice).gt('9999999999.99')||D(c.unitPrice).decimalPlaces()>18)review()
         if(!c.unitSnapshot||c.unitSnapshot.version!==c.unitMetadataVersion)review()
       }
+      if(group.state==='COMPLETE'&&(!group.components.reduce((sum,c)=>sum.add(c.lineTotal),D(0)).eq(group.amount)||
+        !group.components.reduce((sum,c)=>sum.add(c.netLineTotal),D(0)).eq(group.netAmount)||D(group.netAmount).gt(group.amount)))review()
     }
     if(keys.size>100)review()
     return raw
@@ -125,17 +129,18 @@ function finalizePackageAmounts(raw,lines,{documentTotal}={}){
   return groups
 }
 function assertPackageAgreement(document,{requireComplete=true,kind='DOCUMENT',allowPartial=false}={}){
-  const groups=readGroups(document.package_groups),lines=document.lines??document.saleItems??[]
+  const groups=readGroups(document.package_groups),lines=document.sale_items??document.lines??[]
   if(!groups.length){if(lines.some(line=>line.package_component_key))review();return}
   if(requireComplete&&groups.some(group=>group.state!=='COMPLETE'))fail('PACKAGE_SELECTION_INCOMPLETE','Completa los productos y cantidades de todos los paquetes')
-  if(kind!=='DOCUMENT'||allowPartial)review() // Partial sale agreement verification is added with its conversion boundary.
+  if(kind==='SALE')return assertSaleAgreement(groups,lines,document.total,{allowPartial})
+  if(kind!=='DOCUMENT'||allowPartial)review()
   const actual=new Map()
   for(const line of lines)if(line.package_component_key){if(actual.has(line.package_component_key))review();actual.set(line.package_component_key,line)}
   for(const group of groups)for(const c of group.components){
     const line=actual.get(c.key)
     if(!line||line.product_id!==c.productId||line.item_kind!==c.itemKind||line.item_name!==c.itemName||line.unit_label!==c.unitLabel||line.quantity_decimals!==c.quantityDecimals||
       !D(line.qty).eq(c.quantity)||!D(line.base_qty??line.qty).eq(c.baseQty)||!D(line.unit_price).eq(c.unitPrice)||!D(line.line_total).eq(c.lineTotal)||
-      (line.unit_metadata_version??1)!==c.unitMetadataVersion||JSON.stringify(line.unit_snapshot)!==JSON.stringify(c.unitSnapshot))review()
+      (line.unit_metadata_version??1)!==c.unitMetadataVersion||!isDeepStrictEqual(line.unit_snapshot,c.unitSnapshot))review()
     actual.delete(c.key)
   }
   if(actual.size)review()
@@ -143,6 +148,40 @@ function assertPackageAgreement(document,{requireComplete=true,kind='DOCUMENT',a
   for(let i=0;i<groups.length;i++)if(groups[i].state==='COMPLETE'&&(!D(groups[i].netAmount).eq(expected[i].netAmount)||groups[i].components.some((c,j)=>!D(c.netLineTotal).eq(expected[i].components[j].netLineTotal))))review()
   const gross=lines.reduce((sum,line)=>sum.add(line.line_total),D(0))
   if(document.subtotal!=null&&!D(document.subtotal).eq(gross)||document.discount_total!=null&&!D(document.discount_total).eq(gross.sub(D(document.total))))review()
+}
+function assertSaleAgreement(groups,lines,total,{allowPartial}){
+  const expected=new Map(groups.flatMap(group=>group.components.map(c=>[c.key,c]))),seen=new Set()
+  for(const line of lines){
+    if(!line.package_component_key)continue
+    const c=expected.get(line.package_component_key)
+    if(!c||seen.has(c.key)||line.product_id!==c.productId||line.item_kind!==c.itemKind||line.item_name!==c.itemName||
+      (line.unit_metadata_version??1)!==c.unitMetadataVersion)review()
+    seen.add(c.key)
+    const qty=D(line.qty),base=D(line.base_qty??line.qty),amount=D(line.net_total??line.line_total),price=D(line.price??line.unit_price)
+    if(!qty.isFinite()||!base.isFinite()||!amount.isFinite()||qty.lte(0)||base.lte(0)||base.gt(c.baseQty)||amount.lt(0)||amount.decimalPlaces()>2)review()
+    if(c.unitMetadataVersion===2){
+      let partial
+      try{partial=partialUnitLine({qty:c.quantity,base_qty:c.baseQty,unit_price:c.unitPrice,unit_snapshot:c.unitSnapshot},
+        {qty:qty.toFixed(),...(line.unit_snapshot?.presentation===null?{presentation_id:null}:{})})}catch{review()}
+      if(!base.eq(partial.base_qty)||!price.eq(partial.unit_price)||!isDeepStrictEqual(line.unit_snapshot,partial.unit_snapshot)||line.unit_label!==partial.unit_label||line.quantity_decimals!==partial.quantity_decimals)review()
+    }else if(!base.eq(qty)||qty.gt(c.quantity)||!price.eq(c.unitPrice)||!isDeepStrictEqual(line.unit_snapshot,c.unitSnapshot)||line.unit_label!==c.unitLabel||line.quantity_decimals!==c.quantityDecimals||qty.decimalPlaces()>c.quantityDecimals)review()
+    if(!allowPartial&&(!base.eq(c.baseQty)||!qty.eq(c.quantity)||!amount.eq(c.netLineTotal)))review()
+    if(allowPartial){
+      // The locked source counters allocate residual cents; a stored sale proves its bounded share.
+      const share=D(c.netLineTotal).mul(base).div(c.baseQty)
+      if(amount.lt(share.toDecimalPlaces(2,3))||amount.gt(share.toDecimalPlaces(2,2)))review()
+    }
+  }
+  if(!allowPartial&&seen.size!==expected.size||!D(total).eq(lines.reduce((sum,l)=>sum.add(l.net_total??l.line_total),D(0))))review()
+}
+function copyPackageGroups(raw){return structuredClone(readGroups(raw))}
+const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value
+function packageSourceFingerprint(raw,lines){
+  const groups=copyPackageGroups(raw).sort((a,b)=>a.groupId.localeCompare(b.groupId))
+  const parts=lines.map((l,i)=>({key:l.package_component_key??null,productId:l.product_id,kind:l.item_kind,name:l.item_name,unit:l.unit_label,
+    decimals:l.quantity_decimals,qty:D(l.qty).toFixed(),baseQty:D(l.base_qty??l.qty).toFixed(),unitPrice:D(l.unit_price??l.price).toFixed(),
+    lineTotal:money(l.line_total??l.net_total),unitMetadataVersion:l.unit_metadata_version??1,unitSnapshot:l.unit_snapshot??null,sortOrder:l.sort_order??i}))
+  return createHash('sha256').update(JSON.stringify(canonical({groups,lines:parts}))).digest('hex')
 }
 function publicPackageGroups(raw){
   return readGroups(raw).map(group=>({schemaVersion:1,groupId:group.groupId,
@@ -153,4 +192,4 @@ function publicPackageGroups(raw){
       unitLabel:c.unitLabel,quantityDecimals:c.quantityDecimals,unitPrice:c.unitPrice,
       lineTotal:c.lineTotal,netLineTotal:c.netLineTotal,serviceConditions:c.serviceConditions?require('../modules/appointments/domain/publicServiceConditions').publicServiceConditions(c.serviceConditions):null}))}))
 }
-module.exports={buildPackageGroups,finalizePackageAmounts,assertPackageAgreement,assertFreePackageItems,packageLineFields,publicPackageGroups}
+module.exports={buildPackageGroups,finalizePackageAmounts,assertPackageAgreement,assertFreePackageItems,packageLineFields,publicPackageGroups,copyPackageGroups,packageSourceFingerprint}

@@ -1,4 +1,5 @@
 const {D,isV2}=require('../../services/units/commercial')
+const Packages=require('../../services/commercialPackages')
 const fail=(code,message,status=409)=>{throw Object.assign(Error(message),{code,status})}
 const has=(scope,permission)=>scope.isAdmin||scope.permissions?.includes(permission)
 
@@ -33,6 +34,7 @@ async function createQuoteSaleDraft(db,scope,quoteId){
   if(!status)fail('SETUP_REQUIRED','Configura el estado de borrador')
   const sale=await require('../sales/application').insertSaleRecord(tx,{userId:scope.userId,items,saleData:{
    branch_id:scope.branchId,reference:await require('../../services/referenceGenerator').nextDocumentReference(tx,'V',branch),status_id:status.id,
+   ...(quote.package_groups?.length?{package_groups:Packages.copyPackageGroups(quote.package_groups)}:{}),
    customer_contact_id:quote.customer_contact_id,customer:quote.customer,customer_nit:quote.customer_nit,is_final_consumer:quote.is_final_consumer,
    subtotal:String(quote.subtotal??quote.total),discount_total:String(quote.discount_total??0),total:String(quote.total),adjusted_total:String(quote.total),items:items.length,unit_metadata_version:items.some(isV2)?2:1,
    payment_method_id:null,payment_status:'PENDING',amount_received:null,change:null,cash_register_session_id:null,settlement_source:'MANUAL_SALE',sales_channel:quote.sales_channel||'WHOLESALE',

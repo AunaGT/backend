@@ -46,6 +46,7 @@ async function getEngagement(db,scope,id){
   const lines=row.lines.map(l=>{
     const product=byProduct.get(l.product_id)
     return {id:l.id,sourceLineId:l.source_line_id,productId:l.product_id,itemKind:l.item_kind,name:l.item_name,unitLabel:l.unit_label,quantity:isV2(l)?l.qty.toFixed():l.qty.toFixed(4),quantityDecimals:l.quantity_decimals,
+      ...(l.package_component_key?{packageComponentKey:l.package_component_key}:{}),
       ...(isV2(l)?{unitMetadataVersion:2,unitSnapshot:l.unit_snapshot,baseQty:l.base_qty.toFixed()}:{}),
       ...(financial?{unitPrice:isV2(l)?l.unit_price.toFixed():l.unit_price.toFixed(2),lineTotal:l.line_total.toFixed(2)}:{}),
       ...(l.item_kind==='SERVICE'?{...conditionInfo(product?.service_schedule_profile,product,row.branch_id,l.service_schedule_snapshot),remainingQuantity:assertLineCoverage({itemKind:l.item_kind,quantity:l.qty,quantityDecimals:l.quantity_decimals},l.schedules)}:{}),
@@ -59,6 +60,7 @@ async function getEngagement(db,scope,id){
   result.commercialPreparation=row.origin_sale?'READY':'PENDING'
   if(row.origin_sale&&hasAgendaPermission(scope,'sales.view'))result.commercialDocument={id:row.origin_sale.id,version:row.origin_sale.version,state:require('../sales/commercialState').commercialState(row.origin_sale.status.name)}
   if(financial){
+    if(row.package_groups?.length)result.packageGroups=require('../../services/commercialPackages').copyPackageGroups(row.package_groups)
     result.money=await engagementMoney(db,row)
     result.receipts=row.commitments.map(c=>({id:c.payment.id,amount:c.payment.amount.toFixed(2),paidAt:c.payment.paid_at.toISOString(),method:c.payment.payment_method?.name||'No registrado',reference:c.payment.reference,notes:c.payment.notes,committed:c.state==='COMMITTED'?c.amount.toFixed(2):'0.00',commitmentState:c.state,allocation:allocationForReceipt(c.payment)}))
     result.refunds=row.refunds.map(r=>({id:r.id,receiptId:r.payment_id,amount:r.amount.toFixed(2),status:r.status,reason:r.reason,reference:r.reference,confirmedAt:r.confirmed_at?.toISOString()||null}))

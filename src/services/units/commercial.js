@@ -23,6 +23,7 @@ function partialUnitLine(line, input, quantityKey = 'qty') {
 }
 
 function unitFields(line) {
+  if(line.package_component_key&&line.unit_metadata_version===1&&line.unit_snapshot?.version===1)return{unit_metadata_version:1,unit_snapshot:line.unit_snapshot,base_qty:line.base_qty??line.qty}
   return isV2(line) ? { unit_metadata_version: 2, unit_snapshot: line.unit_snapshot, base_qty: line.base_qty,
     ...(line.base_unit_cost != null ? { base_unit_cost: line.base_unit_cost } : {}) } : {}
 }

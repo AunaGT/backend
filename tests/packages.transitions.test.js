@@ -64,3 +64,10 @@ test('share rechecks locked agreement when packages were added after the initial
   const out=await f.invoke('getShareLink',{})
   assert.equal(out.error?.code,'PACKAGE_SELECTION_INCOMPLETE');assert.equal(f.document().public_token,null)
 }))
+test('package edit preserves a legacy reservation owned by another header but attached to its line',async()=>quoteHarness(async f=>{
+  await existing(f,{complete:true})
+  f.document().lines[0].reservations=[{id:id(601),document_id:id(602),status:'ACTIVE'}]
+  const before=structuredClone(f.document())
+  const out=await f.invoke('update',{items:[],packages:[f.selection()],expectedRevision:f.revision})
+  assert.equal(out.error?.code,'PACKAGE_REVIEW_REQUIRED');assert.deepEqual(f.document(),before)
+}))

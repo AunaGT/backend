@@ -173,7 +173,7 @@ exports.eligibleSales = async (req, res, next) => {
             qty: true,
             price: true,
             product_id: true,
-            item_kind:true,item_name:true,unit_label:true,quantity_decimals:true,net_total:true,
+            item_kind:true,item_name:true,unit_label:true,quantity_decimals:true,net_total:true,package_component_key:true,
             ...(unitMode?{unit_metadata_version:true,unit_snapshot:true,base_qty:true,base_returned:true}:{}),
             product: { select: { id: true, name: true, barcode: true, image_url: true } },
             return_items: {

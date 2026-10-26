@@ -7,13 +7,15 @@ const {assertLinesAvailable,consumeByDocument}=require('../../services/stockAvai
 const {nextDocumentReference}=require('../../services/referenceGenerator')
 const {lineSnapshot}=require('../../services/catalogItemRules')
 const {unitFields,isV2,D}=require('../../services/units/commercial')
-const sourceItem=line=>({product_id:line.product_id,qty:line.qty,unit_price:line.unit_price,line_total:line.line_total,...lineSnapshot(line),...unitFields(line),
+const Packages=require('../../services/commercialPackages')
+const sourceItem=line=>({product_id:line.product_id,qty:line.qty,unit_price:line.unit_price,line_total:line.line_total,...lineSnapshot(line),...unitFields(line),...Packages.packageLineFields(line),
   ...(isV2(line)?{unit_label:line.unit_label,quantity_decimals:line.quantity_decimals}:{})})
 function fail(code,message,status=409){throw Object.assign(new Error(message),{code,status})}
 function validateSnapshot(source){
   const total=money(source.agreed_total)
   const sum=source.lines.reduce((sum,l)=>sum.add(money(l.line_total)),new Prisma.Decimal(0))
   if(!sum.eq(total))fail('SOURCE_REVIEW_REQUIRED','Las partidas no concilian con el total acordado; revisa la fuente comercial')
+  if(source.package_groups?.length)Packages.assertPackageAgreement({...source,total},{kind:'SALE'})
   return total
 }
 async function ensureEngagementDraft(tx,scope,{source}){
@@ -40,6 +42,7 @@ async function ensureEngagementDraft(tx,scope,{source}){
   const snapshot=source.commercial_snapshot
   const sale=await insertSaleRecord(tx,{items,userId:scope.userId,saleData:{
     branch_id:scope.branchId,origin_engagement_id:source.id,status_id:status.id,reference:await nextDocumentReference(tx,'V',branch),
+    ...(source.package_groups?.length?{package_groups:Packages.copyPackageGroups(source.package_groups)}:{}),
     customer_contact_id:source.customer_id,customer:source.customer.name,customer_nit:snapshot.customerNit||null,
     is_final_consumer:snapshot.isFinalConsumer??true,sales_channel:snapshot.salesChannel||'POS',
     payment_method_id:null,payment_status:'PENDING',settlement_source:'ENGAGEMENT_RECEIPTS',
@@ -65,6 +68,7 @@ async function confirmEngagementDraft(tx,scope,{source,draftSaleId,idempotencyKe
   if(!draft)fail('NOT_FOUND','Borrador no encontrado',404)
   if(draft.status.name!=='Borrador')fail('SOURCE_REVIEW_REQUIRED','Esta venta no admite confirmación desde este estado')
   if(!draft.total.eq(total)||draft.sale_items.length!==source.lines.length)fail('SOURCE_REVIEW_REQUIRED','El borrador no coincide con el alcance acordado')
+  if((source.package_groups?.length||draft.package_groups?.length)&&Packages.packageSourceFingerprint(source.package_groups,source.lines)!==Packages.packageSourceFingerprint(draft.package_groups,draft.sale_items))fail('SOURCE_REVIEW_REQUIRED','El paquete del borrador no corresponde al alcance contratado')
   const original=[...source.lines].sort((a,b)=>a.sort_order-b.sort_order)
   for(const [i,l]of original.entries()){
     const s=draft.sale_items[i]

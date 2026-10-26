@@ -15,6 +15,8 @@ async function invoiceEngagementOrder(tx,scope,{orderId,source,idempotencyKey,se
   const order=await lockEngagementOrder(tx,scope,orderId)
   if(order.fulfillment_mode!=='SEPARATE')fail('SOURCE_REVIEW_REQUIRED','Este pedido conserva el flujo anterior; revisa su facturación existente')
   validateSnapshot(source)
+  const Packages=require('../../services/commercialPackages')
+  if((order.package_groups?.length||source.package_groups?.length)&&Packages.packageSourceFingerprint(order.package_groups,order.lines)!==Packages.packageSourceFingerprint(source.package_groups,source.lines))fail('SOURCE_REVIEW_REQUIRED','El paquete del pedido cambió respecto de lo contratado')
   if(order.customer_contact_id!==source.customer_id||!order.total.eq(source.agreed_total)||order.lines.length!==source.lines.length)fail('SOURCE_REVIEW_REQUIRED','El pedido cambió respecto de lo contratado')
   if(await tx.commercialDocumentSale.count({where:{document_id:order.id}})||order.lines.some(l=>D(isV2(l)?l.base_invoiced||0:l.qty_invoiced).gt(0)))fail('SOURCE_REVIEW_REQUIRED','El pedido ya tiene facturación; revisa sus ventas existentes')
   const services=[]

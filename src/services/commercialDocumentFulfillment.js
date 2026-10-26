@@ -7,7 +7,7 @@ const {commercialQuantity}=require('./catalogItemRules')
 const {isV2,D,partialUnitLine,cumulativeAmount}=require('./units/commercial')
 function netDocumentLines(document){
   const lines=document.lines||[]
-  if(!lines.some(isV2)||document.total==null)return lines
+  if(!lines.some(isV2)&&!document.package_groups?.length||document.total==null)return lines
   const gross=lines.reduce((sum,line)=>sum.add(line.line_total),D(0)),total=D(document.total)
   if(gross.eq(total))return lines
   if(total.lt(0)||total.gt(gross)||gross.lte(0))throw Object.assign(new Error('Las partidas no concilian con el acuerdo comercial'),{status:409})

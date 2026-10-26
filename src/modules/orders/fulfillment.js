@@ -13,6 +13,7 @@ const {Prisma}=require('@prisma/client')
 const {lineSnapshot}=require('../../services/catalogItemRules')
 const {isV2,D,unitFields}=require('../../services/units/commercial')
 const {slicePhysicalSnapshot,dispatchCommercialLines,restorePhysicalSnapshot}=require('../../services/units/commercialPhysical')
+const Packages=require('../../services/commercialPackages')
 
 function fail(message, status = 400) { throw Object.assign(new Error(message), { status }) }
 
@@ -48,6 +49,7 @@ async function lockedOrder(tx, req, {separateOnly=true}={}) {
   if (!rows.length) fail('Pedido no encontrado en la sucursal activa', 404)
   const order = await tx.commercialDocument.findUnique({ where: { id: rows[0].id }, include: { lines: {orderBy:{sort_order:'asc'}} } })
   if (separateOnly && order.fulfillment_mode !== 'SEPARATE') fail('Este pedido conserva el flujo anterior', 409)
+  Packages.assertPackageAgreement(order,{requireComplete:true})
   return {...order,lines:netDocumentLines(order)}
 }
 
@@ -119,6 +121,8 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   const totalDecimal=netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0))
   if (totalDecimal.gte('10000000000')) fail('Total de factura fuera de rango')
   const total=totalDecimal.toNumber()
+  const saleItems=lines.map(({line,qty,...selection},index)=>({...line,...selection,qty,...(!isV2(line)?{base_qty:qty}:{}),price:isV2(line)?selection.unit_price:line.unit_price,net_total:netLineTotals[index]}))
+  if(order.package_groups?.length)Packages.assertPackageAgreement({package_groups:order.package_groups,sale_items:saleItems,total:totalDecimal},{kind:'SALE',allowPartial:true})
   const initialAmount = settlement?0:initialPaymentAmount(req.body, total, method.is_credit)
   const now = new Date()
   let dueDate = settlement?.dueDate||null
@@ -181,6 +185,7 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     await tx.$queryRaw`SELECT id FROM sales WHERE id=${settlement.draftSaleId}::uuid AND branch_id=${order.branch_id}::uuid FOR UPDATE`
     const draft=await tx.sale.findFirst({where:{id:settlement.draftSaleId,branch_id:order.branch_id,origin_engagement_id:settlement.engagementId,branch:{company_id:req.companyId}},include:{status:true,sale_items:{orderBy:{id:'asc'}}}})
     if(!draft||draft.status.name!=='Borrador'||!draft.total.eq(totalDecimal)||draft.sale_items.length!==lines.length)fail('El borrador no coincide con el pedido contratado',409)
+    if((order.package_groups?.length||draft.package_groups?.length)&&Packages.packageSourceFingerprint(order.package_groups,saleItems)!==Packages.packageSourceFingerprint(draft.package_groups,draft.sale_items))fail('El paquete del borrador cambió respecto del pedido contratado',409)
     for(const [i,selection]of lines.entries()){
       const {line,qty}=selection
       const item=draft.sale_items[i]
@@ -208,8 +213,10 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     cash_register_session_id: sessionId, idempotency_key: key,
     items: physicalUnits, subtotal: total, discount_total: 0,
     total, adjusted_total: total, total_returned: 0,
+    ...(order.package_groups?.length?{package_groups:Packages.copyPackageGroups(order.package_groups)}:{}),
     ...(lines.some(({line})=>isV2(line))?{unit_metadata_version:2}:{}),
     sale_items: { create: lines.map((selection, index) => {const {line,line_id,qty}=selection,advanced=isV2(line),cost=costs.get(line_id);return { product_id: line.product_id, qty, price: advanced?selection.unit_price:line.unit_price, unit_cost:line.item_kind==='SERVICE' ? 0 : advanced?cost?.commercial??null:cost??null, net_total: netLineTotals[index],...lineSnapshot(line),
+      ...Packages.packageLineFields(line),...(!advanced&&line.package_component_key?unitFields({...line,qty,base_qty:qty}):{}),
       ...(physicalSnapshots.has(line_id)?{physical_snapshot:physicalSnapshots.get(line_id)}:{}),
       ...(advanced?{...unitFields(selection),base_unit_cost:cost?.base??'0',unit_label:selection.unit_label,quantity_decimals:selection.quantity_decimals,base_returned:'0'}:{})} }) },
     orderLink: { create: { document_id: order.id } },

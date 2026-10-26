@@ -7,6 +7,7 @@ const {resolveCommercialLines}=require('../../services/units/saleLines')
 const {resolvePriceTierForContext}=require('../../services/priceResolution')
 const {insertSaleRecord,moveSaleStock}=require('./application')
 const {commercialState}=require('./commercialState')
+const Packages=require('../../services/commercialPackages')
 const fail=(code,message,status=409)=>{throw Object.assign(Error(message),{code,status})}
 const has=(scope,p)=>scope.isAdmin||scope.permissions?.includes(p)
 const uuid=(value,name)=>{if(typeof value!=='string'||! /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value))fail('INVALID_INPUT',`${name} inválido`,400);return value}
@@ -49,7 +50,8 @@ function guard(scope,row){
 }
 async function load(db,scope,id){return guard(scope,await db.sale.findFirst({where:{id,branch_id:scope.branchId,branch:{company_id:scope.companyId}},include:{status:true,sale_items:{orderBy:{id:'asc'}},orderLink:{select:{document:{select:{id:true,reference:true,doc_type:true,credit_days:true}}}}}}))}
 function dto(row){return{id:row.id,reference:row.reference,version:row.version,status:commercialState(row.status.name),originQuote:row.orderLink?.document?.doc_type==='QUOTE'?{id:row.orderLink.document.id,reference:row.orderLink.document.reference}:null,customerId:row.customer_contact_id||null,customerName:row.customer||'',customerNit:row.customer_nit||'',total:D(row.total).toFixed(2),dueDate:row.due_date?.toISOString()??null,
- items:row.sale_items.map(l=>({id:l.id,productId:l.product_id,name:l.item_name,kind:l.item_kind,qty:D(l.qty).toFixed(),unitPrice:D(l.price).toFixed(),lineTotal:D(l.net_total??lineTotal(l.qty,l.price)).toFixed(2),unitLabel:l.unit_label,quantityDecimals:l.quantity_decimals,unitSnapshot:l.unit_snapshot??null,unitMetadataVersion:l.unit_metadata_version??1,baseQty:l.base_qty==null?null:D(l.base_qty).toFixed()}))}}
+ ...(row.package_groups?.length?{packageGroups:Packages.copyPackageGroups(row.package_groups)}:{}),
+ items:row.sale_items.map(l=>({id:l.id,productId:l.product_id,name:l.item_name,kind:l.item_kind,qty:D(l.qty).toFixed(),unitPrice:D(l.price).toFixed(),lineTotal:D(l.net_total??lineTotal(l.qty,l.price)).toFixed(2),unitLabel:l.unit_label,quantityDecimals:l.quantity_decimals,unitSnapshot:l.unit_snapshot??null,unitMetadataVersion:l.unit_metadata_version??1,baseQty:l.base_qty==null?null:D(l.base_qty).toFixed(),...(l.package_component_key?{packageComponentKey:l.package_component_key}:{})}))}}
 async function readManualSale(db,scope,id){uuid(id,'Venta');await authorize(db,scope,has(scope,'sales.create')?'sales.create':'sales.view_detail');return dto(await load(db,scope,id))}
 async function priceLines(tx,scope,input){
  const customer=await customerFor(tx,scope,input.customerId)
@@ -90,7 +92,7 @@ async function customerFor(tx,scope,id,required=false){
  return customer
 }
 async function saveManualSale(db,scope,id,raw){return command(db,scope,id,raw,'SAVE',async(tx,input,row,branch)=>{
- if(row?.orderLink?.document?.doc_type==='QUOTE')fail('SOURCE_OWNS_AGREEMENT','Esta venta conserva el acuerdo de la cotización; no se puede modificar desde aquí')
+ if(row?.orderLink?.document?.doc_type==='QUOTE'||row?.package_groups?.length)fail('SOURCE_OWNS_AGREEMENT','Esta venta conserva el acuerdo de la cotización; no se puede modificar desde aquí')
  const {customer,items,total}=await priceLines(tx,scope,input)
  for(const [i,line]of items.entries())if(!D(line.unit_price).eq(input.items[i].expected_unit_price))fail('PRICE_CHANGED','El precio cambió. Actualiza los productos y revisa el total antes de guardar')
  const status=await tx.saleStatus.findUnique({where:{name:'Borrador'}});if(!status)fail('SETUP_REQUIRED','Configura el estado de borrador')
@@ -108,6 +110,10 @@ async function saveManualSale(db,scope,id,raw){return command(db,scope,id,raw,'S
 async function confirmManualSale(db,scope,id,raw){return command(db,scope,id,raw,'CONFIRM',async(tx,input,row)=>{
  const origin=row.orderLink?.document?.doc_type==='QUOTE'?await require('../quotes').lockQuote(tx,scope,row.orderLink.document.id):null
  if(origin&&origin.status!=='ACCEPTED')fail('QUOTE_NOT_ACCEPTED','La cotización de origen ya no está aceptada')
+ if(row.package_groups?.length||origin?.package_groups?.length){
+  if(!origin||Packages.packageSourceFingerprint(row.package_groups,row.sale_items)!==Packages.packageSourceFingerprint(origin.package_groups,require('../quotes/saleDraft').agreedLines(origin)))fail('SOURCE_REVIEW_REQUIRED','Las partidas ya no corresponden al paquete cotizado')
+  Packages.assertPackageAgreement(row,{kind:'SALE'})
+ }
  const customer=await customerFor(tx,scope,row.customer_contact_id,true),credit=require('../receivables')
  await credit.lockCustomer(tx,customer.id)
  const total=D(row.total),now=new Date(),method=await require('../../services/paymentMethods/access').firstActiveCreditMethod(tx,scope.companyId);let dueDate=null

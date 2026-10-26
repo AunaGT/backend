@@ -181,6 +181,7 @@ async function insertSaleRecord(tx, { saleData, items, userId }) {
   const netTotals = items.every((item) => item.line_total != null)
     ? items.map((item) => Number(item.line_total))
     : allocateNetLineTotals(items.map((item) => ({ price: item.unit_price, qty: item.qty })), saleData.total)
+  if(saleData.package_groups?.length||items.some(item=>item.package_component_key))require('../../services/commercialPackages').assertPackageAgreement({...saleData,sale_items:items.map((item,i)=>({...item,net_total:String(netTotals[i])}))},{kind:'SALE'})
   const sale = await tx.sale.create({ data: { ...saleData, created_by: userId } })
   await tx.saleItem.createMany({
     data: items.map((item, index) => ({
@@ -190,6 +191,7 @@ async function insertSaleRecord(tx, { saleData, items, userId }) {
       price: item.unit_price,
       unit_cost: item.unit_cost ?? null,
       ...unitFields(item),
+      ...require('../../services/commercialPackages').packageLineFields(item),
       ...(isV2(item)?{base_returned:'0'}:{}),
       net_total: netTotals[index],
       ...(item.item_kind ? {item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals} : {}),

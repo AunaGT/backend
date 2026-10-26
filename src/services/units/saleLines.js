@@ -6,6 +6,7 @@ const { lineSnapshot, assertServicesEnabled } = require('../catalogItemRules')
 
 async function resolveCommercialLines(tx, scope, items, { tier = 'LIST', approved = false, allowOverride = false,authorization=null } = {}) {
   if (!Array.isArray(items) || !items.length) throw Object.assign(new Error('Debe incluir al menos un producto'), { status: 400 })
+  if(!approved)require('../commercialPackages').assertFreePackageItems(items)
   const ids = [...new Set(items.map(item => String(item.product_id || '')))].sort()
   if (ids.includes('')) throw Object.assign(new Error('Producto requerido'), { status: 400 })
   const cached=require('../checkoutContext').checkoutProducts(tx,ids,scope)
@@ -26,7 +27,7 @@ async function resolveCommercialLines(tx, scope, items, { tier = 'LIST', approve
   for (const raw of items) {
     const product=byId.get(String(raw.product_id))
     if (!product || product.available_for_sale===false) throw Object.assign(new Error('Producto no disponible para venta'),{status:400})
-    if (!approved && ['factor','base_qty','base_unit_cost','unit_snapshot','unit_metadata_version','physical_snapshot','frozen_unit_price','authorization','authorization_context'].some(k=>Object.hasOwn(raw,k))) {
+    if (!approved && ['approved','factor','base_qty','base_unit_cost','unit_snapshot','unit_metadata_version','physical_snapshot','frozen_unit_price','authorization','authorization_context'].some(k=>Object.hasOwn(raw,k))) {
       throw Object.assign(new Error('El servidor determina la conversión y el snapshot'),{status:400})
     }
     const resolved=await Units.resolveUnitLine(tx,scope,product,{qty:raw.qty,unit_revision:raw.unit_revision,
@@ -41,7 +42,8 @@ async function resolveCommercialLines(tx, scope, items, { tier = 'LIST', approve
     lines.push({product_id:product.id,qty,unit_price:price,line_total:approved&&raw.line_total!=null?String(raw.line_total):lineTotal(qty,price),
       unit_cost:approved&&raw.unit_cost!=null?raw.unit_cost:commercialCost,...lineSnapshot(approved?raw:resolved),
       ...(v2?{...unitFields({...resolved,base_qty:baseQty}),unit_label:resolved.unit_label,quantity_decimals:resolved.quantity_decimals,
-        base_unit_cost:approved&&raw.base_unit_cost!=null?raw.base_unit_cost:baseCost}: {})})
+        base_unit_cost:approved&&raw.base_unit_cost!=null?raw.base_unit_cost:baseCost}: {}),
+      ...(approved&&raw.package_component_key?{...require('../commercialPackages').packageLineFields(raw),...(!v2?unitFields(raw):{})}:{})})
   }
   return lines
 }
