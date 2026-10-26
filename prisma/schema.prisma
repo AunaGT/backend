@@ -16,6 +16,78 @@ datasource db {
 }
 
 // Agenda operativa: no crea ventas, pagos ni movimientos físicos.
+model CommercialPackage {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  name String @db.VarChar(150)
+  draft_definition Json
+  version Int @default(1)
+  active_version Int?
+  active_definition CommercialPackageVersion? @relation("ActivePackageVersion", fields: [company_id, id, active_version], references: [company_id, package_id, version], onDelete: Restrict, onUpdate: NoAction)
+  archived_at DateTime?
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  versions CommercialPackageVersion[] @relation("PackageVersions")
+  branches CommercialPackageBranch[]
+  commands CommercialPackageCommand[]
+  @@unique([company_id, id])
+  @@index([company_id, archived_at, id], map: "idx_commercial_packages_company_list")
+  @@map("commercial_packages")
+}
+
+model CommercialPackageVersion {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  package_id String @db.Uuid
+  package CommercialPackage @relation("PackageVersions", fields: [company_id, package_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  version Int
+  definition Json
+  branch_ids String[] @db.Uuid
+  content_hash String @db.VarChar(64)
+  request_key String @db.VarChar(100)
+  created_by String @db.Uuid
+  creator User @relation(fields: [created_by], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  active_for CommercialPackage[] @relation("ActivePackageVersion")
+  @@unique([company_id, package_id, version])
+  @@unique([company_id, package_id, request_key])
+  @@map("commercial_package_versions")
+}
+
+model CommercialPackageBranch {
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  package_id String @db.Uuid
+  package CommercialPackage @relation(fields: [company_id, package_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  @@id([package_id, branch_id])
+  @@index([company_id, branch_id, package_id], map: "idx_commercial_package_branches_scope")
+  @@map("commercial_package_branches")
+}
+
+model CommercialPackageCommand {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  package_id String @db.Uuid
+  package CommercialPackage @relation(fields: [company_id, package_id], references: [company_id, id], onDelete: Restrict, onUpdate: NoAction)
+  action String @db.VarChar(12)
+  request_key String @db.VarChar(100)
+  input_hash String @db.VarChar(64)
+  receipt Json
+  created_at DateTime @default(now())
+  @@unique([company_id, actor_id, action, request_key])
+  @@index([company_id, package_id, created_at], map: "idx_commercial_package_commands_history")
+  @@map("commercial_package_commands")
+}
+
 model ServiceScheduleProfile {
   allowed_venue_kinds String[] @default(["BRANCH"])
   id String @id @default(uuid()) @db.Uuid
@@ -389,6 +461,10 @@ model AppointmentRequest {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  commercial_packages CommercialPackage[]
+  commercial_package_versions CommercialPackageVersion[]
+  commercial_package_branches CommercialPackageBranch[]
+  commercial_package_commands CommercialPackageCommand[]
   document_templates DocumentTemplate[]
   document_versions DocumentTemplateVersion[]
   document_defaults DocumentTemplateDefault[]
@@ -514,6 +590,7 @@ model UserCompany {
 /// Sucursal. Toda entidad transaccional lleva branch_id; la empresa se deriva
 /// de la sucursal.
 model Branch {
+  commercial_packages CommercialPackageBranch[]
   document_snapshots DocumentSnapshot[]
   sale_stock_alert_jobs SaleStockAlertJob[]
   employee_deductions EmployeeDeduction[]
@@ -1331,6 +1408,9 @@ model RolePermission {
 }
 
 model User {
+  commercial_packages CommercialPackage[]
+  commercial_package_versions CommercialPackageVersion[]
+  commercial_package_commands CommercialPackageCommand[]
   deductions_created EmployeeDeduction[] @relation("DeductionCreatedBy")
   deductions_updated EmployeeDeduction[] @relation("DeductionUpdatedBy")
   deductions_cancelled EmployeeDeduction[] @relation("DeductionCancelledBy")
@@ -1479,6 +1559,7 @@ model Alert {
 }
 
 model Sale {
+  package_groups Json?
   document_snapshots DocumentSnapshot[]
   stock_alert_job SaleStockAlertJob?
   unit_metadata_version Int @default(1)
@@ -1592,6 +1673,7 @@ enum StockReservationKind {
 }
 
 model CommercialDocument {
+  package_groups Json?
   unit_metadata_version Int @default(1)
   quoted_engagement AppointmentEngagement? @relation("EngagementQuote")
   ordered_engagement AppointmentEngagement? @relation("EngagementOrder")
@@ -1642,6 +1724,7 @@ model CommercialDocument {
 }
 
 model CommercialDocumentLine {
+  package_component_key String? @db.VarChar(73)
   unit_metadata_version Int @default(1)
   unit_snapshot Json?
   base_qty Decimal? @db.Decimal(20, 6)
@@ -1806,6 +1889,7 @@ model SaleStockAlertJob {
 }
 
 model SaleItem {
+  package_component_key String? @db.VarChar(73)
   physical_snapshot Json?
   unit_metadata_version Int @default(1)
   unit_snapshot Json?
@@ -3574,6 +3658,7 @@ model EmployeeDeduction {
 }
 
 model AppointmentEngagement {
+  package_groups Json?
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
   branch_id String @db.Uuid
@@ -3616,6 +3701,7 @@ sale Sale? @relation("EngagementConfirmedSale", fields: [branch_id, id, sale_id]
 }
 
 model AppointmentEngagementLine {
+  package_component_key String? @db.VarChar(73)
   unit_metadata_version Int @default(1)
   unit_snapshot Json?
   base_qty Decimal? @db.Decimal(20, 6)

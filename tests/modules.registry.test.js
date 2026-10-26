@@ -265,7 +265,7 @@ test('el manifiesto de inventario coincide con el registro y conserva prefijos H
   assert.deepEqual([...inventoryModule.dependencies], [...definition.dependencies])
   assert.deepEqual(
     inventoryModule.routes.map((route) => route.routePrefix),
-    ['/products', '/stock', '/warehouses']
+    ['/commercial-packages', '/products', '/stock', '/warehouses']
   )
   assert.equal(inventoryModule.routes.every((route) => typeof route.loadRouter === 'function'), true)
 })
