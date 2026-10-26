@@ -7,11 +7,12 @@ try{endpoint=new URL(target)}catch{throw Error('PACKAGES_TEST_DATABASE_URL must 
 if(!['postgres:','postgresql:'].includes(endpoint.protocol)||!['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname)||!/^\/auna_packages_test_[a-z0-9_]+$/.test(endpoint.pathname)||endpoint.search||endpoint.hash||target===process.env.DATABASE_URL||target===process.env.DIRECT_URL)throw Error('Refusing a non-isolated package test database')
 const root=path.resolve(__dirname,'..'),migrationName='20261026120000_commercial_packages'
 function psql(args){const result=spawnSync('psql',['-X','--no-password',target,'-v','ON_ERROR_STOP=1',...args],{encoding:'utf8',timeout:60000});assert.equal(result.status,0,result.stderr);return result.stdout}
-function generatedClient(){
+function generatedClient({beforeMigration=false}={}){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'auna-packages-client-')),output=path.join(dir,'client')
   fs.symlinkSync(path.join(root,'node_modules'),path.join(dir,'node_modules'),'dir')
   // Mechanical generation of a test-only schema never changes the app client.
-  const source=fs.readFileSync(path.join(root,'prisma/schema.prisma'),'utf8').replace(/generator client \{[\s\S]*?\}/,`generator client {\n provider = "prisma-client-js"\n output = ${JSON.stringify(output)}\n binaryTargets = ["native"]\n}`)
+  let source=fs.readFileSync(path.join(root,'prisma/schema.prisma'),'utf8').replace(/generator client \{[\s\S]*?\}/,`generator client {\n provider = "prisma-client-js"\n output = ${JSON.stringify(output)}\n binaryTargets = ["native"]\n}`)
+  if(beforeMigration)source=source.replace(/^\s*package_(?:groups|component_key)\s+[^\n]+\n/gm,'\n')
   const schema=path.join(dir,'schema.prisma');fs.writeFileSync(schema,source,{mode:0o600})
   const result=spawnSync(process.execPath,[require.resolve('prisma/build/index.js'),'generate','--schema',schema],
     {cwd:dir,env:{...process.env,DATABASE_URL:target,DIRECT_URL:target,PRISMA_GENERATE_SKIP_AUTOINSTALL:'true'},encoding:'utf8',timeout:60000})
@@ -23,7 +24,7 @@ test('additive packages migration preserves existing documents, credentials and 
   psql(['-c','CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE PUBLICATION supabase_realtime;'])
   const migrations=fs.readdirSync(path.join(root,'prisma/migrations'),{withFileTypes:true}).filter(entry=>entry.isDirectory()&&entry.name<migrationName).map(entry=>entry.name).sort()
   for(const name of migrations)psql(['-f',path.join(root,'prisma/migrations',name,'migration.sql')])
-  const {PrismaClient:OldClient}=require('@prisma/client'),beforeDb=new OldClient({datasources:{db:{url:target}}})
+  const OldClient=generatedClient({beforeMigration:true}),beforeDb=new OldClient({datasources:{db:{url:target}}})
   t.after(()=>beforeDb.$disconnect())
   const company=await beforeDb.company.create({data:{name:'Synthetic package migration',code:randomUUID().slice(0,12)}})
   const role=await beforeDb.role.create({data:{name:'admin',system_key:'ADMIN'}})
@@ -52,6 +53,15 @@ test('additive packages migration preserves existing documents, credentials and 
   await assert.rejects(db.commercialPackage.update({where:{id:created.id},data:{draft_definition:{}}}))
   const active=await catalog.activatePackageVersion(db,scope,created.id,{expectedVersion:created.version,idempotencyKey:randomUUID()})
   assert.equal(active.activeVersion,1)
+  const agreement=require('../src/services/commercialPackages')
+  const selection={groupId:randomUUID(),packageId:created.id,version:1,variantId:definition.variants[0].id,choices:[]}
+  const built=await db.$transaction(tx=>agreement.buildPackageGroups(tx,scope,[selection],{allowIncomplete:true}))
+  const packageQuote=await db.commercialDocument.create({data:{branch_id:branch.id,doc_type:'QUOTE',status:'DRAFT',subtotal:built.subtotal,discount_total:'0',total:built.subtotal,
+    package_groups:built.groups,lines:{create:built.lines.map((l,i)=>({...l,sort_order:i,service_schedule_snapshot:require('@prisma/client').Prisma.DbNull}))}},include:{lines:true}})
+  agreement.assertPackageAgreement(packageQuote,{requireComplete:true})
+  assert.equal(packageQuote.lines.length,1);assert.equal(packageQuote.lines[0].line_total.toFixed(2),'15.00')
+  const reopened=await db.$transaction(tx=>agreement.buildPackageGroups(tx,scope,[selection],{existingGroups:packageQuote.package_groups,allowIncomplete:true}))
+  assert.deepEqual(reopened.groups,packageQuote.package_groups)
   const published=await db.commercialPackageVersion.findFirst({where:{package_id:created.id}})
   await assert.rejects(db.commercialPackageVersion.update({where:{id:published.id},data:{definition:{...definition,name:'tampered'}}}))
   await assert.rejects(db.commercialPackageVersion.delete({where:{id:published.id}}))
