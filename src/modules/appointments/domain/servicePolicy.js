@@ -19,7 +19,7 @@ function isManualService(profile,input){
 }
 function publicServicePolicy(raw){
   const p=normalizeServicePolicy(raw)
-  return Object.fromEntries(['schedulingStyle','durationPolicy','durationMinutes','completionPolicy','beforeMinutes','afterMinutes','requiresProvider','requiresResource','providerIds','resourceIds','allowedVenueKinds'].map(key=>[key,p[key]]).filter(([,value])=>value!==undefined))
+  return Object.fromEntries(['schedulingStyle','durationPolicy','durationMinutes','completionPolicy','beforeMinutes','afterMinutes','requiresProvider','requiresResource','providerIds','resourceIds','allowedVenueKinds','assignmentRequirements'].map(key=>[key,p[key]]).filter(([,value])=>value!==undefined))
 }
 function completionInfo(row,now=new Date()){
   return {completionPolicy:row.completion_policy||'MANUAL',actualCompletedAt:row.actual_completed_at?.toISOString()||null,

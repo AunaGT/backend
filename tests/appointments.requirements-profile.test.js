@@ -53,3 +53,13 @@ test('stale and unauthorized writes do not change saved requirements',async()=>{
  await assert.rejects(()=>saveServiceProfile(f.db,{...scope,permissions:['appointments.view']},id(5),{...input,assignmentRequirements:[],expectedVersion:1}),{status:403})
  assert.deepEqual(f.row(),before)
 })
+test('internal service picker and saved scheduling policy carry the actual requirements for their forms',async()=>{
+ const f=fixture(),requirements=[requirement()]
+ await saveServiceProfile(f.db,scope,id(5),{...input,assignmentRequirements:requirements})
+ f.db.product.findMany=async()=>[{id:id(5),name:'Atención',price:{toFixed:()=> '25.00'},service_unit_label:'sesión',quantity_decimals:0,available_for_sale:true,service_schedule_profile:f.row()}]
+ f.db.product.count=async()=>1
+ const out=await require('../src/modules/appointments/queries').listServices(f.db,scope)
+ assert.deepEqual(out.items[0].assignmentRequirements,requirements)
+ const policy=require('../src/modules/appointments/domain/servicePolicy').publicServicePolicy({assignmentRequirements:requirements})
+ assert.deepEqual(policy.assignmentRequirements,requirements)
+})
