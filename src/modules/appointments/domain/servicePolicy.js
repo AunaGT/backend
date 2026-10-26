@@ -1,5 +1,6 @@
 function normalizeServicePolicy(profile) {
-  return {...profile,schedulingStyle:profile.schedulingStyle??(profile.mode==='GROUP'?'CLASS':'APPOINTMENT'),
+  const assignmentRequirements=profile.assignmentRequirements??[]
+  return {...profile,assignmentRequirements,requiresProvider:!!profile.requiresProvider||assignmentRequirements.some(r=>r.kind==='PROVIDER'),requiresResource:!!profile.requiresResource||assignmentRequirements.some(r=>r.kind==='RESOURCE'),schedulingStyle:profile.schedulingStyle??(profile.mode==='GROUP'?'CLASS':'APPOINTMENT'),
     durationPolicy:profile.durationPolicy??'FIXED',completionPolicy:profile.completionPolicy??'MANUAL'}
 }
 function resolveServiceInterval(raw,input){

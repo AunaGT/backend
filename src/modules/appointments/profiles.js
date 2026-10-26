@@ -1,10 +1,14 @@
 const { parseProfile, fail, uuid } = require('./domain/validation')
 const { hasAgendaPermission, assertAgendaWrite, assertAppointmentsEnabled, assertCatalogIntegration } = require('./access')
+const {parseAssignmentRequirements,resolveAssignmentRequirements}=require('./domain/assignmentRequirements')
+const {normalizeServicePolicy}=require('./domain/servicePolicy')
+const {providerIdentityMap}=require('./occupancy')
 
 const includeAssignments = { branches: true, providers: true, resources: true }
 const fields = {
   enabled: 'enabled', mode: 'mode', schedulingStyle:'scheduling_style',durationPolicy:'duration_policy',durationMinutes: 'duration_minutes', beforeMinutes: 'before_minutes',
   completionPolicy:'completion_policy',
+  assignmentRequirements:'assignment_requirements',
   afterMinutes: 'after_minutes', intervalMinutes: 'interval_minutes', leadMinutes: 'lead_minutes', horizonDays: 'horizon_days',
   cancellationHours: 'cancellation_hours', confirmation: 'confirmation', capacity: 'capacity',
   requiresProvider: 'requires_provider', requiresResource: 'requires_resource', instructions: 'instructions',publicInstructions:'public_instructions',allowedVenueKinds:'allowed_venue_kinds',
@@ -44,9 +48,10 @@ async function saveServiceProfile(tx, scope, productId, raw) {
   if (old && input.expectedVersion !== old.version) fail(409, 'STALE_VERSION', 'Otra persona cambió el servicio; vuelve a cargarlo')
   if (!old && input.expectedVersion != null && input.expectedVersion !== 0) fail(409, 'STALE_VERSION', 'La configuración aún no existe')
   if (input.branchIds.some(id => !scope.branchIds.includes(id))) fail(403, 'FORBIDDEN', 'Selecciona sucursales a las que tengas acceso')
+  input.assignmentRequirements??=parseAssignmentRequirements(old?.assignment_requirements??[])
   const [branches, providers, resources] = await Promise.all([
     tx.branch.findMany({ where: { id: { in: input.branchIds }, company_id: scope.companyId, active: true }, select: { id: true,name:true } }),
-    tx.serviceProvider.findMany({ where: { id: { in: input.providerIds }, company_id: scope.companyId, active: true }, include: { branches: true } }),
+    tx.serviceProvider.findMany({ where: { id: { in: input.providerIds }, company_id: scope.companyId, active: true }, include: { branches: true,employee:{select:{user_id:true}} } }),
     tx.scheduleResource.findMany({ where: { id: { in: input.resourceIds }, company_id: scope.companyId, active: true }, select: { id: true, branch_id: true,type:true,portable:true } }),
   ])
   const matches = (selected, rows) => selected.every(id => rows.some(row => row.id === id))
@@ -55,12 +60,23 @@ async function saveServiceProfile(tx, scope, productId, raw) {
     fail(400, 'INVALID_ASSIGNMENTS', 'Una sucursal, profesional o recurso ya no está disponible', { assignments: 'Revisa las asignaciones del servicio' })
   }
   if (resources.some(row => !input.branchIds.includes(row.branch_id))) fail(400, 'INVALID_ASSIGNMENTS', 'El recurso pertenece a otra sucursal')
+  for(const requirement of input.assignmentRequirements){
+    const allowed=requirement.kind==='PROVIDER'?input.providerIds:input.resourceIds
+    if(requirement.optionIds.some(id=>!allowed.includes(id)))fail(400,'INVALID_ASSIGNMENTS','Los requisitos solo pueden usar las opciones habilitadas del servicio',{assignmentRequirements:`Revisa las opciones de ${requirement.name}`})
+  }
+  const policy=normalizeServicePolicy(input),identityById=providerIdentityMap(providers)
   if(input.enabled) for(const branch of branches){
     const label=branch.name||branch.id
     if(input.requiresProvider&&!providers.some(p=>p.branches.some(b=>b.branch_id===branch.id)))
       fail(400,'INVALID_ASSIGNMENTS',`Falta profesional habilitado en ${label}`,{providerIds:`Selecciona un profesional para ${label}`})
     for(const kind of input.allowedVenueKinds) if(input.requiresResource&&!resources.some(r=>r.branch_id===branch.id&&(kind==='BRANCH'||(r.type==='EQUIPMENT'&&r.portable))))
       fail(400,'INVALID_ASSIGNMENTS',`Falta sala o equipo compatible en ${label}`,{resourceIds:`Selecciona un recurso compatible con ${kind==='BRANCH'?'sucursal':'atención externa'} en ${label}`})
+    for(const kind of input.allowedVenueKinds){
+      const candidates=[...providers.filter(p=>p.branches.some(b=>b.branch_id===branch.id)).map(p=>({...p,kind:'PROVIDER'})),
+        ...resources.filter(r=>r.branch_id===branch.id&&(kind==='BRANCH'||r.type==='EQUIPMENT'&&r.portable)).map(r=>({...r,kind:'RESOURCE'}))]
+      if(!resolveAssignmentRequirements({requirements:policy.assignmentRequirements,candidates,identityById}))
+        fail(400,'REQUIREMENTS_INCOMPLETE',`No se cubren todos los requisitos en ${label}`,{assignmentRequirements:`Revisa cantidades y opciones para ${label} (${kind==='BRANCH'?'en sucursal':'atención externa'})`})
+    }
   }
   const data = Object.fromEntries(Object.entries(fields).filter(([key])=>input[key]!==undefined).map(([key, column]) => [column, input[key]]))
   let row
@@ -76,6 +92,6 @@ async function saveServiceProfile(tx, scope, productId, raw) {
     await tx[model].deleteMany({ where: { profile_id: row.id, company_id: scope.companyId } })
     if (selected.length) await tx[model].createMany({ data: selected.map(id => ({ profile_id: row.id, company_id: scope.companyId, [key]: id })) })
   }
-  return { profile: { ...input, publicInstructions:row.public_instructions??'', expectedVersion: row.version }, version: row.version }
+  return { profile: { ...normalizeServicePolicy(input), publicInstructions:row.public_instructions??'', expectedVersion: row.version }, version: row.version }
 }
 module.exports = { saveServiceProfile, getServiceProfile, presentProfile, serviceProduct }

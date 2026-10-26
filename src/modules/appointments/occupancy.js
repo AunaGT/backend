@@ -4,6 +4,9 @@ const {activityInterval,validateVenueAssignments}=require('./domain/activities')
 const {sessionOccupies,calendarWindows,overlaps,assigned,ABSENCES}=require('./domain/availability')
 const {agendaCapabilities}=require('./access')
 const unique=values=>[...new Set(values.filter(Boolean))]
+function providerIdentityMap(providers){
+  return new Map(providers.map(p=>[p.id,p.user_id||p.employee?.user_id?`user:${p.user_id||p.employee.user_id}`:p.employee_id?`employee:${p.employee_id}`:`provider:${p.id}`]))
+}
 
 async function resolveBusyIdentities(db,scope,{userIds=[],providerIds=[]},capabilities) {
   const hr=(capabilities||await agendaCapabilities(db,scope)).hr
@@ -79,4 +82,4 @@ async function assertActivityAvailability(db,scope,input,{excludeSessionId}={}) 
   })) fail(409,'ABSENCE_CONFLICT','Hay una ausencia registrada durante el tiempo ocupado')
   return {range,identities,resources}
 }
-module.exports={resolveBusyIdentities,loadBusyAssignments,assertActivityAvailability,validateActivityPeople}
+module.exports={resolveBusyIdentities,loadBusyAssignments,assertActivityAvailability,validateActivityPeople,providerIdentityMap}

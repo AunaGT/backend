@@ -59,7 +59,7 @@ function requestKey(raw) {
 }
 function parseProfile(raw) {
   const keys = ['enabled', 'mode', 'durationMinutes', 'beforeMinutes', 'afterMinutes', 'intervalMinutes', 'leadMinutes', 'horizonDays', 'cancellationHours', 'confirmation', 'capacity', 'requiresProvider', 'requiresResource', 'branchIds', 'providerIds', 'resourceIds', 'instructions', 'publicInstructions', 'expectedVersion','allowedVenueKinds','schedulingStyle','durationPolicy']
-  const v = object(raw, [...keys,'completionPolicy'])
+  const v = object(raw, [...keys,'completionPolicy','assignmentRequirements'])
   const schedulingStyle=choice(v.schedulingStyle??(v.mode==='GROUP'?'CLASS':'APPOINTMENT'),'schedulingStyle',['APPOINTMENT','CLASS','WORK'])
   if((schedulingStyle==='CLASS')!==(v.mode==='GROUP')) invalid('schedulingStyle','El tipo de programación no coincide con los cupos')
   const kinds=v.allowedVenueKinds??['BRANCH']
@@ -79,6 +79,7 @@ function parseProfile(raw) {
   out.completionPolicy=choice(v.completionPolicy??'MANUAL','completionPolicy',['MANUAL','AUTO'])
   if(out.completionPolicy==='AUTO'&&schedulingStyle!=='WORK')invalid('completionPolicy','Las citas y clases requieren cierre manual')
   if (v.publicInstructions !== undefined) out.publicInstructions=text(v.publicInstructions,'publicInstructions',2000,false)
+  if (v.assignmentRequirements !== undefined) out.assignmentRequirements=require('./assignmentRequirements').parseAssignmentRequirements(v.assignmentRequirements)
   if (v.expectedVersion !== undefined) out.expectedVersion = version(v.expectedVersion, true)
   return out
 }
