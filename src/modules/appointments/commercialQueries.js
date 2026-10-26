@@ -25,7 +25,7 @@ async function loadEngagement(db,scope,id){
 }
 function conditionInfo(profile,product,branchId,offered){
   const current=publicConditionsFromRow(profile),available=!!profile?.enabled&&profile.branches.some(b=>b.branch_id===branchId)&&!product?.deleted&&!!product?.available_for_sale&&product?.kind==='SERVICE'
-  const conditionsVersion=createHash('sha256').update(JSON.stringify({version:profile?.version||0,available,branchId,current})).digest('hex')
+  const conditionsVersion=createHash('sha256').update(JSON.stringify({version:profile?.version||0,available,branchId,current,assignmentRequirements:profile?.assignment_requirements??[]})).digest('hex')
   return {offeredConditions:publicServiceConditions(offered),currentConditions:current,conditionsVersion,schedulingReady:available,
     conditionsChanged:JSON.stringify(publicServiceConditions(offered))!==JSON.stringify(current)}
 }
