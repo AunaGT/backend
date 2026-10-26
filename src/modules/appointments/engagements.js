@@ -48,7 +48,7 @@ async function createEngagement(db,scope,raw){
   return command(db,scope,'appointments.create','CREATE_ENGAGEMENT',input,async tx=>{
     const source=input.quoteId?await loadQuoteSource(tx,scope,input.quoteId):await directSource(tx,scope,input)
     money(source.total)
-    for(const line of source.lines){if(line.unitMetadataVersion===2)require('../../services/units/quantity').lineTotal(line.quantity,line.unitPrice);else money(line.unitPrice);money(line.lineTotal)}
+    for(const line of source.lines){if(line.unitMetadataVersion===2||line.packageComponentKey)require('../../services/units/quantity').lineTotal(line.quantity,line.unitPrice);else money(line.unitPrice);money(line.lineTotal)}
     if(input.quoteId){
       const existing=await tx.appointmentEngagement.findFirst({where:{quote_id:input.quoteId,...engagementWhere(scope)}})
       if(existing)return {type:'ENGAGEMENT',id:existing.id}

@@ -40,6 +40,20 @@ test('Agenda insertion freezes groups and source keys without creating resource 
   assert.deepEqual(saved.package_groups,built.groups);assert.deepEqual(saved.lines.create.map(l=>l.package_component_key),built.lines.map(l=>l.package_component_key))
   assert.ok(saved.lines.create.every(l=>l.unit_snapshot?.version===1))
 })
+test('Agenda quote source preserves fractional legacy package unit prices and passes later source verification',async()=>{
+  const f=await agreementFixture(),built=await Packages.buildPackageGroups(f.db,f.scope,[f.selection()],{allowIncomplete:true})
+  const decimal=value=>new Prisma.Decimal(value)
+  const quote={id:id(400),branch_id:f.scope.branchId,status:'ACCEPTED',customer_contact_id:id(402),customerContact:{id:id(402),company_id:f.scope.companyId,party_type:'CUSTOMER',deleted:false},
+    subtotal:decimal(built.subtotal),total:decimal(built.subtotal),discount_total:decimal(0),package_groups:built.groups,documentSales:[],convertedChildren:[],quoted_engagement:null,
+    lines:built.lines.map((l,i)=>({...l,id:id(410+i),qty:decimal(l.qty),unit_price:decimal(l.unit_price),line_total:decimal(l.line_total),sort_order:i}))}
+  f.db.$queryRaw=async()=>[{id:quote.id}];f.db.commercialDocument={findFirst:async()=>quote}
+  const source=await require('../src/modules/quotes').loadQuoteSource(f.db,{...f.scope,isAdmin:true},quote.id)
+  assert.deepEqual(source.lines.map(l=>l.unitPrice),built.lines.map(l=>new Prisma.Decimal(l.unit_price).toFixed()))
+  const engagement={quote_id:quote.id,customer_id:id(402),agreed_total:decimal(source.total),package_groups:source.packageGroups,
+    lines:source.lines.map(l=>({source_line_id:l.id,product_id:l.productId,item_kind:l.itemKind,item_name:l.itemName,unit_label:l.unitLabel,quantity_decimals:l.quantityDecimals,
+      qty:decimal(l.quantity),unit_price:decimal(l.unitPrice),line_total:decimal(l.lineTotal),sort_order:l.sortOrder,unit_metadata_version:l.unitMetadataVersion,unit_snapshot:l.unitSnapshot,base_qty:l.baseQty,package_component_key:l.packageComponentKey}))}
+  await require('../src/modules/appointments/sourceVerification').lockEngagementQuote(f.db,{...f.scope,isAdmin:true},engagement)
+})
 test('fingerprint catches same-total product, unit or group changes and ignores object-key ordering',async()=>{
   const f=await agreementFixture(),built=await Packages.buildPackageGroups(f.db,f.scope,[f.selection()],{allowIncomplete:true})
   const fingerprint=Packages.packageSourceFingerprint(built.groups,built.lines)

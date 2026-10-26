@@ -45,10 +45,10 @@ async function getEngagement(db,scope,id){
   const byProduct=new Map(products.map(p=>[p.id,p]))
   const lines=row.lines.map(l=>{
     const product=byProduct.get(l.product_id)
-    return {id:l.id,sourceLineId:l.source_line_id,productId:l.product_id,itemKind:l.item_kind,name:l.item_name,unitLabel:l.unit_label,quantity:isV2(l)?l.qty.toFixed():l.qty.toFixed(4),quantityDecimals:l.quantity_decimals,
+    return {id:l.id,sourceLineId:l.source_line_id,productId:l.product_id,itemKind:l.item_kind,name:l.item_name,unitLabel:l.unit_label,quantity:isV2(l)||l.package_component_key?l.qty.toFixed():l.qty.toFixed(4),quantityDecimals:l.quantity_decimals,
       ...(l.package_component_key?{packageComponentKey:l.package_component_key}:{}),
       ...(isV2(l)?{unitMetadataVersion:2,unitSnapshot:l.unit_snapshot,baseQty:l.base_qty.toFixed()}:{}),
-      ...(financial?{unitPrice:isV2(l)?l.unit_price.toFixed():l.unit_price.toFixed(2),lineTotal:l.line_total.toFixed(2)}:{}),
+      ...(financial?{unitPrice:isV2(l)||l.package_component_key?l.unit_price.toFixed():l.unit_price.toFixed(2),lineTotal:l.line_total.toFixed(2)}:{}),
       ...(l.item_kind==='SERVICE'?{...conditionInfo(product?.service_schedule_profile,product,row.branch_id,l.service_schedule_snapshot),remainingQuantity:assertLineCoverage({itemKind:l.item_kind,quantity:l.qty,quantityDecimals:l.quantity_decimals},l.schedules)}:{}),
       schedules:l.schedules.map(s=>({id:s.id,kind:s.kind,sessionId:s.session_id,bookingId:s.booking_id,quantity:s.quantity.toFixed(4),state:s.state,operationalStatus:s.booking?effectiveStatus(s.booking):s.session.status,
         startsAt:s.session.starts_at.toISOString(),endsAt:s.session.ends_at.toISOString(),timezone:s.session.timezone,venue:s.session.venue}))}
