@@ -2,6 +2,7 @@ const {DateTime}=require('luxon')
 const {fail,invalid}=require('./domain/validation')
 const {normalizeServicePolicy,resolveServiceInterval}=require('./domain/servicePolicy')
 const {serviceProduct,presentProfile}=require('./profiles')
+const {assertAssignmentRequirements,providerIdentityMap}=require('./domain/assignmentRequirements')
 async function applyConfiguredActivityPolicy(tx,scope,input,old){
   const previous=old?.policy_snapshot||{}
   let profile
@@ -26,6 +27,10 @@ async function applyConfiguredActivityPolicy(tx,scope,input,old){
   for(const [field,required,allowed] of [['providerIds',profile.requiresProvider,profile.providerIds],['resourceIds',profile.requiresResource,profile.resourceIds]]){
     if(required&&!input[field].length) invalid(field,field==='providerIds'?'Selecciona el profesional requerido':'Selecciona la sala o equipo requerido')
     if(input[field].some(id=>!allowed?.includes(id))) invalid(field,'Selecciona asignaciones habilitadas para el servicio')
+  }
+  if(profile.assignmentRequirements.length){
+    const providers=profile.assignmentRequirements.some(r=>r.kind==='PROVIDER')?await tx.serviceProvider.findMany({where:{company_id:scope.companyId,id:{in:input.providerIds}},select:{id:true,user_id:true,employee_id:true,employee:{select:{user_id:true}}}}):[]
+    assertAssignmentRequirements(profile.assignmentRequirements,{...input,identityById:providerIdentityMap(providers)})
   }
   if(input.setupMinutes!==profile.beforeMinutes) invalid('setupMinutes','La preparación se toma de las reglas del servicio')
   if(input.teardownMinutes!==profile.afterMinutes) invalid('teardownMinutes','El cierre se toma de las reglas del servicio')

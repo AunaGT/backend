@@ -6,7 +6,7 @@ const { resolveEffectiveModules } = require('../platform/registry')
 const { presentBooking, presentSession, authorizedIncludes } = require('./presentation')
 const { contactImageDtos } = require('../contacts/imageStorage')
 const { DateTime } = require('luxon')
-const {resolveBusyIdentities,loadBusyAssignments}=require('./occupancy')
+const {resolveBusyIdentities,loadBusyAssignments,providerIdentityMap}=require('./occupancy')
 
 async function availabilityContext(db, scope, raw, { excludeSessionId, profileOverride } = {}) {
   assertAgendaWrite(scope)
@@ -26,7 +26,7 @@ async function availabilityContext(db, scope, raw, { excludeSessionId, profileOv
   const [providers, resources] = await Promise.all([
     db.serviceProvider.findMany({ where: { company_id: scope.companyId, id: { in: profile.providerIds||row.providers.map(p => p.provider_id) }, active: true, branches: { some: { branch_id: scope.branchId } },
       ...(!hasAgendaPermission(scope, 'appointments.view_team') ? { OR: [{ user_id: scope.userId }, { employee: { user_id: scope.userId } }] } : {}) },
-    select: { id: true, employee_id: true, user_id: true } }),
+    select: { id: true, employee_id: true, user_id: true,...(profile.assignmentRequirements.some(r=>r.kind==='PROVIDER')?{employee:{select:{user_id:true}}}:{}) } }),
     db.scheduleResource.findMany({ where: { company_id: scope.companyId, id: { in: profile.resourceIds||row.resources.map(r => r.resource_id) }, branch_id: scope.branchId, active: true }, select: { id: true, person_capacity: true,type:true,portable:true } }),
   ])
   if (input.providerIds.some(id => !providers.some(p => p.id === id)) || input.resourceIds.some(id => !resources.some(r => r.id === id))) fail(400, 'INVALID_ASSIGNMENTS', 'Revisa los profesionales y recursos disponibles')
@@ -46,7 +46,7 @@ async function availabilityContext(db, scope, raw, { excludeSessionId, profileOv
   const timezone=calendars.find(c=>c.owner_type==='branch')?.timezone||(await db.systemSetting.findUnique({where:{company_id_key:{company_id:scope.companyId,key:'timezone'}}}))?.value||'America/Guatemala'
   return { input,timezone,branchId:scope.branchId,...{venue:input.venue,outboundMinutes:input.outboundMinutes,returnMinutes:input.returnMinutes}, productId: input.productId, product: row.product, profile, calendars, providers,
     resources:input.venue.kind==='BRANCH'?resources:resources.filter(r=>r.type!=='ROOM'&&r.portable), sessions,busyAssignments, bookings: sessions.flatMap(s => s.bookings), absenceDates, from: input.from, to: input.to,
-    providerIds: input.providerIds, resourceIds: input.resourceIds }
+    providerIds: input.providerIds, resourceIds: input.resourceIds,providerIdentityById:providerIdentityMap([...identities.links,...providers]) }
 }
 async function readAvailability(db, scope, raw, now = new Date(), options = {}) {
   const context = await availabilityContext(db, scope, raw, options)

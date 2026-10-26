@@ -2,6 +2,8 @@ const { DateTime } = require('luxon')
 const { occupiesSeat } = require('./states')
 const { localChoices } = require('./time')
 const { fail } = require('./validation')
+const {resolveAssignmentRequirements,providerIdentityMap}=require('./assignmentRequirements')
+const {normalizeServicePolicy}=require('./servicePolicy')
 const MINUTE = 60000
 const ABSENCES = ['VACACIONES', 'INCAPACIDAD', 'PERMISO', 'ASUETO', 'AUSENTE']
 const ms = value => new Date(value).getTime()
@@ -63,7 +65,9 @@ function calendarWindows(calendar, branch, from, to) {
   return windows
 }
 function computeSlots({ profile, calendars, providers, resources, sessions, bookings, absenceDates, from, to, now,
-  providerIds = [], resourceIds = [], scheduleGroup = false, productId, busyAssignments=[],venue={kind:'BRANCH'},outboundMinutes=0,returnMinutes=0,exactStart,timezone='America/Guatemala',branchId }) {
+  providerIds = [], resourceIds = [], providerIdentityById, scheduleGroup = false, productId, busyAssignments=[],venue={kind:'BRANCH'},outboundMinutes=0,returnMinutes=0,exactStart,timezone='America/Guatemala',branchId }) {
+  profile=normalizeServicePolicy(profile)
+  const identities=providerIdentityById??providerIdentityMap(providers)
   if (!profile.enabled) return []
   const configuredBranch=calendars.find(c=>c.owner_type==='branch')
   const manual=require('./servicePolicy').isManualService(profile,{providerIds,resourceIds})
@@ -95,7 +99,12 @@ function computeSlots({ profile, calendars, providers, resources, sessions, book
   }
   const contains = (list, interval) => list.some(w => w.start <= interval.start && w.end >= interval.end)
   const free = (id, interval, exclude) => contains(windows.get(id) || [], interval) && !(busy.get(id) || []).some(w => w.sessionId !== exclude && overlaps(w, interval))
-  function pick(candidates, selected, required, interval, exclude) {
+  function pick(candidates, selected, required, interval, exclude,requirements,kind,explicit=false) {
+    if(requirements.length){
+      const result=resolveAssignmentRequirements({requirements,candidates:candidates.filter(c=>free(c.id,interval,exclude)).map(c=>({id:c.id,kind})),
+        selectedIds:selected.length||explicit?selected:undefined,identityById:identities})
+      return result?.selectedIds??null
+    }
     if (selected.length) return selected.every(id => candidates.some(c => c.id === id) && free(id, interval, exclude)) ? selected : null
     if (!required) return []
     const first = [...candidates].sort((a, b) => a.id.localeCompare(b.id)).find(c => free(c.id, interval, exclude))
@@ -104,8 +113,9 @@ function computeSlots({ profile, calendars, providers, resources, sessions, book
   function slot(start, end, occupied, session = null) {
     if (start < lower || start >= upper || start < clock + profile.leadMinutes * MINUTE || start > DateTime.fromMillis(clock, { zone: branch.timezone }).plus({ days: profile.horizonDays }).toMillis()) return null
     if (configuredBranch&&venue.kind==='BRANCH'&&!contains(branchWindows, occupied)) return null
-    const ps = pick(providers, session ? assigned(session, 'providers') : providerIds, profile.requiresProvider, occupied, session?.id)
-    const rs = pick(resources, session ? assigned(session, 'resources') : resourceIds, profile.requiresResource, occupied, session?.id)
+    const policy=session?.policy_snapshot?normalizeServicePolicy(session.policy_snapshot):profile
+    const ps = pick(providers, session ? assigned(session, 'providers') : providerIds, policy.requiresProvider, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='PROVIDER'),'PROVIDER',!!session)
+    const rs = pick(resources, session ? assigned(session, 'resources') : resourceIds, policy.requiresResource, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='RESOURCE'),'RESOURCE',!!session)
     if (!ps || !rs) return null
     if (session && (providerIds.some(id => !ps.includes(id)) || resourceIds.some(id => !rs.includes(id)))) return null
     const capacity = Math.min(session?.capacity || profile.capacity, ...rs.map(id => resources.find(r => r.id === id)?.person_capacity ?? Infinity))
