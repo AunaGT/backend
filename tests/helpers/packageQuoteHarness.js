@@ -29,6 +29,7 @@ async function quoteHarness(run){
     [require.resolve('../../src/services/referenceGenerator')]:{nextDocumentReference:async()=> 'Q-T-1'},
     [require.resolve('../../src/services/commercialPayment')]:{documentPaymentTerms:async()=>({payment_condition:'CASH',credit_days:null})},
     [require.resolve('../../src/services/commercialDocumentSettings')]:{defaultQuoteValidUntil:async()=>null},
+    [require.resolve('../../src/services/customerPagesPublic')]:{resolvePublicPortal:async()=>null},
     [require.resolve('../../src/services/stockAvailability')]:{assertLinesAvailable:async()=>{},reserveForDocument:async()=>{stockWrites++},releaseByDocument:async()=>{stockWrites++}},
     [require.resolve('../../src/modules/quotes/access')]:{getCompanyModuleBlock:async()=>null},
   }

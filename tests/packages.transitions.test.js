@@ -71,3 +71,39 @@ test('package edit preserves a legacy reservation owned by another header but at
   const out=await f.invoke('update',{items:[],packages:[f.selection()],expectedRevision:f.revision})
   assert.equal(out.error?.code,'PACKAGE_REVIEW_REQUIRED');assert.deepEqual(f.document(),before)
 }))
+test('editing an approved free line preserves agreed price and cannot reference another document or package component',async()=>quoteHarness(async f=>{
+  await existing(f,{complete:true})
+  f.document().lines.push({id:id(610),product_id:id(23),qty:'1',unit_price:'3.00',line_total:'3.00',item_name:'Artículo acordado',item_kind:'STANDARD',unit_label:'unidad',quantity_decimals:0,sort_order:3})
+  f.document().total='1602.00';f.document().subtotal='1602.00'
+  const payload={items:[{source_line_id:id(610),product_id:id(23),qty:'1'}],packages:[f.selection()],expectedRevision:f.revision}
+  const out=await f.invoke('update',payload)
+  assert.equal(out.error,undefined);assert.equal(String(f.document().lines[0].unit_price),'3.00')
+  const before=structuredClone(f.document())
+  const forged=await f.invoke('update',{...payload,expectedRevision:f.document().integration_revision,items:[{source_line_id:id(999),product_id:id(23),qty:'1'}]})
+  assert.equal(forged.error?.code,'PACKAGE_REVIEW_REQUIRED');assert.deepEqual(f.document(),before)
+}))
+test('editing preview uses locked saved package agreement even after a newer version is active',async()=>quoteHarness(async f=>{
+  await existing(f,{complete:true})
+  f.state.versions.push({...structuredClone(f.state.versions[0]),version:2});f.state.packages[0].active_version=2
+  const out=await f.invoke('previewPackages',{packages:[f.selection(),{...f.selection(),groupId:id(103),version:2}],quoteId:id(400),expectedRevision:f.revision})
+  assert.equal(out.error,undefined);assert.equal(out.res.body.subtotal,'3198.00')
+  const stale=await f.invoke('previewPackages',{packages:[f.selection()],quoteId:id(400),expectedRevision:id(999)})
+  assert.equal(stale.error?.code,'DOCUMENT_CHANGED')
+}))
+test('JSONB key order does not turn the saved historical package into a new catalogue selection',async()=>quoteHarness(async f=>{
+  await existing(f,{complete:true})
+  const reordered=value=>Array.isArray(value)?value.map(reordered):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([k,v])=>[k,reordered(v)])):value
+  f.document().package_groups=reordered(f.document().package_groups)
+  f.state.versions.push({...structuredClone(f.state.versions[0]),version:2});f.state.packages[0].active_version=2
+  const out=await f.invoke('previewPackages',{packages:[f.selection()],quoteId:id(400),expectedRevision:f.revision})
+  assert.equal(out.error,undefined);assert.equal(out.res.body.packageGroups[0].amount,'1599.00')
+}))
+test('editing composition retains the agreed document discount and reallocates package net amounts',async()=>quoteHarness(async f=>{
+  await existing(f,{complete:true})
+  f.document().discount_total='99.00';f.document().total='1500.00'
+  f.document().package_groups=packages.finalizePackageAmounts(f.document().package_groups,f.document().lines,{documentTotal:'1500.00'})
+  const out=await f.invoke('update',{items:[],packages:[f.selection()],expectedRevision:f.revision})
+  assert.equal(out.error,undefined);assert.equal(Number(f.document().discount_total),99)
+  assert.equal(String(f.document().total),'1500');assert.equal(f.document().package_groups[0].netAmount,'1500.00')
+  packages.assertPackageAgreement(f.document())
+}))

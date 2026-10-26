@@ -12,7 +12,7 @@ const fail=(code,message,status=409)=>{throw Object.assign(new Error(message),{s
 const review=()=>fail('PACKAGE_REVIEW_REQUIRED','La composición del paquete cambió. Revisa sus productos, cantidades y precios antes de continuar')
 const money=value=>D(value).toFixed(2)
 const canonicalSelection=selection=>({...selection,choices:selection.choices.map(choice=>({...choice,items:[...choice.items].sort((a,b)=>a.optionId.localeCompare(b.optionId))})).sort((a,b)=>a.choiceId.localeCompare(b.choiceId))})
-const sameSelection=(a,b)=>JSON.stringify(canonicalSelection(a))===JSON.stringify(canonicalSelection(b))
+const sameSelection=(a,b)=>isDeepStrictEqual(canonicalSelection(a),canonicalSelection(b))
 function assertFreePackageItems(items){
   if(!Array.isArray(items))return
   for(const item of items)if(item&&Object.keys(item).some(key=>key.startsWith('package')))fail('INVALID_PACKAGE','Los componentes de un paquete se calculan en el servidor; agrégalo desde Paquetes',400)
