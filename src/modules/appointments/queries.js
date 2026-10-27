@@ -23,11 +23,16 @@ async function availabilityContext(db, scope, raw, { excludeSessionId, profileOv
     profile={...profile,durationMinutes:input.durationMinutes}
   }
   if(!(profile.allowedVenueKinds||['BRANCH']).includes(input.venue.kind)) fail(400,'VENUE_NOT_ALLOWED','El servicio no admite este lugar de atención')
+  // Existing classes keep their concrete assignments even after catalog options change.
+  const existingClasses=profile.mode==='GROUP'&&!profileOverride?await db.appointmentSession.findMany({where:{company_id:scope.companyId,branch_id:scope.branchId,product_id:input.productId,
+    record_type:'SCHEDULED_SERVICE',mode:'GROUP',status:'SCHEDULED',starts_at:{gte:new Date(input.from),lt:new Date(input.to)}},select:{providers:true,resources:true},take:10001}):[]
+  if(existingClasses.length>10000)fail(400,'RANGE_TOO_LARGE','Selecciona un período con menos sesiones')
+  const candidateIds=type=>[...new Set([...(profile[type==='providers'?'providerIds':'resourceIds']||row[type].map(p=>p[type==='providers'?'provider_id':'resource_id'])),...existingClasses.flatMap(s=>assigned(s,type))])]
   const [providers, resources] = await Promise.all([
-    db.serviceProvider.findMany({ where: { company_id: scope.companyId, id: { in: profile.providerIds||row.providers.map(p => p.provider_id) }, active: true, branches: { some: { branch_id: scope.branchId } },
+    db.serviceProvider.findMany({ where: { company_id: scope.companyId, id: { in: candidateIds('providers') }, active: true, branches: { some: { branch_id: scope.branchId } },
       ...(!hasAgendaPermission(scope, 'appointments.view_team') ? { OR: [{ user_id: scope.userId }, { employee: { user_id: scope.userId } }] } : {}) },
     select: { id: true, employee_id: true, user_id: true,...(profile.assignmentRequirements.some(r=>r.kind==='PROVIDER')?{employee:{select:{user_id:true}}}:{}) } }),
-    db.scheduleResource.findMany({ where: { company_id: scope.companyId, id: { in: profile.resourceIds||row.resources.map(r => r.resource_id) }, branch_id: scope.branchId, active: true }, select: { id: true, person_capacity: true,type:true,portable:true } }),
+    db.scheduleResource.findMany({ where: { company_id: scope.companyId, id: { in: candidateIds('resources') }, branch_id: scope.branchId, active: true }, select: { id: true, person_capacity: true,type:true,portable:true } }),
   ])
   if (input.providerIds.some(id => !providers.some(p => p.id === id)) || input.resourceIds.some(id => !resources.some(r => r.id === id))) fail(400, 'INVALID_ASSIGNMENTS', 'Revisa los profesionales y recursos disponibles')
   require('./domain/activities').validateVenueAssignments(input.venue,resources.filter(r=>input.resourceIds.includes(r.id)),null)
@@ -40,13 +45,13 @@ async function availabilityContext(db, scope, raw, { excludeSessionId, profileOv
     db.companyModule.findMany({ where: { company_id: scope.companyId } }),
   ])
   const sessions=busyAssignments.map(block=>block.session)
-  const employees = providers.map(p => p.employee_id).filter(Boolean)
+  const employees = identities.employeeIds
   const absenceDates = employees.length && resolveEffectiveModules(modules).find(m => m.code === 'hr')?.effectiveEnabled
     ? await db.attendance.findMany({ where: { company_id: scope.companyId, employee_id: { in: employees }, work_date: { gte: from, lte: to }, status: { in: ABSENCES } }, select: { employee_id: true, work_date: true, status: true } }) : []
   const timezone=calendars.find(c=>c.owner_type==='branch')?.timezone||(await db.systemSetting.findUnique({where:{company_id_key:{company_id:scope.companyId,key:'timezone'}}}))?.value||'America/Guatemala'
   return { input,timezone,branchId:scope.branchId,...{venue:input.venue,outboundMinutes:input.outboundMinutes,returnMinutes:input.returnMinutes}, productId: input.productId, product: row.product, profile, calendars, providers,
     resources:input.venue.kind==='BRANCH'?resources:resources.filter(r=>r.type!=='ROOM'&&r.portable), sessions,busyAssignments, bookings: sessions.flatMap(s => s.bookings), absenceDates, from: input.from, to: input.to,
-    providerIds: input.providerIds, resourceIds: input.resourceIds,providerIdentityById:providerIdentityMap([...identities.links,...providers]) }
+    providerIds: input.providerIds, resourceIds: input.resourceIds,providerIdentityById:providerIdentityMap([...identities.links,...providers]),providerEmployeeIds:identities.providerEmployeeIds }
 }
 async function readAvailability(db, scope, raw, now = new Date(), options = {}) {
   const context = await availabilityContext(db, scope, raw, options)

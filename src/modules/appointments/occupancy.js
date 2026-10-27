@@ -14,7 +14,8 @@ async function resolveBusyIdentities(db,scope,{userIds=[],providerIds=[]},capabi
   const users=unique([...userIds,...links.flatMap(p=>[p.user_id,p.employee?.user_id])])
   const employees=hr&&users.length ? await db.employee.findMany({where:{company_id:scope.companyId,user_id:{in:users}},select:{id:true,user_id:true}}) : []
   return {userIds:users,providerIds:unique([...providerIds,...links.map(p=>p.id)]),
-    employeeIds:unique([...links.map(p=>p.employee_id),...employees.map(e=>e.id)]),links}
+    employeeIds:unique([...links.map(p=>p.employee_id),...employees.map(e=>e.id)]),links,
+    providerEmployeeIds:new Map(links.map(p=>[p.id,unique([p.employee_id,...employees.filter(e=>e.user_id&&[p.user_id,p.employee?.user_id].includes(e.user_id)).map(e=>e.id)])]))}
 }
 async function loadBusyAssignments(db,scope,{from,to,identities,resourceIds=[],excludeSessionId,includeGroups,now=new Date()}) {
   const ors=[{providers:{some:{provider_id:{in:identities.providerIds}}}},

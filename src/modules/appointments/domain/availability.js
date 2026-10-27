@@ -65,7 +65,7 @@ function calendarWindows(calendar, branch, from, to) {
   return windows
 }
 function computeSlots({ profile, calendars, providers, resources, sessions, bookings, absenceDates, from, to, now,
-  providerIds = [], resourceIds = [], providerIdentityById, scheduleGroup = false, productId, busyAssignments=[],venue={kind:'BRANCH'},outboundMinutes=0,returnMinutes=0,exactStart,timezone='America/Guatemala',branchId }) {
+  providerIds = [], resourceIds = [], providerIdentityById,providerEmployeeIds, scheduleGroup = false, productId, busyAssignments=[],venue={kind:'BRANCH'},outboundMinutes=0,returnMinutes=0,exactStart,timezone='America/Guatemala',branchId }) {
   profile=normalizeServicePolicy(profile)
   const identities=providerIdentityById??providerIdentityMap(providers)
   if (!profile.enabled) return []
@@ -79,7 +79,8 @@ function computeSlots({ profile, calendars, providers, resources, sessions, book
   for (const entity of [...providers, ...resources]) {
     const calendar = calendars.find(c => c.provider_id === entity.id || c.resource_id === entity.id)
     let available = calendarWindows(calendar, branch, lower, upper)
-    if (entity.employee_id) for (const absence of absenceDates.filter(a => a.employee_id === entity.employee_id && ABSENCES.includes(a.status))) {
+    const employeeIds=providerEmployeeIds?.get(entity.id)??[entity.employee_id]
+    for (const absence of absenceDates.filter(a => employeeIds.includes(a.employee_id) && ABSENCES.includes(a.status))) {
       const day = DateTime.fromISO(dateKey(absence.work_date), { zone: calendar?.timezone || branch.timezone })
       const block = { start: day.startOf('day').toMillis(), end: day.plus({ days: 1 }).startOf('day').toMillis() }
       available = available.flatMap(w => !overlaps(w, block) ? [w] : [
@@ -114,8 +115,9 @@ function computeSlots({ profile, calendars, providers, resources, sessions, book
     if (start < lower || start >= upper || start < clock + profile.leadMinutes * MINUTE || start > DateTime.fromMillis(clock, { zone: branch.timezone }).plus({ days: profile.horizonDays }).toMillis()) return null
     if (configuredBranch&&venue.kind==='BRANCH'&&!contains(branchWindows, occupied)) return null
     const policy=session?.policy_snapshot?normalizeServicePolicy(session.policy_snapshot):profile
-    const ps = pick(providers, session ? assigned(session, 'providers') : providerIds, policy.requiresProvider, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='PROVIDER'),'PROVIDER',!!session)
-    const rs = pick(resources, session ? assigned(session, 'resources') : resourceIds, policy.requiresResource, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='RESOURCE'),'RESOURCE',!!session)
+    const eligible=(items,ids)=>ids?items.filter(c=>ids.includes(c.id)):items
+    const ps = pick(eligible(providers,session?assigned(session,'providers'):profile.providerIds), session ? assigned(session, 'providers') : providerIds, policy.requiresProvider, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='PROVIDER'),'PROVIDER',!!session)
+    const rs = pick(eligible(resources,session?assigned(session,'resources'):profile.resourceIds), session ? assigned(session, 'resources') : resourceIds, policy.requiresResource, occupied, session?.id,policy.assignmentRequirements.filter(r=>r.kind==='RESOURCE'),'RESOURCE',!!session)
     if (!ps || !rs) return null
     if (session && (providerIds.some(id => !ps.includes(id)) || resourceIds.some(id => !rs.includes(id)))) return null
     const capacity = Math.min(session?.capacity || profile.capacity, ...rs.map(id => resources.find(r => r.id === id)?.person_capacity ?? Infinity))

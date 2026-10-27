@@ -6,7 +6,7 @@ require.cache[require.resolve('@prisma/client')]={exports:generated}
 process.env.DATABASE_URL=target;process.env.DIRECT_URL=target
 process.env.JWT_SECRET='synthetic-requirements-test-not-a-real-secret-2026'
 const {createEngagement,programEngagement,getEngagement}=require('../src/modules/appointments/engagements')
-const {withAgendaTransaction,enrollBooking,rescheduleSession}=require('../src/modules/appointments/application')
+const {withAgendaTransaction,enrollBooking,rescheduleSession,createBooking}=require('../src/modules/appointments/application')
 const {readAvailability}=require('../src/modules/appointments/queries')
 const {saveServiceProfile}=require('../src/modules/appointments/profiles')
 const {saveCalendar}=require('../src/modules/appointments/calendars')
@@ -78,10 +78,11 @@ test('complete requirements stay atomic under real PostgreSQL scheduling and ret
   }
  })
  await t.test('class search, enrollment and moving retain frozen requirements after the profile changes',async()=>{
-  const p=classSession.product_id,third=await db.scheduleResource.create({data:{company_id:company.id,branch_id:branch.id,name:'Synthetic third equipment',type:'EQUIPMENT',portable:true,person_capacity:20}})
+  const p=classSession.product_id,replacements=[]
+  for(let i=0;i<3;i++)replacements.push(await db.scheduleResource.create({data:{company_id:company.id,branch_id:branch.id,name:'Synthetic replacement equipment '+i,type:'EQUIPMENT',portable:true,person_capacity:20}}))
   await withAgendaTransaction(db,company.id,async tx=>{
-   await saveCalendar(tx,scope,'resource',third.id,{...calendar,weekly:[],inheritBranch:true})
-   await saveServiceProfile(tx,scope,p,{...profile,expectedVersion:1,schedulingStyle:'CLASS',mode:'GROUP',capacity:3,resourceIds:[...ids,third.id],assignmentRequirements:[{...req,quantity:3,optionIds:[...ids,third.id]}]})
+   for(const r of replacements)await saveCalendar(tx,scope,'resource',r.id,{...calendar,weekly:[],inheritBranch:true})
+   await saveServiceProfile(tx,scope,p,{...profile,expectedVersion:1,schedulingStyle:'CLASS',mode:'GROUP',capacity:3,resourceIds:replacements.map(r=>r.id),assignmentRequirements:[{...req,quantity:3,optionIds:replacements.map(r=>r.id)}]})
   })
   const slots=await readAvailability(db,scope,{productId:p,from:at(4),to:at(5),providerIds:[],resourceIds:[]})
   assert.ok(slots.some(s=>s.sessionId===classSession.id),'Previously created class must remain discoverable without the newly required equipment')
@@ -89,6 +90,23 @@ test('complete requirements stay atomic under real PostgreSQL scheduling and ret
   await rescheduleSession(db,scope,classSession.id,{startsAt:at(6),timezone:'America/Guatemala',providerIds:[],resourceIds:ids,expectedVersion:classSession.version,reason:'Synthetic move',idempotencyKey:randomUUID()})
   const moved=await db.appointmentSession.findUnique({where:{id:classSession.id},include:{resources:true}})
   assert.equal(moved.resources.length,2);assert.equal(moved.policy_snapshot.assignmentRequirements[0].quantity,2)
+ })
+ await t.test('a user-linked employee absence blocks both consultation and reservation',async()=>{
+  await db.companyModule.create({data:{company_id:company.id,module_code:'hr',status:'ACTIVE'}})
+  const employee=await db.employee.create({data:{company_id:company.id,branch_id:branch.id,user_id:actor.id,code:'REQ',first_name:'Synthetic',last_name:'Employee',hire_date:new Date('2020-01-01'),base_salary:0}})
+  const provider=await db.serviceProvider.create({data:{company_id:company.id,user_id:actor.id,name:'Synthetic user-linked professional',created_by:actor.id}})
+  await db.serviceProviderBranch.create({data:{company_id:company.id,branch_id:branch.id,provider_id:provider.id}})
+  const p=await db.product.create({data:{company_id:company.id,name:'Synthetic absent professional service',kind:'SERVICE',service_unit_label:'sesión',category_id:category.id,status_id:status.id,price:25,cost:0}})
+  await withAgendaTransaction(db,company.id,async tx=>{
+   await saveCalendar(tx,scope,'provider',provider.id,{...calendar,weekly:[],inheritBranch:true})
+   await saveServiceProfile(tx,scope,p.id,{...profile,providerIds:[provider.id],resourceIds:[],assignmentRequirements:[{...req,kind:'PROVIDER',quantity:1,optionIds:[provider.id]}]})
+  })
+  await db.attendance.create({data:{company_id:company.id,branch_id:branch.id,employee_id:employee.id,work_date:new Date(at(7).slice(0,10)+'T00:00Z'),status:'AUSENTE'}})
+  const slots=await readAvailability(db,scope,{productId:p.id,from:at(7),to:new Date(new Date(at(7)).getTime()+3600000).toISOString(),providerIds:[provider.id],resourceIds:[]})
+  assert.deepEqual(slots,[])
+  const before=await db.appointmentSession.count({where:{company_id:company.id}})
+  await assert.rejects(createBooking(db,scope,{productId:p.id,contactId:contact.id,startsAt:at(7),timezone:'America/Guatemala',providerIds:[provider.id],resourceIds:[],quantity:'1',notes:'Synthetic',idempotencyKey:randomUUID()}),{code:'SLOT_UNAVAILABLE'})
+  assert.equal(await db.appointmentSession.count({where:{company_id:company.id}}),before)
  })
  t.diagnostic('Synthetic loopback database only; no active client regeneration, sales or provider requests')
 })
