@@ -1,6 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict')
 const {quoteHarness}=require('./helpers/packageQuoteHarness'),{id}=require('./helpers/packageFixtures')
 const input={schemaVersion:1,depositPercent:'25',balanceDaysBefore:3,referenceStartsAt:'2027-01-10T16:00:00Z',referenceTimezone:'America/Guatemala'}
+test('editor capability stays disabled with the previous generated client',async()=>quoteHarness(async f=>{
+ f.db._runtimeDataModel={models:{}}
+ const result=await f.invoke('paymentTermsCapability',{})
+ assert.equal(result.error,undefined);assert.equal(result.res.body.enabled,false)
+}))
 test('shared proposal exposes agreed conditions but never payment allocations or operational exceptions',async()=>quoteHarness(async f=>{
  f.state.products.find(p=>p.id===id(20)).price='100.00'
  const created=await f.invoke('create',{items:[{product_id:id(20),qty:'1'}],eventPaymentTerms:input});assert.equal(created.error,undefined)
