@@ -143,7 +143,7 @@ async function saleDetailDto(sale, companyId, user,branchId) {
     contact = safe
   }
   const enabled=await require('./fiscalRequests').fiscalEnabled(prisma,companyId)
-  return { ...rest,...commercialDto(sale,user,branchId,enabled), line_count:sale.sale_items?.length ?? sale._count?.sale_items ?? 0, customerContact: contact }
+  return { ...rest,...(sale.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').publicEventPaymentTerms(sale.event_payment_terms)}:{}),...commercialDto(sale,user,branchId,enabled), line_count:sale.sale_items?.length ?? sale._count?.sale_items ?? 0, customerContact: contact }
 }
 
 exports.list = async (req, res, next) => {

@@ -91,7 +91,7 @@ async function getEngagement(db,scope,id){
   if(row.event_payment_terms){
     const policy=require('./engagementPaymentPolicy')
     result.paymentPolicy=policy.paymentPolicyPublicState(await policy.loadEngagementPaymentState(db,scope,row,{money:result.money}),{financial})
-    if(financial)result.eventPaymentTerms=require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(row.event_payment_terms)
+    if(financial)result.eventPaymentTerms=require('../../services/eventPaymentTerms').publicEventPaymentTerms(row.event_payment_terms)
   }
   return result
 }

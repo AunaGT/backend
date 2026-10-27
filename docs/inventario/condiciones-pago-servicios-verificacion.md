@@ -23,9 +23,9 @@ La opción se habilita solo si el servidor reconoce las columnas y el cliente ge
 
 | Comprobación | Resultado |
 | --- | --- |
-| Backend, suite completa | 1730/1730 |
+| Backend, suite completa | 1732/1732 |
 | Backend, módulos | 97/97 |
-| Frontend, suite completa con concurrencia 2 | 1472/1472; prueba adicional de excepción incluida en el grupo dirigido de abajo |
+| Frontend, suite completa con concurrencia 2 | 1476/1476 después de las correcciones de revisión |
 | UI dirigida: condiciones, borrador, revisión, acciones | 25/25 |
 | TypeScript, build y fronteras de 23 módulos | Correctos; build conserva aviso de tamaño de chunks existente |
 | Migración nueva, PostgreSQL temporal y clientes temporales | 1/1; huellas de todas las tablas anteriores conservadas, checks y rollback |
@@ -36,6 +36,8 @@ La opción se habilita solo si el servidor reconoce las columnas y el cliente ge
 
 La aceptación financiera incluye espera real en el bloqueo del cliente durante cobro/liberación, conversión compromiso→aplicación, otro acuerdo del mismo cliente, corrección de venta, hash obsoleto, permiso retirado, transición operativa con excepción idempotente, cancelación sin devolución, cambio de fecha tras otro cobro, inscripciones de clientes distintos en una clase y rollback del segundo horario. No es una simulación de respuestas HTTP contra la base activa.
 
+La revisión independiente encontró dos omisiones importantes de presentación, ambas reproducidas y corregidas: los pedidos y su PDF podían ocultar condiciones válidas al calcular un vencimiento durante un cambio de horario estacional; y la vista de venta omitía condiciones que sí estaban guardadas. Los lectores guardados de pedido, venta y contratación ahora reciben el vencimiento calculado por el servidor. Una vista previa sin guardar conserva el porcentaje, los días y la referencia si no puede resolver la hora exacta. La venta muestra este acuerdo por separado del vencimiento contable. Pruebas de regresión: lectores backend 2/2 y documentos/normalización/vista frontend 5/5.
+
 Repetición: `tests/event-payment-terms.migration.pg.e2e.js` exige una base **vacía** mediante `EVENT_PAYMENT_TERMS_TEST_DATABASE_URL`. `tests/appointments.payment-policy-concurrent.e2e.js` usa una base ya migrada. Ambos rechazan destinos que no sean loopback y no tengan nombre `auna_payment_terms_test_*`; no usan la conexión de la aplicación como alternativa. Los clientes generados viven en directorios temporales, no en el cliente activo.
 
 La revisión visual usa `tests/visual/event-payment-preview.cjs` y `tests/visual/event-payment.verify.cjs`, con datos ficticios y sin sesión/API. No sustituye una prueba con sesión real después del despliegue. Capturas: `deposito-frontend/output/playwright/payment-*.png`.
@@ -43,6 +45,8 @@ La revisión visual usa `tests/visual/event-payment-preview.cjs` y `tests/visual
 ## Despliegue pendiente
 
 **No se aplicó `20261029120000_event_payment_terms` a la base activa, no se regeneró su cliente ni se reiniciaron servicios para activarlo.** Requiere autorización específica. Antes de desplegar: revisar las migraciones pendientes exactas, respaldo/política de recuperación, aplicar únicamente la secuencia autorizada y luego generar el cliente y reiniciar coordinadamente. No usar una generación nueva contra una base sin migrar.
+
+El control de disponibilidad no hace compatibles todas las consultas si se instala un cliente generado nuevo contra una base sin migrar: esa combinación no está soportada. La actualización debe respetar el orden anterior. No se agregaron permisos de API ni una pantalla nueva para contratar directamente; esa alta sigue disponible mediante el comando existente, mientras que la opción de interfaz se configura en cotizaciones con servicios.
 
 Después de activar, verificar con datos de prueba autorizados las pantallas autenticadas de cotización, contratación y Agenda, y asignar deliberadamente el permiso de excepción si corresponde. No se contactó Infile, DonShot ni servidores externos; tampoco se envían notificaciones, cobros web ni datos mediante una API nueva.
 
