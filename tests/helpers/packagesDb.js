@@ -3,12 +3,14 @@ const {id,definition}=require('./packageFixtures')
 function matches(row,where={}) {
   return Object.entries(where).every(([key,want])=>{
     if(key==='OR')return want.some(rule=>matches(row,rule))
+    if(key==='AND')return want.every(rule=>matches(row,rule))
     if(key==='branches')return row.branches.some(branch=>matches(branch,want.some))
     if(key==='category')return matches(row.category,want)
     const actual=row[key]
     if(want&&typeof want==='object'&&!Array.isArray(want)){
       if('in'in want)return want.in.includes(actual)
       if('gt'in want)return actual>want.gt
+      if('not'in want)return actual!==want.not
       if('contains'in want)return String(actual).toLowerCase().includes(want.contains.toLowerCase())
     }
     return actual===want
@@ -25,6 +27,7 @@ function fixture() {
   const db={}
   const rows=name=>name==='packages'?state.packages.map(row=>({...row,branches:state.branches.filter(b=>b.package_id===row.id)})):state[name]
   const model=name=>({
+    count:async({where={}}={})=>rows(name).filter(row=>matches(row,where)).length,
     findMany:async({where={},orderBy,take,skip=0}={})=>{
       let found=rows(name).filter(row=>matches(row,where))
       if(orderBy?.id)found=found.sort((a,b)=>a.id<b.id?-1:1)

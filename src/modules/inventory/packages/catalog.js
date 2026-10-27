@@ -42,17 +42,26 @@ const receipt=row=>({id:row.id,version:row.version,activeVersion:row.active_vers
 const summary=row=>({...receipt(row),name:row.name,branchIds:row.branches.map(branch=>branch.branch_id)})
 async function listPackages(db,scope,query={}) {
   authorize(scope);await enabled(db,scope)
-  object(query,['limit','cursor','q','branchId','includeArchived','activeOnly'],'query')
+  object(query,['limit','cursor','q','branchId','includeArchived','activeOnly','includeSummary'],'query')
   const limit=integer(query.limit===undefined?25:Number(query.limit),'limit',1,100)
-  const where={...visible(scope)}
-  if(query.branchId!==undefined){uuid(query.branchId,'branchId');if(!branchIds(scope).includes(query.branchId))fail(403,'FORBIDDEN','Sucursal no autorizada');where.branches={some:{branch_id:query.branchId}}}
+  const filters={...visible(scope)}
+  if(query.branchId!==undefined){uuid(query.branchId,'branchId');if(!branchIds(scope).includes(query.branchId))fail(403,'FORBIDDEN','Sucursal no autorizada');filters.branches={some:{branch_id:query.branchId}}}
   const flag=(value,path)=>{if(![undefined,true,false,'true','false'].includes(value))invalid(path,'Selecciona sí o no');return value===true||value==='true'}
+  if(flag(query.activeOnly,'activeOnly'))filters.active_version={not:null}
+  if(query.q!==undefined)filters.name={contains:text(query.q,'q',100,false),mode:'insensitive'}
+  // Catalog status totals include archived entries and never depend on the cursor.
+  const includeSummary=flag(query.includeSummary,'includeSummary'),where={...filters}
   if(!flag(query.includeArchived,'includeArchived'))where.archived_at=null
-  if(flag(query.activeOnly,'activeOnly'))where.active_version={not:null}
   if(query.cursor!==undefined)where.id={gt:uuid(query.cursor,'cursor')}
-  if(query.q!==undefined)where.name={contains:text(query.q,'q',100,false),mode:'insensitive'}
-  const rows=await db.commercialPackage.findMany({where,include:{branches:true},orderBy:{id:'asc'},take:limit+1}),items=rows.slice(0,limit)
-  return{items:items.map(summary),nextCursor:rows.length>limit?items.at(-1).id:null}
+  const [rows,counts]=await Promise.all([
+    db.commercialPackage.findMany({where,include:{branches:true},orderBy:{id:'asc'},take:limit+1}),
+    includeSummary?Promise.all([
+      db.commercialPackage.count({where:{AND:[filters,{archived_at:null,active_version:{not:null}}]}}),
+      db.commercialPackage.count({where:{AND:[filters,{archived_at:null,active_version:null}]}}),
+      db.commercialPackage.count({where:{AND:[filters,{archived_at:{not:null}}]}}),
+    ]):undefined,
+  ]),items=rows.slice(0,limit)
+  return{items:items.map(summary),nextCursor:rows.length>limit?items.at(-1).id:null,...(counts?{summary:{total:counts[0]+counts[1]+counts[2],active:counts[0],draft:counts[1],archived:counts[2]}}:{})}
 }
 async function getPackage(db,scope,id) {
   authorize(scope);await enabled(db,scope)
