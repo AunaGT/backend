@@ -44,10 +44,14 @@ async function saveProvider(tx, scope, id, raw) {
   if(old&&(employeeId!==old.employee_id||userId!==old.user_id)) {
     const {resolveBusyIdentities,loadBusyAssignments}=require('./occupancy')
     const {sessionOccupies,overlaps}=require('./domain/availability')
+    const {sessionBlocks,shareIdentity}=require('./domain/operationalTimeline')
+    const {providerIdentityMap}=require('./domain/assignmentRequirements')
     const now=new Date()
     const future=await tx.appointmentSession.findMany({where:{company_id:scope.companyId,occupied_until:{gt:now},
       providers:{some:{provider_id:id}},status:{in:['SCHEDULED','IN_PROGRESS','COMPLETED']}},
       select:{id:true,record_type:true,mode:true,status:true,occupied_from:true,occupied_until:true,
+        starts_at:true,ends_at:true,organizer_id:true,providers:true,resources:true,participants:{where:{kind:'USER'},select:{user_id:true}},
+        outbound_minutes:true,setup_minutes:true,teardown_minutes:true,return_minutes:true,...require('./timelineStorage').timelineSelect(tx),
         bookings:{select:{session_id:true,status:true,expires_at:true}}},take:1001})
     const occupied=future.filter(s=>sessionOccupies(s,s.bookings,now))
     if(future.length>1000) fail(409,'IDENTITY_CHANGE_LIMIT','Reasigna primero las actividades futuras de este profesional')
@@ -56,7 +60,9 @@ async function saveProvider(tx, scope, id, raw) {
       const from=new Date(Math.min(...occupied.map(s=>s.occupied_from.getTime())))
       const to=new Date(Math.max(...occupied.map(s=>s.occupied_until.getTime())))
       const busy=await loadBusyAssignments(tx,scope,{from,to,identities})
-      if(occupied.some(s=>busy.some(b=>b.sessionId!==s.id&&overlaps({start:s.occupied_from.getTime(),end:s.occupied_until.getTime()},b))))
+      const identityById=providerIdentityMap([...identities.links,{id,user_id:userId,employee_id:employeeId}])
+      if(occupied.some(s=>sessionBlocks({...s,providers:s.providers||[{provider_id:id}]},identityById).filter(b=>b.providerIds.includes(id)).some(own=>
+        busy.some(b=>b.sessionId!==s.id&&shareIdentity(own,b)&&overlaps(own,b)))))
         fail(409,'IDENTITY_CONFLICT','La persona tiene actividades que se cruzan con las de este profesional; reasigna antes de vincular')
     }
   }

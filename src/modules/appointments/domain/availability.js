@@ -96,7 +96,7 @@ function computeSlots({ profile, calendars, providers, resources, sessions, book
   }
   for (const s of sessions) if (sessionOccupies(s, bookings, now)) for (const id of [...assigned(s, 'providers'), ...assigned(s, 'resources')]) {
     if (!busy.has(id)) busy.set(id, [])
-    busy.get(id).push({ start: ms(s.occupied_from), end: ms(s.occupied_until), sessionId: s.id })
+    if(!busyAssignments.some(b=>b.sessionId===s.id))for(const block of require('./operationalTimeline').sessionBlocks(s,identities))if(block.providerIds.includes(id)||block.resourceIds.includes(id))busy.get(id).push({...block,sessionId:s.id})
   }
   const contains = (list, interval) => list.some(w => w.start <= interval.start && w.end >= interval.end)
   const free = (id, interval, exclude) => contains(windows.get(id) || [], interval) && !(busy.get(id) || []).some(w => w.sessionId !== exclude && overlaps(w, interval))

@@ -23,9 +23,10 @@ async function context(db,scope,raw) {
   const capabilities=await agendaCapabilities(db,scope)
   return {...entryFilter(scope,raw,capabilities),capabilities}
 }
-function entrySelect(capabilities,scope) {
+function entrySelect(capabilities,scope,db) {
   return {id:true,company_id:true,branch_id:true,record_type:true,purpose:true,title:true,organizer_id:true,product_id:true,
     mode:true,status:true,version:true,capacity:true,starts_at:true,ends_at:true,occupied_from:true,occupied_until:true,timezone:true,completion_policy:true,actual_completed_at:true,commercial_completion_confirmed_at:true,
+    ...require('./timelineStorage').timelineSelect(db),outbound_minutes:true,setup_minutes:true,teardown_minutes:true,return_minutes:true,
     venue:true,estimated_attendance:true,providers:true,resources:true,participants:{where:{kind:'USER'},select:{user_id:true}},
     organizer:{select:{name:true}},
     ...(capabilities.catalog&&hasAgendaPermission(scope,'products.view')?{product:{select:{name:true,deleted:true,available_for_sale:true,service_schedule_profile:{select:{enabled:true}}}}}:{}),
@@ -46,7 +47,7 @@ function presentEntry(row) {
 }
 async function listEntries(db,scope,raw) {
   const {filter,where,capabilities}=await context(db,scope,raw)
-  const [totalItems,rows]=await Promise.all([db.appointmentSession.count({where}),db.appointmentSession.findMany({where,select:entrySelect(capabilities,scope),
+  const [totalItems,rows]=await Promise.all([db.appointmentSession.count({where}),db.appointmentSession.findMany({where,select:entrySelect(capabilities,scope,db),
     orderBy:[{starts_at:'asc'},{id:'asc'}],skip:(filter.page-1)*filter.pageSize,take:filter.pageSize})])
   const checked=await require('./queries').addConflicts(db,scope,rows)
   return {items:checked.map(presentEntry),totalItems,page:filter.page,pageSize:filter.pageSize}

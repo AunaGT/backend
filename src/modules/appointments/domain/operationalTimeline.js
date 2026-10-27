@@ -93,4 +93,18 @@ function requirementEligibility({requirements,...input}){
   }))]
  }))
 }
-module.exports={emptyTimeline,parseOperationalTimeline,resolveOperationalTimeline,requirementEligibility}
+function sessionInput(row){
+ const iso=value=>value instanceof Date?value.toISOString():value
+ return{startsAt:iso(row.starts_at),endsAt:iso(row.ends_at),organizerId:row.organizer_id,userIds:(row.participants||[]).map(p=>p.user_id).filter(Boolean),
+  providerIds:(row.providers||[]).map(p=>p.provider_id),resourceIds:(row.resources||[]).map(r=>r.resource_id),
+  outboundMinutes:row.outbound_minutes??0,setupMinutes:row.setup_minutes??row.policy_snapshot?.beforeMinutes??0,
+  teardownMinutes:row.teardown_minutes??row.policy_snapshot?.afterMinutes??0,returnMinutes:row.return_minutes??0}
+}
+function hasTimeline(row){return row.record_type==='ACTIVITY'&&['milestones','attendanceWindows','requirementWindows'].some(key=>row.operational_timeline?.[key]?.length)}
+function sessionBlocks(row,identityById){
+ if(hasTimeline(row))return resolveOperationalTimeline({timeline:row.operational_timeline,session:sessionInput(row),identityById}).blocks
+ return[{start:new Date(row.occupied_from).getTime(),end:new Date(row.occupied_until).getTime(),
+  userIds:[...new Set([row.organizer_id,...(row.participants||[]).map(p=>p.user_id)].filter(Boolean))],providerIds:(row.providers||[]).map(p=>p.provider_id),resourceIds:(row.resources||[]).map(r=>r.resource_id)}]
+}
+const shareIdentity=(a,b)=>['userIds','providerIds','resourceIds'].some(key=>(a[key]||[]).some(id=>(b[key]||[]).includes(id)))
+module.exports={emptyTimeline,parseOperationalTimeline,resolveOperationalTimeline,requirementEligibility,sessionInput,hasTimeline,sessionBlocks,shareIdentity}

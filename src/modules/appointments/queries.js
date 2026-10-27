@@ -44,7 +44,7 @@ async function availabilityContext(db, scope, raw, { excludeSessionId, profileOv
       includeGroups:{branchId:scope.branchId,productId:input.productId}}),
     db.companyModule.findMany({ where: { company_id: scope.companyId } }),
   ])
-  const sessions=busyAssignments.map(block=>block.session)
+  const sessions=[...new Map(busyAssignments.map(block=>[block.sessionId,block.session])).values()]
   const employees = identities.employeeIds
   const absenceDates = employees.length && resolveEffectiveModules(modules).find(m => m.code === 'hr')?.effectiveEnabled
     ? await db.attendance.findMany({ where: { company_id: scope.companyId, employee_id: { in: employees }, work_date: { gte: from, lte: to }, status: { in: ABSENCES } }, select: { employee_id: true, work_date: true, status: true } }) : []
@@ -108,11 +108,11 @@ async function addConflicts(db, scope, rows) {
   const lower = Math.min(...rows.map(s => s.occupied_from.getTime())), upper = Math.max(...rows.map(s => s.occupied_until.getTime()))
   const [calendars, providers, resources, modules] = await Promise.all([
     db.scheduleCalendar.findMany({ where: { company_id: scope.companyId, OR: [{ branch_id: { in: branchIds } }, { provider_id: { in: providerIds } }, { resource_id: { in: resourceIds } }] }, include: { rules: true, exceptions: true } }),
-    db.serviceProvider.findMany({ where: { company_id: scope.companyId, id: { in: providerIds } }, select: { id: true,user_id:true, active: true, employee_id: true, branches: { select: { branch_id: true } } } }),
+    db.serviceProvider.findMany({ where: { company_id: scope.companyId, id: { in: providerIds } }, select: { id: true,user_id:true, employee:{select:{user_id:true}}, active: true, employee_id: true, branches: { select: { branch_id: true } } } }),
     db.scheduleResource.findMany({ where: { company_id: scope.companyId, id: { in: resourceIds } }, select: { id: true, active: true, branch_id: true, person_capacity: true } }),
     db.companyModule.findMany({ where: { company_id: scope.companyId } }),
   ])
-  const userIds=[...new Set(rows.flatMap(r=>[r.organizer_id,...(r.participants||[]).map(p=>p.user_id)]).concat(providers.map(p=>p.user_id)).filter(Boolean))]
+  const userIds=[...new Set(rows.flatMap(r=>[r.organizer_id,...(r.participants||[]).map(p=>p.user_id)]).concat(providers.flatMap(p=>[p.user_id,p.employee?.user_id])).filter(Boolean))]
   const people=userIds.length&&resolveEffectiveModules(modules).find(m=>m.code==='hr')?.effectiveEnabled
     ? await db.employee.findMany({where:{company_id:scope.companyId,user_id:{in:userIds}},select:{id:true,user_id:true}}):[]
   const employeeIds = [...new Set([...providers.map(p => p.employee_id),...people.map(p=>p.id)].filter(Boolean))]
@@ -125,27 +125,30 @@ async function addConflicts(db, scope, rows) {
     if (row.product?.service_schedule_profile?.enabled === false) conflicts.push('Agenda del servicio deshabilitada')
     const branch = calendars.find(c => c.branch_id === row.branch_id)
     const interval = { start: row.occupied_from.getTime(), end: row.occupied_until.getTime() }
+    const timeline=require('./domain/operationalTimeline'),blocks=timeline.sessionBlocks(row,providerIdentityMap(providers))
     const calendarsToCheck = [...((row.venue?.kind||'BRANCH')==='BRANCH'?[branch]:[]), ...assigned(row, 'providers').map(id => calendars.find(c => c.provider_id === id)), ...assigned(row, 'resources').map(id => calendars.find(c => c.resource_id === id))]
     if (calendarsToCheck.some(c => {
       if (!c) return row.record_type!=='ACTIVITY'
       const key = `${c.id}:${row.branch_id}`
       if (!cached.has(key)) cached.set(key, calendarWindows(c, branch, lower, upper))
-      return !cached.get(key).some(w => w.start <= interval.start && w.end >= interval.end)
+      const ranges=c.provider_id?blocks.filter(b=>b.providerIds.includes(c.provider_id)):c.resource_id?blocks.filter(b=>b.resourceIds.includes(c.resource_id)):
+        timeline.hasTimeline(row)?[{start:Date.parse(require('./domain/activities').activityInterval(timeline.sessionInput(row)).occupiedFrom),end:Date.parse(require('./domain/activities').activityInterval(timeline.sessionInput(row)).occupiedUntil)}]:[interval]
+      return ranges.some(range=>!cached.get(key).some(w => w.start <= range.start && w.end >= range.end))
     })) conflicts.push('Fuera del horario configurado actualmente')
     const activityUsers=[row.organizer_id,...(row.participants||[]).map(p=>p.user_id)]
     if(row.record_type==='ACTIVITY'&&absences.some(a=>{
       if(!people.some(p=>p.id===a.employee_id&&activityUsers.includes(p.user_id))) return false
       const day=DateTime.fromISO(a.work_date.toISOString().slice(0,10),{zone:row.timezone})
-      return overlaps(interval,{start:day.toMillis(),end:day.plus({days:1}).toMillis()})
+      return blocks.filter(b=>b.userIds.some(id=>people.some(p=>p.id===a.employee_id&&p.user_id===id))).some(b=>overlaps(b,{start:day.toMillis(),end:day.plus({days:1}).toMillis()}))
     })) conflicts.push('Ausencia registrada del personal')
     for (const id of assigned(row, 'providers')) {
       const p = providers.find(p => p.id === id)
       if (!p?.active || !p.branches.some(b => b.branch_id === row.branch_id)) conflicts.push('Profesional deshabilitado o reasignado')
       const zone = calendars.find(c => c.provider_id === id)?.timezone || row.timezone
       if (absences.some(a => {
-        if (a.employee_id !== p?.employee_id) return false
+        if (a.employee_id !== p?.employee_id&&!people.some(e=>e.id===a.employee_id&&[p?.user_id,p?.employee?.user_id].includes(e.user_id))) return false
         const day = DateTime.fromISO(a.work_date.toISOString().slice(0, 10), { zone })
-        return overlaps(interval, { start: day.toMillis(), end: day.plus({ days: 1 }).toMillis() })
+        return blocks.filter(b=>b.providerIds.includes(id)).some(b=>overlaps(b, { start: day.toMillis(), end: day.plus({ days: 1 }).toMillis() }))
       })) conflicts.push('Ausencia registrada del profesional')
     }
     if (assigned(row, 'resources').some(id => { const r = resources.find(r => r.id === id); return !r?.active || r.branch_id !== row.branch_id || (r.person_capacity != null && r.person_capacity < row.capacity) })) conflicts.push('Recurso deshabilitado o capacidad insuficiente')
