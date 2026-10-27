@@ -20,24 +20,26 @@ no se repitió en esta verificación.
 
 | Comprobación | Resultado |
 | --- | --- |
-| Suite completa del servidor, después de correcciones | 1,636/1,636 |
-| Suite completa de interfaz, después de correcciones | 1,474/1,474 |
+| Suite completa del servidor, después de correcciones | 1,639/1,639 |
+| Suite completa de interfaz, después de correcciones | 1,478/1,478 (`tests/*.test.*`, no solo CJS) |
 | Regresiones de módulos del servidor | 97/97 |
 | Fronteras físicas de módulos de interfaz | 23 módulos, sin infracciones |
 | Comprobación TypeScript | Sin errores |
 | Compilación Vite | Correcta; avisos existentes de tamaño y Browserslist |
 | Migración PostgreSQL en base vacía desechable | Correcta; conserva documentos, claves y recibos anteriores |
-| Aceptación y concurrencia PostgreSQL | 2/2; incluye revalidación de Agenda y su venta borrador |
+| Aceptación y concurrencia PostgreSQL | 2/2; incluye revalidación de Agenda, venta borrador y conflictos de moneda sin alterar el acuerdo |
 | Parciales, devoluciones y producción con servicios reales y persistencia controlada | Correctos |
 | Catálogo en 375/768/1440 px, claro/oscuro | Sin desbordamiento; conserva sidebar y foco |
 | Propuesta agrupada en 375/1440 px | Inspeccionada, con condiciones de servicio visibles |
 | PDF de cotización y pedido | Texto/importes correctos; páginas renderizadas e inspeccionadas |
 
-La primera suite final del servidor tuvo una falla intermitente anterior en
-`exportPdf.test.js`, «tarjetas de productos conservan descripción, mayoreo y
-promoción al paginar»: faltó el pie de la primera página. Su repetición aislada
-pasó 6/6 y la repetición completa pasó 1,636/1,636. No se cambió el exportador
-ajeno al alcance para ocultarla; sigue siendo un riesgo de esa prueba/exportación.
+Se resolvió la falla intermitente de `exportPdf.test.js`: el lector de la prueba
+quitaba un byte binario `0x0d` del checksum comprimido al confundirlo con parte del
+delimitador. Se reprodujo con la hora original y la secuencia previa de pruebas;
+restaurar ese byte permitió descomprimir la página completa, con su pie intacto.
+La regresión determinista falló primero y pasó después de respetar los delimitadores
+LF de PDFKit. Exportación 7/7 y suite completa 1,639/1,639. No se modificó el
+exportador ni se relajó la comprobación del pie.
 
 Poppler mostró glifos incorrectos incluso en un PDF mínimo independiente.
 Ghostscript renderizó correctamente ambos documentos; no se modificaron fuentes
@@ -45,7 +47,7 @@ de la aplicación por un problema del renderizador local.
 
 ## Revisión y pendientes
 
-Una revisión independiente parcial encontró tres problemas importantes, todos
+La revisión independiente, inicialmente interrumpida y ahora completada, encontró tres problemas importantes, todos
 reproducidos primero con pruebas fallidas y corregidos:
 
 1. Agenda redondeaba Q7.995 a Q8.00 al cargar componentes con unidades antiguas.
@@ -56,14 +58,28 @@ reproducidos primero con pruebas fallidas y corregidos:
 3. Agrupar partidas ocultaba las condiciones públicas de los servicios.
    Ahora se conservan visibles y su proyección pública excluye campos privados.
 
-La herramienta del revisor alcanzó su límite antes del dictamen completo.
-La comprobación restante fue local, por el autor: **no existe un dictamen
-independiente completo ni se declara listo para producción o fusión**.
-La evidencia de trabajo se conserva para retomar ese cierre sin repetir tareas.
+El mismo revisor retomó y completó el alcance restante. Dictamen recibido:
+«Ready to merge: With fixes», sin Critical, con dos Important adicionales y un
+Minor. Se reprodujeron y corrigieron con pruebas RED→GREEN:
 
-Detalle menor diferido: una venta formada solo por paquetes aún conserva el
-encabezado de la tabla existente junto a su pie financiero, aunque los componentes
-y sus importes se muestran correctamente en el resumen agrupado.
+4. Cambiar la moneda de empresa permitía cotizar una versión de paquete en otra
+   moneda. Ahora se rechaza al seleccionar/editar/previsualizar y antes de
+   enviar/aceptar/compartir/convertir, confirmar pedidos, facturar parciales o
+   preparar/confirmar su venta de Agenda. No hay conversión automática. Las
+   propuestas históricas, sus páginas públicas y PDF conservan la moneda del grupo.
+5. Elegir otra sucursal autorizada en cotización fallaba por comparar el destino
+   con la sucursal global activa. Ahora el scope distingue ambos: envía el destino,
+   pero descarta respuestas si cambia el contexto global, la empresa o la sesión.
+6. El editor de un borrador incompleto mostraba un total final cero. Ahora usa el
+   estado pendiente del resumen existente.
+
+También se corrigió el encabezado/tabla vacía en ventas formadas solo por paquetes,
+sin ocultar totales financieros ni el estado de una venta realmente vacía. Ventas
+mixtas cuentan solamente los artículos libres en su tabla.
+
+Los fixes posteriores al dictamen se verificaron localmente, no mediante una
+segunda revisión independiente. No se hizo despliegue a producción ni fusión;
+los cambios mixtos previos se mantienen intactos y necesitan separación al integrar.
 
 Los bloques 2 y 3 continúan fuera de esta entrega: requisitos avanzados de
 recursos/traslados/anticipos y nuevas capacidades externas de paquetes/horarios.
@@ -107,6 +123,16 @@ recursos/traslados/anticipos y nuevas capacidades externas de paquetes/horarios.
   rutas comerciales. La operación física parcial/producción se verifica por
   separado con los servicios reales. Límite: no es un único recorrido físico
   completo con PostgreSQL; se documenta, no se presenta como tal.
-- Se corrigieron los tres hallazgos recibidos y se retuvo el cierre de revisión
-  independiente como pendiente por su interrupción. Riesgo: el autor no sustituye
-  una segunda mirada completa; no se declaró listo para producción/fusión.
+- El revisor original completó el dictamen; se corrigieron sus cinco Important y
+  su Minor con regresiones. Las correcciones finales no recibieron otra revisión
+  independiente: no se presenta la verificación del autor como una segunda mirada.
+- La moneda congelada manda en la presentación del acuerdo; operar exige coincidir
+  con la configuración actual. Costo: para continuar un acuerdo de otra moneda hay
+  que revisar la configuración o crear uno nuevo, no hay cambio de divisas implícito.
+
+## Continuación solo Auna
+
+El tramo 2a se implementó después de esta verificación del bloque 1; su evidencia
+y estado de migración están en [Requisitos de servicios](requisitos-servicios-verificacion.md).
+Los hitos/traslado y anticipos siguen en tramos posteriores. La integración con
+DonShot permanece pendiente por decisión del usuario.
