@@ -6,6 +6,13 @@ const {agendaCapabilities}=require('./access')
 const unique=values=>[...new Set(values.filter(Boolean))]
 const {providerIdentityMap}=require('./domain/assignmentRequirements')
 const {sessionBlocks,resolveOperationalTimeline,shareIdentity}=require('./domain/operationalTimeline')
+function expandBlockAliases(block,links=[]){
+  const users=[...block.userIds],providers=[...block.providerIds]
+  for(const link of links) if(providers.includes(link.id)||users.includes(link.user_id)||users.includes(link.employee?.user_id)){
+    providers.push(link.id);users.push(...[link.user_id,link.employee?.user_id].filter(Boolean))
+  }
+  return {...block,userIds:unique(users),providerIds:unique(providers)}
+}
 
 async function resolveBusyIdentities(db,scope,{userIds=[],providerIds=[]},capabilities) {
   const hr=(capabilities||await agendaCapabilities(db,scope)).hr
@@ -33,14 +40,8 @@ async function loadBusyAssignments(db,scope,{from,to,identities,resourceIds=[],e
     ...require('./timelineStorage').timelineSelect(db),outbound_minutes:true,setup_minutes:true,teardown_minutes:true,return_minutes:true,
     participants:{where:{kind:'USER'},select:{user_id:true}},bookings:{select:{session_id:true,status:true,expires_at:true}}},take:10001})
   if(rows.length>10000) fail(400,'RANGE_TOO_LARGE','Selecciona un período con menos actividades')
-  return rows.filter(row=>sessionOccupies(row,row.bookings,now)).flatMap(row=>sessionBlocks(row,providerIdentityMap(identities.links||[])).map(block=>{
-    const users=[...block.userIds],providers=[...block.providerIds]
-    // Expand only identities represented by this block, not every candidate professional.
-    for(const link of identities.links||[]) if(providers.includes(link.id)||users.includes(link.user_id)||users.includes(link.employee?.user_id)) {
-      providers.push(link.id); users.push(...[link.user_id,link.employee?.user_id].filter(Boolean))
-    }
-    return {...block,sessionId:row.id,userIds:unique(users),providerIds:unique(providers),session:row}
-  }))
+  return rows.filter(row=>sessionOccupies(row,row.bookings,now)).flatMap(row=>sessionBlocks(row,providerIdentityMap(identities.links||[])).map(block=>
+    ({...expandBlockAliases(block,identities.links),sessionId:row.id,session:row})))
 }
 async function validateActivityPeople(db,scope,input) {
   const userIds=unique([input.organizerId,...input.userIds])
@@ -61,6 +62,7 @@ async function assertActivityAvailability(db,scope,input,{excludeSessionId}={}) 
   const capabilities=await agendaCapabilities(db,scope)
   const identities=await resolveBusyIdentities(db,scope,{userIds,providerIds:input.providerIds},capabilities)
   const base=activityInterval(input),projected=resolveOperationalTimeline({timeline:input.operationalTimeline,session:input,identityById:providerIdentityMap(identities.links)}),range={...base,occupiedFrom:projected.occupiedFrom,occupiedUntil:projected.occupiedUntil},interval={start:new Date(range.occupiedFrom).getTime(),end:new Date(range.occupiedUntil).getTime()}
+  projected.blocks=projected.blocks.map(block=>expandBlockAliases(block,identities.links))
   const [busy,calendars,absences]=await Promise.all([
     loadBusyAssignments(db,scope,{from:range.occupiedFrom,to:range.occupiedUntil,identities,resourceIds:input.resourceIds,excludeSessionId}),
     db.scheduleCalendar.findMany({where:{company_id:scope.companyId,OR:[{branch_id:scope.branchId},

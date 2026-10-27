@@ -103,8 +103,9 @@ function sessionInput(row){
 function hasTimeline(row){return row.record_type==='ACTIVITY'&&['milestones','attendanceWindows','requirementWindows'].some(key=>row.operational_timeline?.[key]?.length)}
 function sessionBlocks(row,identityById){
  if(hasTimeline(row))return resolveOperationalTimeline({timeline:row.operational_timeline,session:sessionInput(row),identityById}).blocks
+ const providerIds=(row.providers||[]).map(p=>p.provider_id),linkedUsers=providerIds.map(id=>identityById?.get(id)).filter(identity=>identity?.startsWith('user:')).map(identity=>identity.slice(5))
  return[{start:new Date(row.occupied_from).getTime(),end:new Date(row.occupied_until).getTime(),
-  userIds:[...new Set([row.organizer_id,...(row.participants||[]).map(p=>p.user_id)].filter(Boolean))],providerIds:(row.providers||[]).map(p=>p.provider_id),resourceIds:(row.resources||[]).map(r=>r.resource_id)}]
+  userIds:[...new Set([row.organizer_id,...(row.participants||[]).map(p=>p.user_id),...linkedUsers].filter(Boolean))],providerIds,resourceIds:(row.resources||[]).map(r=>r.resource_id)}]
 }
 const shareIdentity=(a,b)=>['userIds','providerIds','resourceIds'].some(key=>(a[key]||[]).some(id=>(b[key]||[]).includes(id)))
 module.exports={emptyTimeline,parseOperationalTimeline,resolveOperationalTimeline,requirementEligibility,sessionInput,hasTimeline,sessionBlocks,shareIdentity}

@@ -10,7 +10,7 @@ const {createEngagement,programEngagement}=require('../src/modules/appointments/
 const {saveServiceProfile}=require('../src/modules/appointments/profiles')
 const {saveCalendar}=require('../src/modules/appointments/calendars')
 const {readAvailability}=require('../src/modules/appointments/queries')
-const {listDirectory}=require('../src/modules/appointments/directory')
+const {listDirectory,saveProvider}=require('../src/modules/appointments/directory')
 test('operational timelines reserve real identities atomically in an isolated PostgreSQL database',async t=>{
  const db=new generated.PrismaClient({datasources:{db:{url:target}}}),other=new generated.PrismaClient({datasources:{db:{url:target}}})
  t.after(async()=>{await Promise.all([db.$disconnect(),other.$disconnect()])})
@@ -126,6 +126,25 @@ test('operational timelines reserve real identities atomically in an isolated Po
   await assert.rejects(()=>createActivity(legacy,scope,input(10)),{code:'TIMELINE_NOT_READY'})
   const raw=input(10);delete raw.operationalTimeline
   await assert.doesNotReject(()=>createActivity(legacy,scope,raw))
+ })
+ await t.test('legacy identity linking and USER attendance obey the same conflicts and calendars',async()=>{
+  const user=await db.user.create({data:{name:'Synthetic newly linked user',email:randomUUID()+'@invalid.test',password:'synthetic-only',role_id:role.id}})
+  await db.userCompany.create({data:{company_id:company.id,user_id:user.id}});await db.userBranch.create({data:{branch_id:branch.id,user_id:user.id}})
+  const p=await db.serviceProvider.create({data:{company_id:company.id,name:'Synthetic unlinked professional',created_by:scope.userId}})
+  await db.serviceProviderBranch.create({data:{company_id:company.id,branch_id:branch.id,provider_id:p.id}})
+  const original={...input(14),providerIds:[p.id]};delete original.operationalTimeline
+  await createActivity(db,scope,original)
+  await createActivity(other,scope,{...original,providerIds:[],organizerId:user.id,idempotencyKey:randomUUID()})
+  await assert.rejects(()=>withAgendaTransaction(db,company.id,tx=>saveProvider(tx,scope,p.id,{name:p.name,userId:user.id,active:true,branchIds:[branch.id],expectedVersion:1})),{code:'IDENTITY_CONFLICT'})
+  assert.equal((await db.serviceProvider.findUnique({where:{id:p.id}})).user_id,null)
+  await withAgendaTransaction(db,company.id,tx=>saveCalendar(tx,scope,'provider',provider.id,{...calendar,expectedVersion:1,inheritBranch:false,weekly:Array.from({length:7},(_,i)=>({weekday:i+1,from:'19:00',to:'19:30'}))}))
+  const custom={...input(15),providerIds:[],userIds:[actors[2].id]}
+  custom.operationalTimeline.attendanceWindows=[{...timeline().attendanceWindows[0],kind:'USER',entityId:actors[2].id,outboundMinutes:0,returnMinutes:0}]
+  await assert.doesNotReject(()=>createActivity(db,scope,custom))
+  const outside=structuredClone(custom);outside.startsAt=at(16);outside.endsAt=at(16,240);outside.idempotencyKey=randomUUID();outside.operationalTimeline.attendanceWindows[0].startOffsetMinutes=45
+  await assert.rejects(()=>createActivity(other,scope,outside),{code:'OUTSIDE_CALENDAR'})
+  const organizer={...input(17,2),providerIds:[]};delete organizer.operationalTimeline
+  await assert.rejects(()=>createActivity(other,scope,organizer),{code:'OUTSIDE_CALENDAR'})
  })
  t.diagnostic('Disposable loopback PostgreSQL, two independent clients. No active database/client, provider endpoint, stock or payment changes.')
 })

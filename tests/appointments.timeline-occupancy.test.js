@@ -69,3 +69,31 @@ test('linking a professional compares only that persons blocks and still rejects
  other={...other,starts_at:date('19:15'),ends_at:date('19:45'),occupied_from:date('19:15'),occupied_until:date('19:45')}
  await assert.rejects(()=>saveProvider(db,scope,provider.id,input),{code:'IDENTITY_CONFLICT'})
 })
+test('linking legacy activities and service reservations retains their full canonical user occupancy',async()=>{
+ for(const record_type of ['ACTIVITY','SCHEDULED_SERVICE']){
+  const s={...row(),record_type,operational_timeline:undefined,bookings:[{session_id:id(10),status:'CONFIRMED'}]},db=dbFor(s)
+  db.branch.findMany=async()=>[{id:scope.branchId}]
+  db.serviceProvider.findFirst=async({where})=>where.id===provider.id?{...provider,user_id:null,version:1}:null
+  db.serviceProvider.findMany=async()=>[];db.userCompany.findFirst=async()=>({user_id:id(6)})
+  db.serviceProvider.updateMany=async()=>({count:1});db.serviceProviderBranch={deleteMany:async()=>{},createMany:async()=>{}}
+  const other={...row(),id:id(11),organizer_id:id(6),providers:[],resources:[],operational_timeline:undefined,occupied_from:date('19:00'),occupied_until:date('20:00')}
+  db.appointmentSession.findMany=async({where})=>where.providers?[s]:[other]
+  await assert.rejects(()=>saveProvider(db,scope,provider.id,{name:'Profesional',userId:id(6),branchIds:[scope.branchId],active:true,expectedVersion:1}),{code:'IDENTITY_CONFLICT'},record_type)
+ }
+})
+test('a USER organizer or participant cannot bypass a linked professionals closed calendar',async()=>{
+ for(const organizer of [true,false]){
+  const db=dbFor(row());db.appointmentSession.findMany=async()=>[];db.userCompany.findMany=async()=>[{user_id:id(5)},{user_id:id(6)}]
+  db.scheduleCalendar.findMany=async()=>[calendar(),calendar({owner_type:'provider',branch_id:null,provider_id:id(2),rules:[]})]
+  const input={startsAt:date('18:00').toISOString(),endsAt:date('22:00').toISOString(),timezone:'UTC',organizerId:organizer?id(6):id(5),userIds:organizer?[]:[id(6)],providerIds:[],resourceIds:[],venue:{kind:'EVENT_VENUE'},outboundMinutes:0,setupMinutes:0,teardownMinutes:0,returnMinutes:0}
+  await assert.rejects(()=>assertActivityAvailability(db,scope,input),{code:'OUTSIDE_CALENDAR'})
+ }
+})
+test('a linked USERs own attendance must fit its calendar without requiring unrelated event hours',async()=>{
+ const db=dbFor(row());db.appointmentSession.findMany=async()=>[];db.userCompany.findMany=async()=>[{user_id:id(5)},{user_id:id(6)}]
+ db.scheduleCalendar.findMany=async()=>[calendar(),calendar({owner_type:'provider',branch_id:null,provider_id:id(2),rules:[{weekday:7,from_minute:1140,to_minute:1170}]})]
+ const t={...timeline,attendanceWindows:[{...timeline.attendanceWindows[0],kind:'USER',entityId:id(6)}]},input={startsAt:date('18:00').toISOString(),endsAt:date('22:00').toISOString(),timezone:'UTC',organizerId:id(5),userIds:[id(6)],providerIds:[],resourceIds:[],venue:{kind:'EVENT_VENUE'},outboundMinutes:0,setupMinutes:0,teardownMinutes:0,returnMinutes:0,operationalTimeline:t}
+ await assert.doesNotReject(()=>assertActivityAvailability(db,scope,input))
+ t.attendanceWindows[0].startOffsetMinutes=45
+ await assert.rejects(()=>assertActivityAvailability(db,scope,input),{code:'OUTSIDE_CALENDAR'})
+})
