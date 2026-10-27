@@ -40,4 +40,7 @@ function assertEventPaymentAgreement(row){
   const terms=readEventPaymentTermsSnapshot(row.event_payment_terms??row.eventPaymentTerms)
   if(terms&&!money(String(row.agreed_total??row.total)).eq(terms.basisTotal))fail(409,'EVENT_PAYMENT_TERMS_REVIEW_REQUIRED','El total cambió respecto de las condiciones acordadas. Revisa la propuesta antes de continuar')
 }
-module.exports={eventPaymentStorageReady,assertEventPaymentStorage,prepareEventPaymentTermsWrite,copyEventPaymentTerms,assertEventPaymentAgreement,termsInput}
+function eventPaymentSelect(db,model='CommercialDocument'){
+  return !db._runtimeDataModel||db._runtimeDataModel.models?.[model]?.fields.some(f=>f.name==='event_payment_terms')?{event_payment_terms:true}:{}
+}
+module.exports={eventPaymentStorageReady,assertEventPaymentStorage,prepareEventPaymentTermsWrite,copyEventPaymentTerms,assertEventPaymentAgreement,termsInput,eventPaymentSelect}

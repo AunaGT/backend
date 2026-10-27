@@ -54,4 +54,10 @@ function evaluateEventPaymentTerms({terms:snapshot,reference,money:amounts,sched
     reference:paymentReference(terms,reference),depositRequired:deposit.toFixed(2),depositMissing:missing.toFixed(2),paid:paid.toFixed(2),remaining:remaining.toFixed(2),
     canStart:confirmation==='CONFIRMED'&&!overdue,canComplete:confirmation==='CONFIRMED'&&!overdue,reasons}
 }
-module.exports={parseEventPaymentTerms,freezeEventPaymentTerms,readEventPaymentTermsSnapshot,eventPaymentDueAt,evaluateEventPaymentTerms}
+function publicEventPaymentTerms(snapshot){
+  const terms=readEventPaymentTermsSnapshot(snapshot)
+  if(!terms)return null
+  return {depositPercent:terms.depositPercent,depositRequired:money(terms.basisTotal).mul(terms.depositPercent).div(100).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
+    balanceDaysBefore:terms.balanceDaysBefore,referenceStartsAt:terms.referenceStartsAt,referenceTimezone:terms.referenceTimezone,dueAt:eventPaymentDueAt(terms,null),currencyCode:terms.currencyCode}
+}
+module.exports={parseEventPaymentTerms,freezeEventPaymentTerms,readEventPaymentTermsSnapshot,eventPaymentDueAt,evaluateEventPaymentTerms,publicEventPaymentTerms}
