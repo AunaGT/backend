@@ -13,6 +13,7 @@ function requirementsClient(target,{legacy=false,namespace=false}={}){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'auna-requirements-client-')),output=path.join(dir,'client')
  fs.symlinkSync(path.join(root,'node_modules'),path.join(dir,'node_modules'),'dir')
  let source=fs.readFileSync(path.join(root,'prisma/schema.prisma'),'utf8').replace(/generator client \{[\s\S]*?\}/,`generator client {\n provider = "prisma-client-js"\n output = ${JSON.stringify(output)}\n binaryTargets = ["native"]\n}`)
+ source=source.replace(/^\s*operational_timeline\s+[^\n]+\n/gm,'\n')
  if(legacy)source=source.replace(/^\s*assignment_requirements\s+[^\n]+\n/gm,'\n')
  const schema=path.join(dir,'schema.prisma');fs.writeFileSync(schema,source,{mode:0o600})
  const out=spawnSync(process.execPath,[require.resolve('prisma/build/index.js'),'generate','--schema',schema],{cwd:dir,env:{...process.env,DATABASE_URL:target,DIRECT_URL:target,PRISMA_GENERATE_SKIP_AUTOINSTALL:'true'},encoding:'utf8',timeout:60000})

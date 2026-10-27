@@ -49,6 +49,10 @@ async function saveServiceProfile(tx, scope, productId, raw) {
   if (!old && input.expectedVersion != null && input.expectedVersion !== 0) fail(409, 'STALE_VERSION', 'La configuración aún no existe')
   if (input.branchIds.some(id => !scope.branchIds.includes(id))) fail(403, 'FORBIDDEN', 'Selecciona sucursales a las que tengas acceso')
   input.assignmentRequirements??=parseAssignmentRequirements(old?.assignment_requirements??[])
+  const priorModes=new Map((old?.assignment_requirements??[]).map(r=>[r.id,r.attendanceMode]))
+  input.assignmentRequirements=input.assignmentRequirements.map(r=>r.attendanceMode===undefined&&priorModes.get(r.id)?{...r,attendanceMode:priorModes.get(r.id)}:r)
+  if(input.schedulingStyle!=='WORK'&&input.assignmentRequirements.some(r=>r.attendanceMode==='INTERVENTION'))fail(400,'INVALID_INPUT','Los requisitos por intervención necesitan un trabajo o evento',{assignmentRequirements:'Cambia sus requisitos a todo el evento antes de cambiar el tipo de servicio'})
+  if(input.assignmentRequirements.some(r=>r.attendanceMode==='INTERVENTION'))require('./timelineStorage').assertTimelineStorage(tx)
   const [branches, providers, resources] = await Promise.all([
     tx.branch.findMany({ where: { id: { in: input.branchIds }, company_id: scope.companyId, active: true }, select: { id: true,name:true } }),
     tx.serviceProvider.findMany({ where: { id: { in: input.providerIds }, company_id: scope.companyId, active: true }, include: { branches: true,employee:{select:{user_id:true}} } }),

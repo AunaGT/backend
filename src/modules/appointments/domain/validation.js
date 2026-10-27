@@ -80,6 +80,7 @@ function parseProfile(raw) {
   if(out.completionPolicy==='AUTO'&&schedulingStyle!=='WORK')invalid('completionPolicy','Las citas y clases requieren cierre manual')
   if (v.publicInstructions !== undefined) out.publicInstructions=text(v.publicInstructions,'publicInstructions',2000,false)
   if (v.assignmentRequirements !== undefined) out.assignmentRequirements=require('./assignmentRequirements').parseAssignmentRequirements(v.assignmentRequirements)
+  if(schedulingStyle!=='WORK'&&out.assignmentRequirements?.some(r=>r.attendanceMode==='INTERVENTION'))invalid('assignmentRequirements','Los horarios por intervención solo se configuran en trabajos o eventos')
   if (v.expectedVersion !== undefined) out.expectedVersion = version(v.expectedVersion, true)
   return out
 }

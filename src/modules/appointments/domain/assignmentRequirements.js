@@ -6,7 +6,7 @@ function parseAssignmentRequirements(raw=[]){
   if(bytes>65536)v.invalid('assignmentRequirements','Los requisitos superan el tamaño permitido')
   const seen=new Set();let places=0
   const requirements=raw.map((value,index)=>{
-    const key=`assignmentRequirements.${index}`,r=v.object(value,['id','kind','name','quantity','optionIds'])
+    const key=`assignmentRequirements.${index}`,r=v.object(value,['id','kind','name','quantity','optionIds','attendanceMode'])
     const id=v.uuid(r.id,`${key}.id`).toLowerCase()
     if(seen.has(id))v.invalid(`${key}.id`,'El requisito está repetido')
     seen.add(id)
@@ -15,7 +15,8 @@ function parseAssignmentRequirements(raw=[]){
     if(!Array.isArray(r.optionIds)||!r.optionIds.length||r.optionIds.length>100)v.invalid(`${key}.optionIds`,'Selecciona entre 1 y 100 opciones')
     const optionIds=r.optionIds.map(id=>v.uuid(id,`${key}.optionIds`).toLowerCase()).sort()
     if(new Set(optionIds).size!==optionIds.length)v.invalid(`${key}.optionIds`,'No repitas opciones')
-    return{id,kind:v.choice(r.kind,`${key}.kind`,['PROVIDER','RESOURCE']),name:v.text(r.name,`${key}.name`,100),quantity,optionIds}
+    return{id,kind:v.choice(r.kind,`${key}.kind`,['PROVIDER','RESOURCE']),name:v.text(r.name,`${key}.name`,100),quantity,optionIds,
+      ...(r.attendanceMode===undefined?{}:{attendanceMode:v.choice(r.attendanceMode,`${key}.attendanceMode`,['FULL','INTERVENTION'])})}
   })
   return requirements.sort((a,b)=>a.id.localeCompare(b.id))
 }
@@ -43,7 +44,7 @@ function resolveAssignmentRequirements({requirements,candidates,selectedIds,iden
   return{assignments:ordered.map(r=>({requirementId:r.id,entityIds:seats.flatMap((seat,i)=>seat.requirement.id===r.id?[matched.get(i)]:[]).sort()})),
     selectedIds:[...new Set(selectedIds??matched.values())].sort()}
 }
-function publicAssignmentRequirements(requirements){return requirements.map(({name,kind,quantity})=>({name,kind,quantity}))}
+function publicAssignmentRequirements(requirements){return requirements.map(({name,kind,quantity,attendanceMode})=>({name,kind,quantity,...(['FULL','INTERVENTION'].includes(attendanceMode)?{attendanceMode}:{})}))}
 function providerIdentityMap(providers){
   return new Map(providers.map(p=>[p.id,p.user_id||p.employee?.user_id?`user:${p.user_id||p.employee.user_id}`:p.employee_id?`employee:${p.employee_id}`:`provider:${p.id}`]))
 }

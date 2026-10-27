@@ -270,6 +270,7 @@ model AvailabilityException {
 }
 
 model AppointmentSession {
+  operational_timeline Json @default("{\"schemaVersion\":1,\"milestones\":[],\"attendanceWindows\":[],\"requirementWindows\":[]}")
   completion_policy String @default("MANUAL") @db.VarChar(10)
   actual_completed_at DateTime?
   commercial_completion_confirmed_at DateTime?
