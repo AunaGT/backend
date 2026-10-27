@@ -20,6 +20,8 @@ test('additive payment terms migration preserves every old row, validates snapsh
  sql(target,['-f',path.join(root,'prisma/migrations',migration,'migration.sql')])
  assert.equal(await eventPaymentStorageReady(db),true)
  assert.deepEqual(await fingerprints(db),before)
+ const permission=await db.permission.findUnique({where:{code:'appointments.override_payment_policy'}})
+ assert.ok(permission);assert.equal(await db.rolePermission.count({where:{permission_id:permission.id}}),0,'new exception permission is not silently granted')
  assert.deepEqual(await old.commercialDocument.findUnique({where:{id:document.id}}),document)
  assert.equal((await db.commercialDocument.findUnique({where:{id:document.id}})).event_payment_terms,null)
  assert.equal((await db.appointmentEngagement.findUnique({where:{id:engagement.id}})).event_payment_reference,null)

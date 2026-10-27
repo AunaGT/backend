@@ -30,7 +30,8 @@ async function fingerprints(db){
  const result={}
  for(const {tablename}of tables){
   const table='"'+tablename.replaceAll('"','""')+'"'
-  const [row]=await db.$queryRawUnsafe(`SELECT count(*)::text AS count,md5(COALESCE(string_agg(md5((to_jsonb(t)-'event_payment_terms'-'event_payment_reference')::text),'' ORDER BY md5((to_jsonb(t)-'event_payment_terms'-'event_payment_reference')::text)),'')) AS hash FROM public.${table} t`)
+  const filter=tablename==='permissions'?" WHERE code<>'appointments.override_payment_policy'":''
+  const [row]=await db.$queryRawUnsafe(`SELECT count(*)::text AS count,md5(COALESCE(string_agg(md5((to_jsonb(t)-'event_payment_terms'-'event_payment_reference')::text),'' ORDER BY md5((to_jsonb(t)-'event_payment_terms'-'event_payment_reference')::text)),'')) AS hash FROM public.${table} t${filter}`)
   result[tablename]=row
  }
  return result

@@ -106,9 +106,9 @@ function parseMove(raw) {
     expectedVersion: version(v.expectedVersion), idempotencyKey: requestKey(v.idempotencyKey), reason: text(v.reason, 'reason', 500) }
 }
 function parseTransition(raw, session = false) {
-  const v = object(raw, ['action', 'expectedVersion', 'idempotencyKey', 'reason'])
+  const v = object(raw, ['action', 'expectedVersion', 'idempotencyKey', 'reason','exception'])
   const action = choice(v.action, 'action', session ? ['START', 'COMPLETE', 'CANCEL'] : ['CONFIRM', 'ARRIVE', 'START', 'COMPLETE', 'NO_SHOW', 'CANCEL'])
-  return { action, expectedVersion: version(v.expectedVersion), idempotencyKey: requestKey(v.idempotencyKey), reason: text(v.reason, 'reason', 500, action === 'CANCEL') }
+  return { action,...require('../engagementPaymentPolicy').parsePaymentException(v.exception,action), expectedVersion: version(v.expectedVersion), idempotencyKey: requestKey(v.idempotencyKey), reason: text(v.reason, 'reason', 500, action === 'CANCEL') }
 }
 function parseCalendar(raw) {
   const v = object(raw, ['timezone', 'expectedVersion', 'validFrom', 'validUntil', 'inheritBranch', 'weekly', 'exceptions'])

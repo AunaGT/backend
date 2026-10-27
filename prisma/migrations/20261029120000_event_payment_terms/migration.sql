@@ -60,4 +60,8 @@ CREATE TRIGGER commercial_documents_protect_event_payment_terms BEFORE UPDATE ON
 CREATE TRIGGER sales_protect_event_payment_terms BEFORE UPDATE ON public.sales FOR EACH ROW EXECUTE FUNCTION public.protect_event_payment_terms();
 CREATE TRIGGER appointment_engagements_protect_event_payment_terms BEFORE UPDATE ON public.appointment_engagements FOR EACH ROW EXECUTE FUNCTION public.protect_event_payment_terms();
 
+INSERT INTO public.permissions (code,name,description) VALUES
+ ('appointments.override_payment_policy','Autorizar atención con saldo vencido','Permite una excepción puntual con motivo; no registra pagos ni modifica saldos')
+ ON CONFLICT (code) DO NOTHING;
+
 COMMIT;

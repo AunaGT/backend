@@ -224,6 +224,7 @@ async function transitionBooking(db, scope, id, raw) {
     if (['START', 'NO_SHOW'].includes(input.action) && row.session.starts_at > now) fail(409, 'TOO_EARLY', 'Esta acción está disponible a partir del inicio de la sesión')
     const resolveGroupAttendance = row.session.mode === 'GROUP' && row.session.status === 'COMPLETED' && ['ARRIVE', 'START', 'COMPLETE', 'NO_SHOW'].includes(input.action)
     if (['CANCELLED', 'COMPLETED'].includes(row.session.status) && input.action !== 'CANCEL' && !resolveGroupAttendance) fail(409, 'SESSION_CLOSED', 'La sesión ya está cerrada')
+    if(row.engagement_schedules?.length||row.session.engagement_schedules?.length||input.exception)await require('./engagementPaymentPolicy').assertEngagementPaymentAction(tx,scope,{...input,sessionId:row.session_id,bookingId:id,now})
     await tx.appointmentBooking.update({ where: { id }, data: { status, expires_at: null, version: { increment: 1 } } })
     await history(tx, scope, row, input.action, { status: row.status }, { status }, input.reason)
     if(input.action==='CONFIRM')await require('./commercialDrafts').ensureBookingCommercialDraft(tx,scope,{booking:{...row,status}})
@@ -245,6 +246,7 @@ async function transitionSession(db, scope, id, raw) {
     if (row.mode !== 'GROUP') fail(400, 'NOT_GROUP', 'Usa las acciones de la reserva individual')
     const status = nextSessionState(row.status, input.action)
     if (input.action === 'START' && row.starts_at > now) fail(409, 'TOO_EARLY', 'La sesión todavía no ha comenzado')
+    if(row.engagement_schedules?.some(s=>s.kind==='SESSION')||input.exception)await require('./engagementPaymentPolicy').assertEngagementPaymentAction(tx,scope,{...input,sessionId:id,now})
     if (input.action === 'CANCEL') {
       const bookings = await tx.appointmentBooking.findMany({ where: { company_id: scope.companyId, session_id: id, status: { in: ['HELD', 'PENDING', 'CONFIRMED', 'ARRIVED', 'IN_SERVICE'] } } })
       for (const b of bookings) {

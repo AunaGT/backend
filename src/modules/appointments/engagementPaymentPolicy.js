@@ -77,4 +77,39 @@ function paymentPolicyPublicState(state,{financial}){
   if(!financial)for(const key of ['depositRequired','depositMissing','paid','remaining','reviewHash'])delete out[key]
   return out
 }
-module.exports={loadEngagementPaymentState,paymentPolicyPublicState,inspectPaymentScheduling,activeSchedules}
+function parsePaymentException(raw,action){
+  if(raw===undefined)return {}
+  const v=require('./domain/validation')
+  if(!['START','COMPLETE','CONFIRM_COMPLETION'].includes(action))v.invalid('exception','La excepción solo autoriza una acción de prestación del servicio')
+  const input=v.object(raw,['reason','reviewHash']),reason=v.text(input.reason,'exception.reason',500)
+  if(typeof input.reviewHash!=='string'||!/^[a-f0-9]{64}$/.test(input.reviewHash))v.invalid('exception.reviewHash','Revisa las condiciones actuales antes de autorizar')
+  return {exception:{reason,reviewHash:input.reviewHash}}
+}
+async function actionPaymentStates(db,scope,{sessionId,bookingId,now}){
+  if(db._runtimeDataModel&&!db._runtimeDataModel.models?.AppointmentEngagement?.fields.some(f=>f.name==='event_payment_terms'))return []
+  const links=await db.appointmentEngagementSchedule.findMany({where:{company_id:scope.companyId,state:{not:'RELEASED'},
+    ...(bookingId?{OR:[{booking_id:bookingId},{session_id:sessionId,kind:'SESSION',booking_id:null}]}:{session_id:sessionId,booking_id:null})},include:{line:{include:{engagement:true}}}})
+  const ids=[...new Set(links.filter(l=>l.line?.engagement?.event_payment_terms).map(l=>l.engagement_id))].sort()
+  const {loadPaymentEngagement}=require('./engagementPaymentReference'),states=[]
+  for(const id of ids){const e=await loadPaymentEngagement(db,scope,id);states.push({e,state:await loadEngagementPaymentState(db,scope,e,{now,lockMoney:true})})}
+  return states
+}
+async function assertEngagementPaymentAction(db,scope,input){
+  if(!['CONFIRM','START','COMPLETE','CONFIRM_COMPLETION'].includes(input.action))return
+  const rows=await actionPaymentStates(db,scope,input)
+  const blocked=rows.filter(({state})=>input.action==='CONFIRM'?state.confirmation!=='CONFIRMED':!state.canStart)
+  const canOverride=blocked.length>0&&blocked.every(({state})=>state.confirmation==='CONFIRMED'&&state.payment==='OVERDUE')&&
+    hasAgendaPermission(scope,'appointments.override_payment_policy')&&hasAgendaPermission(scope,'receivables.view')&&input.action!=='CONFIRM'
+  const reviewHash=createHash('sha256').update(JSON.stringify({sessionId:input.sessionId,bookingId:input.bookingId||null,action:input.action,states:rows.map(({e,state})=>({id:e.id,hash:state.reviewHash}))})).digest('hex')
+  if(input.exception){
+    const {exception}=parsePaymentException(input.exception,input.action)
+    if(!hasAgendaPermission(scope,'appointments.override_payment_policy')||!hasAgendaPermission(scope,'receivables.view'))fail(403,'FORBIDDEN','Necesitas autorización para exceptuar un saldo vencido')
+    if(exception.reviewHash!==reviewHash||!canOverride)fail(409,'PAYMENT_POLICY_REVIEW_CHANGED','Las condiciones cambiaron. Revisa de nuevo antes de autorizar esta acción')
+    for(const {e}of blocked)await db.appointmentEngagementHistory.create({data:{company_id:scope.companyId,branch_id:e.branch_id,customer_id:e.customer_id,engagement_id:e.id,actor_id:scope.userId,
+      action:'PAYMENT_POLICY_EXCEPTION',reason:exception.reason,request_key:input.idempotencyKey,input_hash:reviewHash,after:{action:input.action,sessionId:input.sessionId,bookingId:input.bookingId||null,reviewHash}}})
+    return
+  }
+  if(blocked.length)fail(409,'EVENT_PAYMENT_CONDITIONS_REQUIRED',blocked.some(({state})=>state.payment==='OVERDUE')?'El acuerdo tiene saldo vencido. Regulariza el cobro o solicita una excepción autorizada para esta acción':'Completa la programación, el anticipo o la revisión del acuerdo antes de continuar',{
+    paymentPolicyCanOverride:String(canOverride),...(canOverride?{paymentPolicyReviewHash:reviewHash}:{}),paymentPolicyReasons:JSON.stringify([...new Set(blocked.flatMap(({state})=>state.reasons))])})
+}
+module.exports={loadEngagementPaymentState,paymentPolicyPublicState,inspectPaymentScheduling,activeSchedules,parsePaymentException,assertEngagementPaymentAction,actionPaymentStates}

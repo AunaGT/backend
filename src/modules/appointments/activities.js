@@ -103,6 +103,7 @@ async function transitionActivity(db,scope,id,raw) {
     if(input.action==='CONFIRM_COMPLETION'&&(row.status!=='COMPLETED'||!row.actual_completed_at||row.commercial_completion_confirmed_at))v.fail(409,'COMPLETION_NOT_PENDING','No hay una realización pendiente de confirmar')
     const status=input.action==='CONFIRM_COMPLETION'?row.status:nextSessionState(row.status,input.action)
     if(input.action==='START'&&row.starts_at>now) v.fail(409,'TOO_EARLY','La actividad todavía no ha comenzado')
+    if(row.engagement_schedules.length||input.exception)await require('./engagementPaymentPolicy').assertEngagementPaymentAction(tx,scope,{...input,sessionId:id,now})
     await tx.appointmentSession.update({where:{id},data:{status,version:{increment:1},...(input.action==='COMPLETE'?{actual_completed_at:now,commercial_completion_confirmed_at:now}:input.action==='CONFIRM_COMPLETION'?{commercial_completion_confirmed_at:now}:{})}})
     await history(tx,scope,row,input.action,{status:row.status},{status},input.reason)
     if(['CANCEL','COMPLETE','CONFIRM_COMPLETION'].includes(input.action))await require('./engagementResolution').recordEngagementImpact(tx,scope,{sessionId:id,action:input.action==='CONFIRM_COMPLETION'?'COMPLETE':input.action,version:row.version,reason:input.reason})

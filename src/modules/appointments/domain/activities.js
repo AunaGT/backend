@@ -50,8 +50,8 @@ function parseActivityUpdate(raw) {
 }
 function parseActivityTransition(raw) {
   if(raw?.action!=='CONFIRM_COMPLETION')return v.parseTransition(raw,true)
-  const input=v.object(raw,['action','expectedVersion','idempotencyKey','reason'])
-  return {action:input.action,expectedVersion:v.version(input.expectedVersion),idempotencyKey:v.requestKey(input.idempotencyKey),reason:v.text(input.reason,'reason',500)}
+  const input=v.object(raw,['action','expectedVersion','idempotencyKey','reason','exception'])
+  return {action:input.action,...require('../engagementPaymentPolicy').parsePaymentException(input.exception,input.action),expectedVersion:v.version(input.expectedVersion),idempotencyKey:v.requestKey(input.idempotencyKey),reason:v.text(input.reason,'reason',500)}
 }
 function activityInterval(input) {
   return {startsAt:input.startsAt,endsAt:input.endsAt,
