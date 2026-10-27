@@ -48,10 +48,10 @@ function publicAssignmentRequirements(requirements){return requirements.map(({na
 function providerIdentityMap(providers){
   return new Map(providers.map(p=>[p.id,p.user_id||p.employee?.user_id?`user:${p.user_id||p.employee.user_id}`:p.employee_id?`employee:${p.employee_id}`:`provider:${p.id}`]))
 }
-function assertAssignmentRequirements(requirements,{providerIds=[],resourceIds=[],identityById}={}){
+function assertAssignmentRequirements(requirements,{providerIds=[],resourceIds=[],identityById,eligibleByRequirement}={}){
   if(!requirements?.length)return
   const candidates=[...providerIds.map(id=>({id,kind:'PROVIDER'})),...resourceIds.map(id=>({id,kind:'RESOURCE'}))]
-  if(!resolveAssignmentRequirements({requirements,candidates,selectedIds:[...providerIds,...resourceIds],identityById}))
+  if(!resolveAssignmentRequirements({requirements,candidates,selectedIds:[...providerIds,...resourceIds],identityById,eligibleByRequirement}))
     v.fail(409,'REQUIREMENTS_INCOMPLETE','Completa el personal y equipo requeridos',{assignmentRequirements:requirements.map(r=>`${r.name}: ${r.quantity}`).join(' · ')})
 }
 module.exports={parseAssignmentRequirements,resolveAssignmentRequirements,publicAssignmentRequirements,providerIdentityMap,assertAssignmentRequirements}

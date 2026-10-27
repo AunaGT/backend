@@ -3,7 +3,7 @@ const v = require('./validation')
 const PURPOSES = ['MEETING', 'SERVICE_VISIT', 'EVENT']
 const VENUE_KINDS = ['BRANCH', 'HOME', 'EVENT_VENUE', 'ONLINE']
 const keys = ['purpose','title','startsAt','endsAt','timezone','organizerId','userIds','providerIds','resourceIds',
-  'guests','productId','venue','estimatedAttendance','outboundMinutes','setupMinutes','teardownMinutes','returnMinutes','notes','idempotencyKey','serviceScheduling','completionPolicy']
+  'guests','productId','venue','estimatedAttendance','outboundMinutes','setupMinutes','teardownMinutes','returnMinutes','notes','idempotencyKey','serviceScheduling','completionPolicy','operationalTimeline']
 
 function parseVenue(raw) {
   const input = v.object(raw, ['kind','name','address','references','url'])
@@ -39,6 +39,7 @@ function parseFields(input) {
     estimatedAttendance:input.estimatedAttendance==null ? null : v.integer(input.estimatedAttendance,'estimatedAttendance',1,1000000),
     notes:v.text(input.notes,'notes',2000,false),idempotencyKey:v.requestKey(input.idempotencyKey)}
   if(input.serviceScheduling!==undefined) result.serviceScheduling=v.choice(input.serviceScheduling,'serviceScheduling',['CONFIGURED'])
+  if(input.operationalTimeline!==undefined) result.operationalTimeline=require('./operationalTimeline').parseOperationalTimeline(input.operationalTimeline)
   for(const key of ['outboundMinutes','setupMinutes','teardownMinutes','returnMinutes']) result[key]=v.integer(input[key]??0,key,0,1440)
   return result
 }

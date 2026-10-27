@@ -11,12 +11,13 @@ function parsePrograms(raw){
   const input=v.object(raw,['programs','partial','expectedVersion','idempotencyKey'])
   if(!Array.isArray(input.programs)||!input.programs.length||input.programs.length>100)v.invalid('programs','Selecciona entre 1 y 100 programaciones')
   return {expectedVersion:v.version(input.expectedVersion),idempotencyKey:v.requestKey(v.text(input.idempotencyKey,'idempotencyKey',64)),partial:v.boolean(input.partial??false,'partial'),programs:input.programs.map(raw=>{
-    const p=v.object(raw,['lineId','quantity','startsAt','endsAt','timezone','providerIds','resourceIds','venue','outboundMinutes','returnMinutes','organizerId','userIds','guests','estimatedAttendance','capacity','title','notes','acknowledgedConditionsVersion'])
+    const p=v.object(raw,['lineId','quantity','startsAt','endsAt','timezone','providerIds','resourceIds','venue','outboundMinutes','returnMinutes','organizerId','userIds','guests','estimatedAttendance','capacity','title','notes','acknowledgedConditionsVersion','operationalTimeline'])
     return {lineId:v.uuid(p.lineId,'lineId'),quantity:v.quantity(p.quantity),startsAt:v.instant(p.startsAt,'startsAt'),...(p.endsAt?{endsAt:v.instant(p.endsAt,'endsAt')}:{}),timezone:v.zone(p.timezone),
       providerIds:v.ids(p.providerIds??[],'providerIds'),resourceIds:v.ids(p.resourceIds??[],'resourceIds'),venue:parseVenue(p.venue??{kind:'BRANCH'}),
       outboundMinutes:v.integer(p.outboundMinutes??0,'outboundMinutes',0,1440),returnMinutes:v.integer(p.returnMinutes??0,'returnMinutes',0,1440),
       ...(p.organizerId?{organizerId:v.uuid(p.organizerId,'organizerId')}:{}),userIds:v.ids(p.userIds??[],'userIds'),guests:p.guests??[],estimatedAttendance:p.estimatedAttendance??null,
       ...(p.capacity!==undefined?{capacity:v.integer(p.capacity,'capacity',1,10000)}:{}),title:v.text(p.title,'title',200,false),notes:v.text(p.notes,'notes',2000,false),
+      ...(p.operationalTimeline===undefined?{}:{operationalTimeline:require('./domain/operationalTimeline').parseOperationalTimeline(p.operationalTimeline)}),
       acknowledgedConditionsVersion:v.text(p.acknowledgedConditionsVersion,'acknowledgedConditionsVersion',64)}
   })}
 }
@@ -29,13 +30,14 @@ async function createEngagementSchedule(tx,scope,engagement,line,program,now){
   if(!info.schedulingReady)v.fail(409,'SERVICE_UNAVAILABLE','Configura el servicio en Agenda para esta sucursal antes de programarlo')
   if(program.acknowledgedConditionsVersion!==info.conditionsVersion)v.fail(409,'CONDITIONS_CHANGED','Las condiciones de programación cambiaron. Revisa la comparación antes de confirmar',{acknowledgedConditionsVersion:info.conditionsVersion})
   const base={...program,productId:line.product_id,idempotencyKey:'internal'}
+  if(profile.scheduling_style!=='WORK'&&program.operationalTimeline&&['milestones','attendanceWindows','requirementWindows'].some(k=>program.operationalTimeline[k].length))v.invalid('operationalTimeline','Los momentos y horarios propios solo están disponibles para trabajos o eventos')
   let result,kind
   if(profile.scheduling_style==='WORK'){
     const endsAt=program.endsAt||new Date(new Date(program.startsAt).getTime()+profile.duration_minutes*60000).toISOString()
     result=await createActivityInTransaction(tx,scope,parseActivity({purpose:program.venue.kind==='EVENT_VENUE'?'EVENT':'SERVICE_VISIT',title:program.title||line.item_name,
       productId:line.product_id,serviceScheduling:'CONFIGURED',startsAt:program.startsAt,endsAt,timezone:program.timezone,organizerId:program.organizerId||scope.userId,
       providerIds:program.providerIds,resourceIds:program.resourceIds,userIds:program.userIds,guests:program.guests,venue:program.venue,estimatedAttendance:program.estimatedAttendance,
-      outboundMinutes:program.outboundMinutes,returnMinutes:program.returnMinutes,setupMinutes:profile.before_minutes,teardownMinutes:profile.after_minutes,notes:program.notes,idempotencyKey:'internal'}),now)
+      outboundMinutes:program.outboundMinutes,returnMinutes:program.returnMinutes,setupMinutes:profile.before_minutes,teardownMinutes:profile.after_minutes,notes:program.notes,idempotencyKey:'internal',...(program.operationalTimeline===undefined?{}:{operationalTimeline:program.operationalTimeline})}),now)
     kind='ACTIVITY'
   }else if(profile.scheduling_style==='CLASS'){
     result=await createSessionInTransaction(tx,scope,v.parseSession({productId:line.product_id,startsAt:program.startsAt,...(program.endsAt?{endsAt:program.endsAt}:{}),timezone:program.timezone,providerIds:program.providerIds,resourceIds:program.resourceIds,

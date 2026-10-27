@@ -1,5 +1,5 @@
 const v=require('./domain/validation')
-const {parseActivity,parseActivityUpdate,parseActivityTransition,activityInterval}=require('./domain/activities')
+const {parseActivity,parseActivityUpdate,parseActivityTransition}=require('./domain/activities')
 const {command,history,checkVersion,assignments}=require('./application')
 const {appointmentWhere,agendaCapabilities,hasAgendaPermission,assertContactsIntegration,assertAppointmentsEnabled}=require('./access')
 const {assertActivityAvailability}=require('./occupancy')
@@ -28,6 +28,7 @@ function presentActivity(row,scope) {
     startsAt:row.starts_at.toISOString(),endsAt:row.ends_at.toISOString(),occupiedFrom:row.occupied_from.toISOString(),occupiedUntil:row.occupied_until.toISOString(),
     timezone:row.timezone,venue:row.venue,estimatedAttendance:row.estimated_attendance,
     outboundMinutes:row.outbound_minutes,setupMinutes:row.setup_minutes,teardownMinutes:row.teardown_minutes,returnMinutes:row.return_minutes,
+    operationalTimeline:require('./domain/operationalTimeline').parseOperationalTimeline(row.operational_timeline),
     status:row.status,version:row.version,notes:canReadNotes(scope)?row.notes:null,
     history:row.history.map(h=>({id:h.id,action:h.action,actorId:h.actor_id,at:h.created_at.toISOString(),reason:h.reason,before:h.before,after:h.after}))}
 }
@@ -42,12 +43,12 @@ async function validateReferences(tx,scope,input,old) {
     if(count!==ids.length) v.fail(400,'INVALID_CONTACT','Selecciona contactos activos de esta empresa')
   }
 }
-function data(input,scope,old) {
-  const range=activityInterval(input)
+function data(input,scope,old,range,tx) {
   return {purpose:input.purpose,title:input.title,organizer_id:input.organizerId,product_id:input.productId,
     starts_at:new Date(range.startsAt),ends_at:new Date(range.endsAt),occupied_from:new Date(range.occupiedFrom),occupied_until:new Date(range.occupiedUntil),
     timezone:input.timezone,venue:input.venue,estimated_attendance:input.estimatedAttendance,
     outbound_minutes:input.outboundMinutes,setup_minutes:input.setupMinutes,teardown_minutes:input.teardownMinutes,return_minutes:input.returnMinutes,
+    ...(require('./timelineStorage').timelineStorageReady(tx)?{operational_timeline:input.operationalTimeline}:{}),
     completion_policy:input.completionPolicy||'MANUAL',notes:old&&!canReadNotes(scope)?old.notes:input.notes}
 }
 async function participants(tx,scope,id,input,replace=false) {
@@ -58,7 +59,8 @@ async function participants(tx,scope,id,input,replace=false) {
 }
 // History contains operational changes, not notes, addresses or guest details.
 function snapshot(input) { return {title:input.title,purpose:input.purpose,startsAt:input.startsAt,endsAt:input.endsAt,
-  organizerId:input.organizerId,userIds:input.userIds,providerIds:input.providerIds,resourceIds:input.resourceIds,venueKind:input.venue.kind} }
+  organizerId:input.organizerId,userIds:input.userIds,providerIds:input.providerIds,resourceIds:input.resourceIds,venueKind:input.venue.kind,
+  operationalTimeline:input.operationalTimeline} }
 async function createActivity(db,scope,raw) {
   const input=parseActivity(raw)
   return command(db,scope,'appointments.create','CREATE_ACTIVITY',input,(tx,now)=>createActivityInTransaction(tx,scope,input,now))
@@ -66,8 +68,8 @@ async function createActivity(db,scope,raw) {
 async function createActivityInTransaction(tx,scope,input,now){
     const prepared=await require('./configuredActivities').applyConfiguredActivityPolicy(tx,scope,input)
     await validateReferences(tx,scope,prepared.input)
-    await assertActivityAvailability(tx,scope,prepared.input)
-    const row=await tx.appointmentSession.create({data:{...data(prepared.input,scope),company_id:scope.companyId,branch_id:scope.branchId,
+    const {range}=await assertActivityAvailability(tx,scope,prepared.input)
+    const row=await tx.appointmentSession.create({data:{...data(prepared.input,scope,null,range,tx),company_id:scope.companyId,branch_id:scope.branchId,
       record_type:'ACTIVITY',mode:'INDIVIDUAL',capacity:1,policy_snapshot:{...prepared.policySnapshot,completionPolicy:prepared.input.completionPolicy},created_by:scope.userId}})
     await participants(tx,scope,row.id,prepared.input)
     await history(tx,scope,row,'CREATED',null,snapshot(prepared.input))
@@ -81,8 +83,8 @@ async function updateActivity(db,scope,id,raw) {
     if(old.engagement_schedules.length&&input.productId!==old.product_id)v.fail(409,'SOURCE_COMMERCIAL_LOCKED','El servicio tiene una contratación vinculada; resuelve su alcance antes de cambiarlo')
     const prepared=await require('./configuredActivities').applyConfiguredActivityPolicy(tx,scope,input,old)
     await validateReferences(tx,scope,prepared.input,old)
-    await assertActivityAvailability(tx,scope,prepared.input,{excludeSessionId:id})
-    await tx.appointmentSession.update({where:{id},data:{...data(prepared.input,scope,old),policy_snapshot:{...prepared.policySnapshot,completionPolicy:prepared.input.completionPolicy},version:{increment:1}}})
+    const {range}=await assertActivityAvailability(tx,scope,prepared.input,{excludeSessionId:id})
+    await tx.appointmentSession.update({where:{id},data:{...data(prepared.input,scope,old,range,tx),policy_snapshot:{...prepared.policySnapshot,completionPolicy:prepared.input.completionPolicy},version:{increment:1}}})
     await participants(tx,scope,id,prepared.input,true)
     await history(tx,scope,old,'UPDATED',{title:old.title,startsAt:old.starts_at.toISOString(),endsAt:old.ends_at.toISOString()},snapshot(prepared.input),input.reason)
     return {type:'ACTIVITY',id}
