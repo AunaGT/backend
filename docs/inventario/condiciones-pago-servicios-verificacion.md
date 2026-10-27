@@ -42,13 +42,21 @@ Repetición: `tests/event-payment-terms.migration.pg.e2e.js` exige una base **va
 
 La revisión visual usa `tests/visual/event-payment-preview.cjs` y `tests/visual/event-payment.verify.cjs`, con datos ficticios y sin sesión/API. No sustituye una prueba con sesión real después del despliegue. Capturas: `deposito-frontend/output/playwright/payment-*.png`.
 
-## Despliegue pendiente
+## Despliegue aplicado el 27 de octubre de 2026
 
-**No se aplicó `20261029120000_event_payment_terms` a la base activa, no se regeneró su cliente ni se reiniciaron servicios para activarlo.** Requiere autorización específica. Antes de desplegar: revisar las migraciones pendientes exactas, respaldo/política de recuperación, aplicar únicamente la secuencia autorizada y luego generar el cliente y reiniciar coordinadamente. No usar una generación nueva contra una base sin migrar.
+Con autorización explícita del usuario («autorizo»), se aplicó únicamente `20261029120000_event_payment_terms` a la base que usa localhost, alojada en Supabase. Era la única migración pendiente; no había migraciones fallidas ni diferencias de checksum en las migraciones activas. No se ejecutó el seed ni se cambiaron documentos, cobros o saldos para probar la función.
+
+Se creó un respaldo privado del esquema público y sus datos, con permisos de directorio 0700/archivo 0600. Se comprobó su checksum y el índice de restauración de `pg_restore`; no se hizo una restauración completa del respaldo activo. Comprobante local persistente: `/home/DiegoPatzan/.local/state/auna/backups/2026-10-27-payment-terms-5JwTaK/manifest.json`. La copia inicial temporal también se conserva.
+
+Antes de iniciar el backend se compararon las huellas de 163 tablas: ninguna fila previa cambió (se excluyeron únicamente los metadatos de migración y el permiso nuevo). Las cuatro columnas nuevas son JSONB opcionales, todos los acuerdos previos continúan sin política y el nuevo permiso no quedó asignado a ningún rol. Evidencia privada: `/home/DiegoPatzan/.local/state/auna/backups/2026-10-27-payment-terms-5JwTaK/verification.json`.
+
+Se regeneró el cliente activo Prisma 6.14.0 y se inició el backend en el puerto 3000. La comprobación de disponibilidad devuelve `true`, las lecturas con el cliente nuevo funcionan para documentos, ventas y contrataciones, y `/health` devuelve `ok:true`. La ruta de capacidad sin autenticación devuelve 401. Las pruebas dirigidas después de generar el cliente pasaron 17/17. El frontend, también detenido, se inició en el puerto 8080; responde y su proxy conserva la autenticación del backend.
+
+Para otros entornos: revisar destino y migraciones pendientes, obtener respaldo/política de recuperación, aplicar únicamente la secuencia autorizada y después generar el cliente e iniciar/reiniciar coordinadamente. No generar un cliente nuevo contra una base sin migrar.
 
 El control de disponibilidad no hace compatibles todas las consultas si se instala un cliente generado nuevo contra una base sin migrar: esa combinación no está soportada. La actualización debe respetar el orden anterior. No se agregaron permisos de API ni una pantalla nueva para contratar directamente; esa alta sigue disponible mediante el comando existente, mientras que la opción de interfaz se configura en cotizaciones con servicios.
 
-Después de activar, verificar con datos de prueba autorizados las pantallas autenticadas de cotización, contratación y Agenda, y asignar deliberadamente el permiso de excepción si corresponde. No se contactó Infile, DonShot ni servidores externos; tampoco se envían notificaciones, cobros web ni datos mediante una API nueva.
+Queda la comprobación funcional autenticada con datos de prueba autorizados de cotización, contratación y Agenda. El permiso de excepción debe asignarse deliberadamente si corresponde. No se contactó Infile, DonShot ni servidores anteriores; solo se usó la base configurada y los procesos locales. No se ejecutaron cobros, confirmaciones ni excepciones de prueba en la base activa.
 
 ## Decisiones de ejecución
 
