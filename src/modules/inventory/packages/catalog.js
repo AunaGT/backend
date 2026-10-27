@@ -19,6 +19,12 @@ async function enabled(db,scope) {
   if(!modules.find(module=>module.code==='inventory')?.effectiveEnabled)fail(403,'MODULE_DISABLED','Inventario no está habilitado para esta empresa')
   if(!db.commercialPackage)fail(503,'PACKAGES_NOT_READY','La actualización de paquetes aún no está instalada')
 }
+async function assertPackageWriteAccess(db,scope){
+  authorize(scope,{write:true});await enabled(db,scope)
+  if(!branchIds(scope).includes(scope.branchId))fail(403,'FORBIDDEN','Sucursal no autorizada')
+  const branch=await db.branch.findFirst({where:{id:scope.branchId,company_id:scope.companyId,active:true},select:{id:true}})
+  if(!branch)fail(403,'FORBIDDEN','Sucursal no autorizada')
+}
 function visible(scope) {
   return{company_id:scope.companyId,branches:{some:{branch_id:{in:scope.branchId?[scope.branchId]:branchIds(scope)}}}}
 }
@@ -150,4 +156,4 @@ async function loadPackageVersion(tx,scope,id,version,{forNewSelection=true}={})
   const products=forNewSelection?await validateReferences(tx,scope,definition,{lock:true}):null
   return{packageId:id,version,definition,branchIds:record.branch_ids,products}
 }
-module.exports={listPackages,getPackage,savePackage,activatePackageVersion,archivePackage,loadPackageVersion}
+module.exports={listPackages,getPackage,savePackage,activatePackageVersion,archivePackage,loadPackageVersion,assertPackageWriteAccess}

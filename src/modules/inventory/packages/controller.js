@@ -21,4 +21,4 @@ function createPackageHandlers({db,scope=requestScope}={}) {
   return{list:handle('listPackages'),detail:handle('getPackage'),create:handle('savePackage',{write:true,create:true}),
     save:handle('savePackage',{write:true}),activate:handle('activatePackageVersion',{write:true}),archive:handle('archivePackage',{write:true})}
 }
-module.exports={createPackageHandlers}
+module.exports={createPackageHandlers,requestScope}
