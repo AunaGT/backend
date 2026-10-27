@@ -19,12 +19,12 @@ function parseAssignmentRequirements(raw=[]){
   })
   return requirements.sort((a,b)=>a.id.localeCompare(b.id))
 }
-function resolveAssignmentRequirements({requirements,candidates,selectedIds,identityById=new Map()}){
+function resolveAssignmentRequirements({requirements,candidates,selectedIds,identityById=new Map(),eligibleByRequirement}){
   const byId=new Map(candidates.map(c=>[c.id,c]))
   if(selectedIds&&(new Set(selectedIds).size!==selectedIds.length||selectedIds.some(id=>!byId.has(id))))return null
   const selected=selectedIds?new Set(selectedIds):null
   const ordered=[...requirements].sort((a,b)=>a.id.localeCompare(b.id))
-  const seats=ordered.flatMap(r=>Array.from({length:r.quantity},()=>({requirement:r,options:r.optionIds.filter(id=>byId.get(id)?.kind===r.kind&&(!selected||selected.has(id))).sort()})))
+  const seats=ordered.flatMap(r=>Array.from({length:r.quantity},()=>({requirement:r,options:r.optionIds.filter(id=>byId.get(id)?.kind===r.kind&&(!selected||selected.has(id))&&(!eligibleByRequirement||eligibleByRequirement.get(r.id)?.has(id))).sort()})))
   const owners=new Map(),matched=new Map()
   const identity=id=>`${byId.get(id).kind}:${identityById.get(id)??id}`
   function assign(index,visited){
