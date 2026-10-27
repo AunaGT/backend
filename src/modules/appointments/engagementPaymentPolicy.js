@@ -1,0 +1,80 @@
+const {createHash}=require('node:crypto')
+const {Prisma}=require('@prisma/client')
+const {fail}=require('./domain/validation')
+const {hasAgendaPermission}=require('./access')
+const {engagementMoney,engagementCurrencyReason,lockCustomer}=require('../receivables')
+const {assertLineCoverage}=require('./domain/engagement')
+const {evaluateEventPaymentTerms,readEventPaymentTermsSnapshot}=require('../../services/eventPaymentTerms')
+const {sessionInput,sessionBlocks,requirementEligibility,shareIdentity}=require('./domain/operationalTimeline')
+const {assertAssignmentRequirements,providerIdentityMap}=require('./domain/assignmentRequirements')
+const {overlaps}=require('./domain/availability')
+
+function assertPolicyScope(scope,e){
+  if(e.company_id!==scope.companyId||!(scope.branchId?e.branch_id===scope.branchId:scope.branchIds?.includes(e.branch_id))||!hasAgendaPermission(scope,'appointments.view'))
+    fail(404,'NOT_FOUND','Contratación no encontrada')
+}
+function activeSchedules(e){return e.lines.filter(l=>l.item_kind==='SERVICE').flatMap(l=>l.schedules.filter(s=>s.state!=='RELEASED'))}
+function cancelledSchedule(s,now){
+  return s.state==='CANCELLED'||s.session.status==='CANCELLED'||s.booking&&['CANCELLED','EXPIRED','NO_SHOW'].includes(require('./presentation').effectiveStatus(s.booking,now))
+}
+async function inspectPaymentScheduling(db,scope,e,now){
+  const services=e.lines.filter(l=>l.item_kind==='SERVICE'),schedules=activeSchedules(e)
+  const complete=services.length>0&&services.every(l=>new Prisma.Decimal(assertLineCoverage({itemKind:l.item_kind,quantity:l.qty,quantityDecimals:l.quantity_decimals},l.schedules)).eq(0))
+  if(schedules.some(s=>cancelledSchedule(s,now)))return {complete:false,valid:false,context:[]}
+  const ids=[...new Set(schedules.filter(s=>!['COMPLETED','SOLD'].includes(s.state)&&s.session.status!=='COMPLETED').map(s=>s.session_id))].sort()
+  if(!ids.length)return {complete,valid:true,context:schedules.map(s=>({id:s.id,state:s.state,startsAt:s.session.starts_at,endsAt:s.session.ends_at}))}
+  const rows=await db.appointmentSession.findMany({where:{company_id:scope.companyId,branch_id:e.branch_id,id:{in:ids}},include:{providers:true,resources:{include:{resource:true}},participants:{where:{kind:'USER'}},product:{select:{deleted:true,available_for_sale:true,service_schedule_profile:{select:{enabled:true}}}}}})
+  if(rows.length!==ids.length)return {complete,valid:false,context:[]}
+  const {resolveBusyIdentities,loadBusyAssignments,validateActivityPeople}=require('./occupancy')
+  const identities=await resolveBusyIdentities(db,scope,{providerIds:[...new Set(rows.flatMap(r=>r.providers.map(p=>p.provider_id)))],
+    userIds:[...new Set(rows.flatMap(r=>[r.organizer_id,...r.participants.map(p=>p.user_id)]).filter(Boolean))]})
+  const identityById=providerIdentityMap(identities.links)
+  const busy=await loadBusyAssignments(db,scope,{from:new Date(Math.min(...rows.map(r=>r.occupied_from.getTime()))),to:new Date(Math.max(...rows.map(r=>r.occupied_until.getTime()))),identities,
+    resourceIds:[...new Set(rows.flatMap(r=>r.resources.map(a=>a.resource_id)))],now})
+  let valid=true
+  for(const row of await require('./queries').addConflicts(db,scope,rows)){
+    const input=sessionInput(row),blocks=sessionBlocks(row,identityById),policy=row.policy_snapshot||{}
+    if(row.conflicts.length||policy.requiresProvider&&!input.providerIds.length||policy.requiresResource&&!input.resourceIds.length)valid=false
+    if(busy.some(other=>other.sessionId!==row.id&&blocks.some(own=>shareIdentity(own,other)&&overlaps(own,other))))valid=false
+    try{
+      if(row.record_type==='ACTIVITY')await validateActivityPeople(db,{...scope,branchId:e.branch_id},input)
+      require('./domain/activities').validateVenueAssignments(input.venue,row.resources.map(r=>r.resource),row.estimated_attendance??row.capacity)
+      const requirements=[...(policy.assignmentRequirements||[])]
+      for(const [kind,required,field]of [['PROVIDER',policy.requiresProvider,'providerIds'],['RESOURCE',policy.requiresResource,'resourceIds']])
+        if(required&&!requirements.some(r=>r.kind===kind))requirements.push({id:`legacy-${kind}`,kind,name:'Asignación completa',quantity:1,optionIds:input[field]})
+      assertAssignmentRequirements(requirements,{...input,identityById,eligibleByRequirement:requirementEligibility({requirements,timeline:input.operationalTimeline,session:input,identityById})})
+    }catch(error){if(![400,409].includes(error.status))throw error;valid=false}
+  }
+  return {complete,valid,context:rows.map(r=>({id:r.id,version:r.version,status:r.status,startsAt:r.starts_at,endsAt:r.ends_at,policy:r.policy_snapshot,
+    providers:r.providers.map(p=>p.provider_id).sort(),resources:r.resources.map(a=>a.resource_id).sort(),participants:r.participants.map(a=>a.user_id).sort(),timeline:r.operational_timeline})).sort((a,b)=>a.id.localeCompare(b.id))}
+}
+async function loadEngagementPaymentState(db,scope,engagement,{now=new Date(),lockMoney=false,money:knownMoney}={}){
+  assertPolicyScope(scope,engagement)
+  if(!engagement.event_payment_terms)return evaluateEventPaymentTerms({terms:null})
+  let e=engagement
+  if(lockMoney){
+    await require('./sourceVerification').lockEngagementQuote(db,scope,e,{internal:true})
+    await lockCustomer(db,e.customer_id)
+    await db.$queryRaw`SELECT id FROM appointment_engagements WHERE id=${e.id}::uuid AND company_id=${scope.companyId}::uuid FOR UPDATE`
+    e=await require('./commercialQueries').loadEngagement(db,scope,e.id)
+  }
+  let sourceChanged=false
+  if(e.quote_id&&!lockMoney){
+    const quote=await db.commercialDocument.findFirst({where:{id:e.quote_id,doc_type:'QUOTE',branch_id:e.branch_id,branch:{company_id:scope.companyId}},include:{lines:{orderBy:{sort_order:'asc'}}}})
+    try{require('./sourceVerification').assertEngagementQuoteSnapshot(quote&&{...quote,lines:require('../../services/commercialDocumentFulfillment').netDocumentLines(quote)},e)}
+    catch(error){if(error.code!=='SOURCE_REVIEW_REQUIRED')throw error;sourceChanged=true}
+  }
+  const money=!lockMoney&&knownMoney?knownMoney:await engagementMoney(db,e)
+  const scheduling=await inspectPaymentScheduling(db,scope,e,now)
+  const reviewRequired=sourceChanged||!!e.resolution_pending||!!e.commercial_snapshot?.replacementEngagementId||e.refunds.some(r=>r.status==='REQUESTED')||!!await engagementCurrencyReason(db,scope,e)
+  const state=evaluateEventPaymentTerms({terms:e.event_payment_terms,reference:e.event_payment_reference,money,scheduling,reviewRequired,now})
+  const reviewHash=createHash('sha256').update(JSON.stringify({terms:readEventPaymentTermsSnapshot(e.event_payment_terms),reference:state.reference,version:e.version,money,
+    scheduling:scheduling.context,refunds:e.refunds.map(r=>({id:r.id,status:r.status,amount:String(r.amount)})),reviewRequired,confirmation:state.confirmation,payment:state.payment})).digest('hex')
+  return {...state,reviewHash}
+}
+function paymentPolicyPublicState(state,{financial}){
+  const out={...state,reasons:[...state.reasons],reference:state.reference?{...state.reference}:null}
+  if(!financial)for(const key of ['depositRequired','depositMissing','paid','remaining','reviewHash'])delete out[key]
+  return out
+}
+module.exports={loadEngagementPaymentState,paymentPolicyPublicState,inspectPaymentScheduling,activeSchedules}

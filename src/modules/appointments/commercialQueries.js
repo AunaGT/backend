@@ -88,6 +88,11 @@ async function getEngagement(db,scope,id){
       reason:reason||orderReason||saleAccountReason||(!ready?'':superseded?'El alcance fue sustituido por una nueva cotización':result.resolutionPending?'Resuelve el alcance comercial antes de recibir pagos o generar venta':pendingRefund?'Resuelve la devolución pendiente':''),
     }
   }
+  if(row.event_payment_terms){
+    const policy=require('./engagementPaymentPolicy')
+    result.paymentPolicy=policy.paymentPolicyPublicState(await policy.loadEngagementPaymentState(db,scope,row,{money:result.money}),{financial})
+    if(financial)result.eventPaymentTerms=require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(row.event_payment_terms)
+  }
   return result
 }
 module.exports={getEngagement,loadEngagement,engagementWhere,conditionInfo,operationalState,hasCancelledSchedules}

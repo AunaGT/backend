@@ -1,9 +1,6 @@
 const {fail}=require('./domain/validation')
-async function lockEngagementQuote(tx,scope,e){
-  if(!e.quote_id)return null
-  const quotes=require('../quotes')
-  await quotes.assertQuoteSourceAccess(tx,scope)
-  const quote=await quotes.lockQuote(tx,scope,e.quote_id)
+function assertEngagementQuoteSnapshot(quote,e){
+  if(!quote)fail(409,'SOURCE_REVIEW_REQUIRED','La cotización ya no está disponible; revisa el alcance comercial')
   if(JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(quote.event_payment_terms))!==JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(e.event_payment_terms)))fail(409,'SOURCE_REVIEW_REQUIRED','Las condiciones de pago cambiaron; revisa el acuerdo comercial')
   const Packages=require('../../services/commercialPackages')
   if((quote.package_groups?.length||e.package_groups?.length)&&Packages.packageSourceFingerprint(quote.package_groups,quote.lines)!==Packages.packageSourceFingerprint(e.package_groups,e.lines))fail(409,'SOURCE_REVIEW_REQUIRED','Cambió la composición del paquete cotizado; revisa el alcance comercial')
@@ -13,4 +10,10 @@ async function lockEngagementQuote(tx,scope,e){
   }))fail(409,'SOURCE_REVIEW_REQUIRED','La cotización o sus partidas cambiaron; revisa el alcance comercial')
   return quote
 }
-module.exports={lockEngagementQuote}
+async function lockEngagementQuote(tx,scope,e,{internal=false}={}){
+  if(!e.quote_id)return null
+  const quotes=require('../quotes')
+  if(!internal)await quotes.assertQuoteSourceAccess(tx,scope)
+  return assertEngagementQuoteSnapshot(await quotes.lockQuote(tx,scope,e.quote_id),e)
+}
+module.exports={lockEngagementQuote,assertEngagementQuoteSnapshot}
