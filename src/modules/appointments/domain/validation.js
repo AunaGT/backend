@@ -101,8 +101,8 @@ function parseEnroll(raw) {
   return { contactId: uuid(v.contactId, 'contactId'), quantity: quantity(v.quantity), notes: text(v.notes, 'notes', 2000, false), idempotencyKey: requestKey(v.idempotencyKey) }
 }
 function parseMove(raw) {
-  const v = object(raw, ['startsAt', 'endsAt', 'timezone', 'providerIds', 'resourceIds', 'expectedVersion', 'idempotencyKey', 'reason','venue','outboundMinutes','returnMinutes'])
-  return { ...parseLocation(v),...optionalEnd(v), startsAt: instant(v.startsAt, 'startsAt'), timezone: zone(v.timezone), providerIds: ids(v.providerIds, 'providerIds'), resourceIds: ids(v.resourceIds, 'resourceIds'),
+  const v = object(raw, ['startsAt', 'endsAt', 'timezone', 'providerIds', 'resourceIds', 'expectedVersion', 'idempotencyKey', 'reason','venue','outboundMinutes','returnMinutes','acknowledgedPaymentReviewHash'])
+  return { ...parseLocation(v),...optionalEnd(v),...require('../engagementPaymentReference').parsePaymentReview(v.acknowledgedPaymentReviewHash), startsAt: instant(v.startsAt, 'startsAt'), timezone: zone(v.timezone), providerIds: ids(v.providerIds, 'providerIds'), resourceIds: ids(v.resourceIds, 'resourceIds'),
     expectedVersion: version(v.expectedVersion), idempotencyKey: requestKey(v.idempotencyKey), reason: text(v.reason, 'reason', 500) }
 }
 function parseTransition(raw, session = false) {

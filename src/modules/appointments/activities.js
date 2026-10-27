@@ -91,6 +91,7 @@ async function updateActivity(db,scope,id,raw) {
     const {range}=await assertActivityAvailability(tx,scope,prepared.input,{excludeSessionId:id})
     await tx.appointmentSession.update({where:{id},data:{...data(prepared.input,scope,old,range,tx),policy_snapshot:{...prepared.policySnapshot,completionPolicy:prepared.input.completionPolicy},version:{increment:1}}})
     await participants(tx,scope,id,prepared.input,true)
+    if(old.engagement_schedules.length)await require('./engagementPaymentReference').reviewEngagementPaymentReferences(tx,scope,{...input,sessionIds:[id],now:new Date()})
     await history(tx,scope,old,'UPDATED',{title:old.title,startsAt:old.starts_at.toISOString(),endsAt:old.ends_at.toISOString()},snapshot(prepared.input),input.reason)
     return {type:'ACTIVITY',id}
   })

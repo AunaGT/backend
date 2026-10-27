@@ -8,9 +8,9 @@ const {createActivityInTransaction}=require('./activities')
 const {loadLockedEngagement}=require('./engagements')
 const {conditionInfo}=require('./commercialQueries')
 function parsePrograms(raw){
-  const input=v.object(raw,['programs','partial','expectedVersion','idempotencyKey'])
+  const input=v.object(raw,['programs','partial','expectedVersion','idempotencyKey','acknowledgedPaymentReviewHash'])
   if(!Array.isArray(input.programs)||!input.programs.length||input.programs.length>100)v.invalid('programs','Selecciona entre 1 y 100 programaciones')
-  return {expectedVersion:v.version(input.expectedVersion),idempotencyKey:v.requestKey(v.text(input.idempotencyKey,'idempotencyKey',64)),partial:v.boolean(input.partial??false,'partial'),programs:input.programs.map(raw=>{
+  return {...require('./engagementPaymentReference').parsePaymentReview(input.acknowledgedPaymentReviewHash),expectedVersion:v.version(input.expectedVersion),idempotencyKey:v.requestKey(v.text(input.idempotencyKey,'idempotencyKey',64)),partial:v.boolean(input.partial??false,'partial'),programs:input.programs.map(raw=>{
     const p=v.object(raw,['lineId','quantity','startsAt','endsAt','timezone','providerIds','resourceIds','venue','outboundMinutes','returnMinutes','organizerId','userIds','guests','estimatedAttendance','capacity','title','notes','acknowledgedConditionsVersion','operationalTimeline'])
     return {lineId:v.uuid(p.lineId,'lineId'),quantity:v.quantity(p.quantity),startsAt:v.instant(p.startsAt,'startsAt'),...(p.endsAt?{endsAt:v.instant(p.endsAt,'endsAt')}:{}),timezone:v.zone(p.timezone),
       providerIds:v.ids(p.providerIds??[],'providerIds'),resourceIds:v.ids(p.resourceIds??[],'resourceIds'),venue:parseVenue(p.venue??{kind:'BRANCH'}),
@@ -60,6 +60,7 @@ async function programEngagement(db,scope,id,raw){
   return command(db,scope,'appointments.edit','PROGRAM_ENGAGEMENT',input,async(tx,now)=>{
     const initial=await require('./commercialQueries').loadEngagement(tx,scope,id)
     await require('./sourceVerification').lockEngagementQuote(tx,scope,initial)
+    if(initial.event_payment_terms)await require('../receivables').lockCustomer(tx,initial.customer_id)
     const engagement=await loadLockedEngagement(tx,scope,id,input.expectedVersion)
     if(engagement.commercial_snapshot.replacementEngagementId)v.fail(409,'SCOPE_SUPERSEDED','Programa desde la contratación que corrige este alcance')
     if(engagement.resolution_pending)v.fail(409,'SOURCE_REVIEW_REQUIRED','Resuelve la revisión comercial antes de programar')
@@ -75,6 +76,7 @@ async function programEngagement(db,scope,id,raw){
       const schedules=await tx.appointmentEngagementSchedule.findMany({where:{company_id:scope.companyId,line_id:line.id}})
       if(new Prisma.Decimal(assertLineCoverage({itemKind:line.item_kind,quantity:line.qty,quantityDecimals:line.quantity_decimals},schedules)).gt(0))v.fail(400,'PARTIAL_CONFIRMATION_REQUIRED','Quedan servicios sin programar. Confirma explícitamente una programación parcial')
     }
+    if(engagement.event_payment_terms)await require('./engagementPaymentReference').reviewEngagementPaymentReferences(tx,scope,{...input,engagementIds:[id],now})
     await tx.appointmentEngagement.update({where:{id},data:{version:{increment:1}}})
     await tx.appointmentEngagementHistory.create({data:{company_id:scope.companyId,branch_id:scope.branchId,customer_id:engagement.customer_id,engagement_id:id,actor_id:scope.userId,action:'PROGRAMMED',
       request_key:input.idempotencyKey,input_hash:createHash('sha256').update(JSON.stringify(input)).digest('hex'),after:{count:input.programs.length,partial:input.partial}}})

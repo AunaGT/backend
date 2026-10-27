@@ -191,6 +191,7 @@ async function rescheduleBooking(db, scope, id, raw) {
     const row = await loadBooking(tx, scope, id); checkVersion(row, input.expectedVersion)
     if (row.session.mode !== 'INDIVIDUAL' || !['HELD', 'PENDING', 'CONFIRMED'].includes(row.status) || !occupiesSeat(row, now)) fail(409, 'INVALID_TRANSITION', 'Esta reserva no puede reprogramarse individualmente')
     await move(tx, scope, row.session, input, now)
+    if(row.engagement_schedules?.length||row.session.engagement_schedules?.length)await require('./engagementPaymentReference').reviewEngagementPaymentReferences(tx,scope,{...input,sessionIds:[row.session_id],now})
     if (row.status === 'PENDING') await tx.appointmentBooking.update({ where: { id }, data: { expires_at: new Date(Math.min(now.getTime() + 86400000, new Date(input.startsAt).getTime())) } })
     return { type: 'BOOKING', id }
   })
@@ -201,6 +202,7 @@ async function rescheduleSession(db, scope, id, raw) {
     const row = await loadSession(tx, scope, id); checkVersion(row, input.expectedVersion)
     if (row.mode !== 'GROUP') fail(400, 'NOT_GROUP', 'Reprograma la reserva individual, no la sesión')
     await move(tx, scope, row, input, now)
+    if(row.engagement_schedules?.length)await require('./engagementPaymentReference').reviewEngagementPaymentReferences(tx,scope,{...input,sessionIds:[id],now})
     await tx.appointmentBooking.updateMany({ where: { session_id: id, status: 'PENDING' }, data: { expires_at: new Date(Math.min(now.getTime() + 86400000, new Date(input.startsAt).getTime())) } })
     return { type: 'SESSION', id }
   })

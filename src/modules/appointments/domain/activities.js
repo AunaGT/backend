@@ -45,8 +45,8 @@ function parseFields(input) {
 }
 function parseActivity(raw) { return parseFields(v.object(raw,keys)) }
 function parseActivityUpdate(raw) {
-  const input=v.object(raw,[...keys,'expectedVersion','reason'])
-  return {...parseFields(input),expectedVersion:v.version(input.expectedVersion),reason:v.text(input.reason,'reason',500)}
+  const input=v.object(raw,[...keys,'expectedVersion','reason','acknowledgedPaymentReviewHash'])
+  return {...parseFields(input),...require('../engagementPaymentReference').parsePaymentReview(input.acknowledgedPaymentReviewHash),expectedVersion:v.version(input.expectedVersion),reason:v.text(input.reason,'reason',500)}
 }
 function parseActivityTransition(raw) {
   if(raw?.action!=='CONFIRM_COMPLETION')return v.parseTransition(raw,true)

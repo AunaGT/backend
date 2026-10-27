@@ -6,9 +6,9 @@ const {loadEngagement}=require('./commercialQueries')
 const {loadLockedEngagement}=require('./engagements')
 const {money,lockCustomer,resolveReservedFunds}=require('../receivables')
 function parseResolution(raw){
-  const p=v.object(raw,['action','amount','receiptId','refundId','replacementEngagementId','reason','expectedVersion','idempotencyKey','paymentMethodId','cashRegisterSessionId','reference'])
+  const p=v.object(raw,['action','amount','receiptId','refundId','replacementEngagementId','reason','expectedVersion','idempotencyKey','paymentMethodId','cashRegisterSessionId','reference','acknowledgedPaymentReviewHash'])
   if(!['KEEP','RELEASE','REQUEST_REFUND','CONFIRM_REFUND','CANCEL_REFUND','LINK_CORRECTION'].includes(p.action))v.invalid('action','Selecciona una resolución válida')
-  const input={action:p.action,reason:v.text(p.reason,'reason',500),expectedVersion:v.version(p.expectedVersion),idempotencyKey:v.requestKey(v.text(p.idempotencyKey,'idempotencyKey',64))}
+  const input={...require('./engagementPaymentReference').parsePaymentReview(p.acknowledgedPaymentReviewHash),action:p.action,reason:v.text(p.reason,'reason',500),expectedVersion:v.version(p.expectedVersion),idempotencyKey:v.requestKey(v.text(p.idempotencyKey,'idempotencyKey',64))}
   if(p.action==='KEEP')return input
   if(p.action==='LINK_CORRECTION')return {...input,replacementEngagementId:v.uuid(p.replacementEngagementId,'replacementEngagementId')}
   input.receiptId=v.uuid(p.receiptId,'receiptId')
@@ -28,6 +28,7 @@ async function resolveEngagementFunds(db,scope,id,raw){
   return command(db,scope,'appointments.refund','RESOLVE_ENGAGEMENT',input,async tx=>{
     await assertCommercialAccess(tx,scope,'refund')
     const initial=await loadEngagement(tx,scope,id)
+    if(initial.event_payment_terms)await require('./sourceVerification').lockEngagementQuote(tx,scope,initial)
     let correction
     if(input.action==='LINK_CORRECTION'){
       correction=await loadEngagement(tx,scope,input.replacementEngagementId)
@@ -55,6 +56,7 @@ async function resolveEngagementFunds(db,scope,id,raw){
       await tx.appointmentEngagementSchedule.updateMany({where:{company_id:scope.companyId,id:{in:cancelled.map(s=>s.id)},state:{in:['CANCELLED','COMMITTED']}},data:{state:'RELEASED'}})
       await tx.appointmentEngagement.update({where:{id},data:{resolution_pending:false}})
       await require('./commercialDrafts').reopenResolvedDraft(tx,scope,e,input)
+      if(e.event_payment_terms)await require('./engagementPaymentReference').reviewEngagementPaymentReferences(tx,scope,{...input,engagementIds:[id],now:new Date()})
     }else await resolveReservedFunds(tx,scope,e,input)
     await tx.appointmentEngagement.update({where:{id},data:{version:{increment:1}}})
     await tx.appointmentEngagementHistory.create({data:{company_id:scope.companyId,branch_id:scope.branchId,customer_id:e.customer_id,engagement_id:id,actor_id:scope.userId,action:input.action,reason:input.reason,request_key:input.idempotencyKey,input_hash:createHash('sha256').update(JSON.stringify(input)).digest('hex'),after:{receiptId:input.receiptId||null,amount:input.amount||null,refundId:input.refundId||null}}})
