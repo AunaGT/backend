@@ -26,7 +26,7 @@ async function loadBusyAssignments(db,scope,{from,to,identities,resourceIds=[],e
     OR:ors,AND:[{OR:[{status:{in:['SCHEDULED','IN_PROGRESS']}},{record_type:'ACTIVITY',status:'COMPLETED',occupied_until:{gt:now}}]}],
     occupied_from:{lt:new Date(to)},occupied_until:{gt:new Date(from)}},select:{
     id:true,branch_id:true,product_id:true,record_type:true,organizer_id:true,mode:true,status:true,capacity:true,
-    starts_at:true,ends_at:true,occupied_from:true,occupied_until:true,timezone:true,venue:true,providers:true,resources:true,
+    starts_at:true,ends_at:true,occupied_from:true,occupied_until:true,timezone:true,venue:true,policy_snapshot:true,providers:true,resources:true,
     participants:{where:{kind:'USER'},select:{user_id:true}},bookings:{select:{session_id:true,status:true,expires_at:true}}},take:10001})
   if(rows.length>10000) fail(400,'RANGE_TOO_LARGE','Selecciona un período con menos actividades')
   return rows.filter(row=>sessionOccupies(row,row.bookings,now)).map(row=>{

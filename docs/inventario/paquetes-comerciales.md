@@ -22,6 +22,11 @@ La moneda es la de la empresa. Un servicio requiere tener habilitados los
 servicios de inventario. Las presentaciones conservan su revisión y factor.
 El editor usa los mismos controles, alertas y guardas de borrador de Auna.
 
+Si después cambias la moneda de la empresa, Auna no convierte precios ni cambia
+la moneda de los acuerdos anteriores. Impide seguir operando un paquete/acuerdo
+en una moneda distinta hasta revisarlo; las propuestas guardadas y sus PDF siguen
+mostrando su moneda original. No es una función de cambio de divisas.
+
 ## Acordar la composición al cotizar
 
 En **Nueva cotización** agrega un paquete y su variante. Las cantidades de las
@@ -39,6 +44,10 @@ del documento. No actualiza automáticamente al catálogo nuevo. Si la versión 
 no se ofrece y deseas usar la actual, quita el paquete, agrégalo otra vez y revisa
 sus opciones/precio. Si otra persona modifica el borrador, se pide revisar la
 versión actual y se conservan las entradas locales; no se sobrescribe en silencio.
+
+Puedes elegir otra sucursal autorizada en el editor sin cambiar la sucursal global.
+El catálogo usa la sucursal elegida; cambiar de empresa o sesión descarta respuestas
+que todavía estén llegando del contexto anterior.
 
 ## Continuar la operación
 
@@ -78,8 +87,9 @@ Se admiten hasta 100 partidas reales en la cotización, con cantidades e importe
 decimales validados por el servidor. No se aceptan precios/snapshots de paquetes
 aportados por el navegador como autoridad.
 
-El **bloque 2** queda para requisitos avanzados de recursos, hitos, transporte y
-políticas de anticipos. El **bloque 3** queda para catálogo externo de paquetes,
+El **bloque 2a** añade los requisitos de personal y equipo descritos debajo.
+Los bloques **2b/2c** quedan para hitos, transporte y políticas de anticipos.
+El **bloque 3** queda para catálogo externo de paquetes,
 selecciones por API y disponibilidad pública. Este bloque no conecta DonShot,
 no publica una plantilla real y no hace llamadas a Infile.
 
@@ -99,3 +109,42 @@ envío/aceptación → cambio de catálogo → pedido/venta borrador/Agenda en e
 separados, con revisión, permisos, reintento y rollback. Entregas parciales,
 devoluciones y producción se verifican además con los servicios reales de dominio
 y persistencia sintética controlada en sus pruebas específicas.
+
+## Personal y equipo necesarios — bloque 2a
+
+En el producto de tipo **Servicio → Agenda → Requisitos específicos** puedes
+definir, por ejemplo, «Equipo de atención: 2 profesionales» y «Barra: 1 equipo».
+Primero habilita las personas y equipos del servicio; después indica las opciones
+que pueden cubrir cada requisito. Habilitar tres barras no obliga a reservar las
+tres. Una misma persona o equipo no cubre dos plazas, aunque tenga varios perfiles.
+
+El sistema comprueba que cada sucursal y lugar ofrecido tenga opciones suficientes.
+Una sala fija no sirve como equipo transportable para un evento externo. No se
+multiplican estos requisitos por las horas vendidas: corresponden a cada programación.
+Se admiten hasta 20 requisitos, 20 plazas por requisito y 40 plazas en total.
+
+Al programar, Agenda muestra cuántas plazas cubre tu selección. Esa indicación no
+reserva ni certifica disponibilidad: al guardar se validan identidades, calendarios,
+ausencias, otras actividades y el intervalo completo de preparación/traslado/cierre.
+Una selección parcial no se completa con otra persona o equipo en silencio. Una
+consulta sin selección puede proponer un conjunto completo disponible.
+
+Las cotizaciones nuevas conservan el nombre, tipo y cantidad requeridos, nunca
+las opciones privadas o datos del personal. Cambiar el catálogo no modifica el
+acuerdo anterior ni sus importes. Antes de programar se revisan las condiciones
+actuales. Las sesiones ya creadas conservan sus propias reglas al inscribir o
+reprogramar; no reciben nuevas obligaciones por un cambio posterior del catálogo.
+
+La lista vacía conserva el comportamiento anterior. Los clientes antiguos que
+omiten el campo no borran los requisitos guardados. La edición usa la revisión
+del perfil existente y las reservas mantienen el bloqueo y recibos de Agenda.
+
+La migración aditiva `20261027120000_service_assignment_requirements` agrega solo
+el campo de requisitos; fue ensayada en PostgreSQL temporal. Su aplicación a la
+base de localhost requiere autorización explícita, seguida de regenerar el cliente
+de datos. Las pruebas optativas `appointments.requirements-*.e2e.js` usan solo una
+URL explícita local `APPOINTMENTS_REQUIREMENTS_TEST_DATABASE_URL` cuya base se
+llame `auna_requirements_test_*`. Nunca uses la URL de la aplicación.
+
+Este tramo no añade hitos, intervalos individuales nuevos, precios de transporte,
+anticipos ni integración web/API de paquetes. DonShot e Infile siguen pendientes.

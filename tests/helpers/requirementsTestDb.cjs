@@ -9,7 +9,7 @@ function sql(target,args){
  const out=spawnSync('psql',['-X','--no-password',target,'-v','ON_ERROR_STOP=1',...args],{encoding:'utf8',timeout:60000,maxBuffer:4*1024*1024})
  assert.equal(out.status,0,out.stderr);return out.stdout
 }
-function requirementsClient(target,{legacy=false}={}){
+function requirementsClient(target,{legacy=false,namespace=false}={}){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'auna-requirements-client-')),output=path.join(dir,'client')
  fs.symlinkSync(path.join(root,'node_modules'),path.join(dir,'node_modules'),'dir')
  let source=fs.readFileSync(path.join(root,'prisma/schema.prisma'),'utf8').replace(/generator client \{[\s\S]*?\}/,`generator client {\n provider = "prisma-client-js"\n output = ${JSON.stringify(output)}\n binaryTargets = ["native"]\n}`)
@@ -17,7 +17,7 @@ function requirementsClient(target,{legacy=false}={}){
  const schema=path.join(dir,'schema.prisma');fs.writeFileSync(schema,source,{mode:0o600})
  const out=spawnSync(process.execPath,[require.resolve('prisma/build/index.js'),'generate','--schema',schema],{cwd:dir,env:{...process.env,DATABASE_URL:target,DIRECT_URL:target,PRISMA_GENERATE_SKIP_AUTOINSTALL:'true'},encoding:'utf8',timeout:60000})
  assert.equal(out.status,0,out.stderr||out.stdout)
- return require(output).PrismaClient
+ return namespace?require(output):require(output).PrismaClient
 }
 function bootstrapRequirementsDb(target){
  assert.equal(sql(target,['-Atc',"SELECT count(*) FROM pg_tables WHERE schemaname='public'"]).trim(),'0','Use a fresh empty disposable database')
