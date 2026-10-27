@@ -4,6 +4,7 @@ async function lockEngagementQuote(tx,scope,e){
   const quotes=require('../quotes')
   await quotes.assertQuoteSourceAccess(tx,scope)
   const quote=await quotes.lockQuote(tx,scope,e.quote_id)
+  if(JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(quote.event_payment_terms))!==JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(e.event_payment_terms)))fail(409,'SOURCE_REVIEW_REQUIRED','Las condiciones de pago cambiaron; revisa el acuerdo comercial')
   const Packages=require('../../services/commercialPackages')
   if((quote.package_groups?.length||e.package_groups?.length)&&Packages.packageSourceFingerprint(quote.package_groups,quote.lines)!==Packages.packageSourceFingerprint(e.package_groups,e.lines))fail(409,'SOURCE_REVIEW_REQUIRED','Cambió la composición del paquete cotizado; revisa el alcance comercial')
   if(quote.status!=='ACCEPTED'||quote.customer_contact_id!==e.customer_id||!quote.total.eq(e.agreed_total)||quote.lines.length!==e.lines.length||e.lines.some(l=>{

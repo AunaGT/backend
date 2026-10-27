@@ -7,6 +7,7 @@ async function createEngagementRecord(tx,scope,{source,quoteId,requestKey,inputH
     source:quoteId?'QUOTE':'DIRECT',quote_id:quoteId||null,order_id:order?.id||null,currency_code:source.currencyCode,agreed_total:source.total,
     commercial_snapshot:origin?{...source,origin}:source,resolution_pending:!!order?.documentSales?.length,created_by:scope.userId,
     ...(source.packageGroups?.length?{package_groups:Packages.copyPackageGroups(source.packageGroups)}:{}),
+    ...require('../../services/eventPaymentTermsStorage').copyEventPaymentTerms(source),
     lines:{create:source.lines.map(l=>({source_document_id:quoteId||null,source_line_id:l.id||null,product_id:l.productId,item_kind:l.itemKind,
       item_name:l.itemName,unit_label:l.unitLabel,quantity_decimals:l.quantityDecimals,qty:l.quantity,unit_price:l.unitPrice,line_total:l.lineTotal,
       ...(l.unitMetadataVersion===2?{unit_metadata_version:2,unit_snapshot:l.unitSnapshot,base_qty:l.baseQty,base_unit_cost:l.baseUnitCost}:{}),

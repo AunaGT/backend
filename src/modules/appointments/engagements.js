@@ -10,14 +10,14 @@ const {publicConditionsFromRow}=require('./index')
 const {money}=require('../receivables')
 const Units=require('../inventory/units')
 function parseEngagement(raw){
-  const input=v.object(raw,['quoteId','contactId','lines','idempotencyKey'])
+  const input=v.object(raw,['quoteId','contactId','lines','idempotencyKey','eventPaymentTerms'])
   const key=v.requestKey(v.text(input.idempotencyKey,'idempotencyKey',64))
   if(input.quoteId){
-    if(input.contactId!==undefined||input.lines!==undefined)v.invalid('quoteId','La contratación toma el cliente y partidas de la cotización')
+    if(input.contactId!==undefined||input.lines!==undefined||input.eventPaymentTerms!==undefined)v.invalid('quoteId','La contratación toma el cliente, condiciones y partidas de la cotización')
     return {quoteId:v.uuid(input.quoteId,'quoteId'),idempotencyKey:key}
   }
   if(!Array.isArray(input.lines)||!input.lines.length||input.lines.length>100)v.invalid('lines','Agrega entre 1 y 100 servicios')
-  return {contactId:v.uuid(input.contactId,'contactId'),idempotencyKey:key,lines:input.lines.map(line=>{
+  return {contactId:v.uuid(input.contactId,'contactId'),idempotencyKey:key,...(input.eventPaymentTerms===undefined?{}:{eventPaymentTerms:require('../../services/eventPaymentTerms').parseEventPaymentTerms(input.eventPaymentTerms)}),lines:input.lines.map(line=>{
     const l=v.object(line,['productId','quantity','unitRevision','presentationId','acceptRounding'])
     if(l.unitRevision!==undefined&&(!Number.isSafeInteger(l.unitRevision)||l.unitRevision<1))v.invalid('unitRevision','Revisión de unidad inválida')
     if(l.acceptRounding!==undefined&&typeof l.acceptRounding!=='boolean')v.invalid('acceptRounding','Aceptación de redondeo inválida')
@@ -47,6 +47,10 @@ async function createEngagement(db,scope,raw){
   const input=parseEngagement(raw)
   return command(db,scope,'appointments.create','CREATE_ENGAGEMENT',input,async tx=>{
     const source=input.quoteId?await loadQuoteSource(tx,scope,input.quoteId):await directSource(tx,scope,input)
+    if(!input.quoteId&&input.eventPaymentTerms){
+      await require('../../services/eventPaymentTermsStorage').assertEventPaymentStorage(tx)
+      source.eventPaymentTerms=require('../../services/eventPaymentTerms').freezeEventPaymentTerms(input.eventPaymentTerms,{total:source.total,currencyCode:source.currencyCode})
+    }
     money(source.total)
     for(const line of source.lines){if(line.unitMetadataVersion===2||line.packageComponentKey)require('../../services/units/quantity').lineTotal(line.quantity,line.unitPrice);else money(line.unitPrice);money(line.lineTotal)}
     if(input.quoteId){
