@@ -5,7 +5,7 @@ const {appointmentWhere,agendaCapabilities,hasAgendaPermission,assertContactsInt
 const {assertActivityAvailability}=require('./occupancy')
 const {nextSessionState}=require('./domain/states')
 const canReadNotes=scope=>['appointments.attend','appointments.configure'].some(p=>hasAgendaPermission(scope,p))
-const include={engagement_schedules:{select:require('./presentation').engagementScheduleSelect},providers:{include:{provider:{select:{id:true,name:true}}}},resources:{include:{resource:{select:{id:true,name:true}}}},participants:{include:{user:{select:{id:true,name:true}}}},organizer:{select:{id:true,name:true,photo_url:true}},
+const include={engagement_schedules:{select:require('./presentation').engagementScheduleSelect},providers:{include:{provider:{select:{id:true,name:true,user_id:true,employee_id:true,employee:{select:{user_id:true}}}}}},resources:{include:{resource:{select:{id:true,name:true}}}},participants:{include:{user:{select:{id:true,name:true}}}},organizer:{select:{id:true,name:true,photo_url:true}},
   history:{orderBy:[{created_at:'desc'},{id:'desc'}],take:100,select:{id:true,action:true,actor_id:true,created_at:true,reason:true,before:true,after:true}}}
 async function loadActivity(db,scope,id) {
   v.uuid(id,'activityId')
@@ -14,6 +14,10 @@ async function loadActivity(db,scope,id) {
   return row
 }
 function presentActivity(row,scope) {
+  const {sessionBlocks}=require('./domain/operationalTimeline'),{providerIdentityMap}=require('./domain/assignmentRequirements')
+  const blocks=sessionBlocks(row,providerIdentityMap(row.providers.map(p=>p.provider||{id:p.provider_id})))
+  const assignments=[...[...new Set([row.organizer_id,...row.participants.filter(p=>p.kind==='USER').map(p=>p.user_id)].filter(Boolean))].map(id=>({kind:'USER',id,key:'userIds'})),
+    ...row.providers.map(p=>({kind:'PROVIDER',id:p.provider_id,key:'providerIds'})),...row.resources.map(r=>({kind:'RESOURCE',id:r.resource_id,key:'resourceIds'}))]
   return {...require('./domain/servicePolicy').completionInfo(row),id:row.id,recordType:'ACTIVITY',branchId:row.branch_id,purpose:row.purpose,title:row.title,productId:row.product_id,
     ...(row.engagement_schedules?.[0]?{engagementId:row.engagement_schedules[0].engagement_id}:{}),
     ...require('./presentation').commercialPreparation(row.engagement_schedules,{eligible:!!row.product_id&&row.policy_snapshot?.serviceScheduling==='CONFIGURED'}),
@@ -29,6 +33,7 @@ function presentActivity(row,scope) {
     timezone:row.timezone,venue:row.venue,estimatedAttendance:row.estimated_attendance,
     outboundMinutes:row.outbound_minutes,setupMinutes:row.setup_minutes,teardownMinutes:row.teardown_minutes,returnMinutes:row.return_minutes,
     operationalTimeline:require('./domain/operationalTimeline').parseOperationalTimeline(row.operational_timeline),
+    attendanceReservations:assignments.flatMap(a=>blocks.filter(b=>b[a.key].includes(a.id)).map(b=>({kind:a.kind,entityId:a.id,from:new Date(b.start).toISOString(),to:new Date(b.end).toISOString()}))),
     status:row.status,version:row.version,notes:canReadNotes(scope)?row.notes:null,
     history:row.history.map(h=>({id:h.id,action:h.action,actorId:h.actor_id,at:h.created_at.toISOString(),reason:h.reason,before:h.before,after:h.after}))}
 }

@@ -129,7 +129,7 @@ async function listDirectory(db, scope) {
     for (const item of session.providers) providerCounts.set(item.provider_id, (providerCounts.get(item.provider_id) || 0) + 1)
     for (const item of session.resources) resourceCounts.set(item.resource_id, (resourceCounts.get(item.resource_id) || 0) + 1)
   }
-  return { timezone,branches, providers: providers.map(row => ({ id: row.id, name: row.name, employeeId: configure ? row.employee_id : null, userId: configure ? row.user_id : null, active: row.active, version: row.version, futureSessions: providerCounts.get(row.id) || 0,
+  return { operationalTimelineEnabled:require('./timelineStorage').timelineStorageReady(db),timezone,branches, providers: providers.map(row => ({ id: row.id, name: row.name, employeeId: configure ? row.employee_id : null, userId: configure ? row.user_id : null, active: row.active, version: row.version, futureSessions: providerCounts.get(row.id) || 0,
     branchIds: row.branches.filter(branch => scope.branchIds.includes(branch.branch_id)).map(branch => branch.branch_id) })),
     resources: resources.map(row => ({ id: row.id, name: row.name, type: row.type,portable:row.portable, personCapacity: row.person_capacity, branchId: row.branch_id, active: row.active, version: row.version, futureSessions: resourceCounts.get(row.id) || 0 })), employeeCandidates }
 }
