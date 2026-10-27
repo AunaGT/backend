@@ -88,7 +88,8 @@ decimales validados por el servidor. No se aceptan precios/snapshots de paquetes
 aportados por el navegador como autoridad.
 
 El **bloque 2a** añade los requisitos de personal y equipo descritos debajo.
-Los bloques **2b/2c** quedan para hitos, transporte y políticas de anticipos.
+El **bloque 2b.1** agrega momentos y horarios propios, pendiente de desplegar su
+migración. **2b.2/2c** quedan para zonas/cargos de transporte y políticas de anticipos.
 El **bloque 3** queda para catálogo externo de paquetes,
 selecciones por API y disponibilidad pública. Este bloque no conecta DonShot,
 no publica una plantilla real y no hace llamadas a Infile.
@@ -149,3 +150,46 @@ llame `auna_requirements_test_*`. Nunca uses la URL de la aplicación.
 
 Este tramo no añade hitos, intervalos individuales nuevos, precios de transporte,
 anticipos ni integración web/API de paquetes. DonShot e Infile siguen pendientes.
+
+## Momentos y horarios propios — bloque 2b.1
+
+En **Agenda → Nueva programación → Actividad**, o al programar un servicio de
+tipo **Trabajo o evento**, el horario general sigue siendo suficiente. No tienes
+que crear momentos ni horarios propios si todo el personal y equipo permanece
+durante el mismo intervalo.
+
+- **Momentos del evento:** agrega, por ejemplo, «Bienvenida» o «Show», con nombre,
+  inicio y fin. Se muestran con fechas/horas de la zona del evento. Un momento no
+  crea otra reserva, otro cobro ni una partida comercial.
+- **Horarios del personal y equipo:** cada asignación empieza en «Todo el evento».
+  Usa «Horario propio» solo si llega o sale a otra hora. Revisa y confirma sus
+  minutos de ida, preparación, cierre y regreso; se muestra desde cuándo y hasta
+  cuándo se reserva. Los invitados no reservan disponibilidad.
+- **Responsable interno:** permanece durante todo el intervalo operativo. Si es
+  también un profesional, sus asignaciones se suman: no queda libre usando otra
+  ficha de la misma persona.
+- **Requisitos del servicio:** «Todo el evento» exige cobertura completa, incluida
+  la logística. «En un momento del evento» permite elegir el momento al programar;
+  todas sus plazas deben cubrir ese momento completo. Dos intervenciones
+  consecutivas no cubren dos personas necesarias al mismo tiempo.
+
+Cambiar el inicio desplaza los horarios con el evento. Acortarlo no recorta
+momentos ni presencia: pide corregir los que queden fuera. Quitar una asignación
+o cambiar requisitos tampoco borra sus horarios en silencio; se revisan antes de
+guardar. Los borradores conservan entradas incompletas, pero no se guardan como
+programaciones válidas hasta completarlas.
+
+El detalle muestra el cronograma y las reservas por persona/equipo. Las citas y
+clases no reciben nuevos formularios; sí respetan estos intervalos al consultar
+disponibilidad. Los requisitos de sesiones existentes siguen congelados aunque
+después se modifique el servicio.
+
+**Despliegue pendiente:** `20261028120000_activity_operational_timeline` se prueba
+solo en PostgreSQL desechable. Antes de habilitarlo en localhost se necesita
+autorización para aplicar esa migración, después regenerar el cliente activo y
+reiniciar el backend. Hasta entonces los controles nuevos explican que falta la
+actualización y la programación anterior sigue funcionando. No se deben invertir
+esos pasos.
+
+No agrega cargos de transporte, anticipos, disponibilidad pública, permisos de
+API, recursos a las páginas compartidas ni integración con DonShot/Infile.
