@@ -140,9 +140,10 @@ omiten el campo no borran los requisitos guardados. La edición usa la revisión
 del perfil existente y las reservas mantienen el bloqueo y recibos de Agenda.
 
 La migración aditiva `20261027120000_service_assignment_requirements` agrega solo
-el campo de requisitos; fue ensayada en PostgreSQL temporal. Su aplicación a la
-base de localhost requiere autorización explícita, seguida de regenerar el cliente
-de datos. Las pruebas optativas `appointments.requirements-*.e2e.js` usan solo una
+el campo de requisitos; fue ensayada en PostgreSQL temporal y aplicada con
+autorización explícita a la base que usa localhost. Se regeneró el cliente de datos,
+se verificó que los datos anteriores permanecieran iguales y se reinició el backend.
+Las pruebas optativas `appointments.requirements-*.e2e.js` usan solo una
 URL explícita local `APPOINTMENTS_REQUIREMENTS_TEST_DATABASE_URL` cuya base se
 llame `auna_requirements_test_*`. Nunca uses la URL de la aplicación.
 

@@ -16,7 +16,8 @@ El archivo original del plan fue editado por el usuario y se conservó intacto.
 - Backend completo: 1,664/1,664; módulos: 97/97.
 - Frontend completo final: 1,486/1,486; TypeScript sin errores y compilación Vite correcta.
   Permanecen avisos anteriores de Browserslist, bundles grandes y SSR en pruebas.
-- Esquema Prisma válido con URL sintética; cliente activo sin regenerar.
+- Esquema Prisma válido con URL sintética. Tras autorizar el despliegue se
+  regeneró el cliente activo y se comprobó una lectura tipada del nuevo campo.
 - Migración en PostgreSQL temporal: 1/1, conserva perfiles, políticas, asignaciones,
   documentos y recibos, comprueba límites del JSON y rollback.
 - Aceptación PostgreSQL: 6/6, dos contrataciones compiten por equipo y solo una
@@ -50,11 +51,23 @@ en `output/playwright`; no hace peticiones de negocio ni necesita credenciales.
 
 ## Despliegue y revisión
 
-La migración `20261027120000_service_assignment_requirements` está implementada y
-verificada, pero **no aplicada a localhost**. Falta la autorización específica
-para aplicarla y regenerar su cliente de datos. No se debe considerar desplegado
-este bloque hasta completar esos pasos. No se crearon registros de negocio en
-la base de la aplicación, no se enviaron facturas ni se contactaron certificadores.
+La migración `20261027120000_service_assignment_requirements` fue **aplicada a la
+base que utiliza localhost con autorización explícita**. Antes de desplegar se
+comprobó que era la única migración pendiente y que las conexiones de aplicación
+y migración apuntaban a la misma base. No se aplicaron cambios ajenos al bloque.
+
+Las huellas de contenido y cantidades de 21 tablas permanecieron iguales antes
+y después, incluyendo perfiles, asignaciones, reservas, contrataciones, documentos,
+ventas, claves y recibos de integración. Los 73 perfiles existentes iniciaron con
+requisitos vacíos; la nueva columna es JSONB no nula con valor predeterminado `[]`.
+El estado posterior de Prisma confirmó todas las migraciones aplicadas.
+
+Se regeneró el cliente activo y una consulta tipada leyó el campo correctamente.
+Se reinició únicamente el backend local mediante su supervisor existente; se
+comprobó un proceso nuevo y `/health` respondió HTTP 200 con conexión a la base.
+No se crearon ventas ni reservas para probar este despliegue, no se enviaron
+facturas y no se contactaron certificadores o DonShot. La aceptación funcional
+autenticada mediante navegador no forma parte de esta comprobación de despliegue.
 
 La revisión independiente encontró dos problemas importantes y uno inicialmente
 menor. Los tres se reprodujeron con pruebas fallidas y se corrigieron en una sola
@@ -110,8 +123,9 @@ intermitencia como corregida por este bloque.
 - Para las clases existentes se cargan asignaciones activas históricas aparte
   del catálogo actual. Costo: una consulta adicional acotada por período para
   servicios de clase; no habilita esas opciones al crear una sesión nueva.
-- La revisión excluyó despliegue y aceptación autenticada hasta la autorización
-  de migración. Costo: el ensayo interactivo no sustituye esa aceptación pendiente.
+- La revisión se realizó antes de autorizar el despliegue, posteriormente aplicado
+  y verificado por separado. Costo: el ensayo interactivo y la comprobación de
+  salud no sustituyen una aceptación funcional autenticada en navegador.
 - La revisión excluyó cambios mixtos ajenos, incluido el helper de moneda anterior.
   Costo: se conservan, pero esta revisión no certifica esos otros cambios.
 
