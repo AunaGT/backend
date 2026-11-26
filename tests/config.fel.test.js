@@ -12,5 +12,8 @@ test('fiscal activation is company-scoped, validated, and does not submit existi
     const saved=jsonResponse();await controller.update({companyId:'company-a',body:{fel_enabled:true,expectedRevisions:{fel_enabled:0}}},saved,e=>{throw e});assert.equal(saved.statusCode,200);assert.equal(rows.get('fel_enabled').value,'true')
     const publicSettings=jsonResponse();await controller.getPublic({companyId:'company-a'},publicSettings,e=>{throw e});assert.equal(publicSettings.body.fel_enabled,'true')
     await controller.update({companyId:'company-a',body:{fel_enabled:false,expectedRevisions:{fel_enabled:1}}},jsonResponse(),e=>{throw e});assert.equal(rows.get('fel_enabled').value,'false')
+    const legal=jsonResponse();await controller.update({companyId:'company-a',body:{company_legal_name:'Emisor ficticio, S.A.',expectedRevisions:{company_legal_name:0}}},legal,e=>{throw e});assert.equal(legal.statusCode,200)
+    const all=jsonResponse();await controller.getAll({companyId:'company-a'},all,e=>{throw e});assert.equal(all.body.company_legal_name,'Emisor ficticio, S.A.')
+    const malformed=jsonResponse();await controller.update({companyId:'company-a',body:{company_legal_name:{private:'value'}}},malformed,e=>{throw e});assert.equal(malformed.statusCode,400)
   })
 })

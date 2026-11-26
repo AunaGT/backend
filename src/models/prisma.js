@@ -54,23 +54,8 @@ if (process.env.DIRECT_URL) {
   console.warn('[prisma] DIRECT_URL not set, transactions will use pooled connection (may fail)')
 }
 
-process.on('SIGINT', async () => {
-  try { 
-    await prisma.$disconnect()
-    if (prismaTransaction !== prisma) {
-      await prismaTransaction.$disconnect()
-    }
-  } catch (e) { /* ignore */ }
-  process.exit(0)
-})
-process.on('SIGTERM', async () => {
-  try { 
-    await prisma.$disconnect()
-    if (prismaTransaction !== prisma) {
-      await prismaTransaction.$disconnect()
-    }
-  } catch (e) { /* ignore */ }
-  process.exit(0)
-})
+async function disconnectPrisma(){
+  await Promise.all([...new Set([prisma,prismaTransaction])].map(client=>client.$disconnect()))
+}
 
-module.exports = { prisma, prismaTransaction }
+module.exports = { prisma, prismaTransaction, disconnectPrisma }

@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: pending claims and unrecovered withdrawals share the refunded original coverage
+ok 1 - pending claims and unrecovered withdrawals share the refunded original coverage
+  ---
+  duration_ms: 2.887245
+  type: 'test'
+  ...
+# Subtest: a recovered closed case releases coverage; invalid and excessive money is rejected
+ok 2 - a recovered closed case releases coverage; invalid and excessive money is rejected
+  ---
+  duration_ms: 0.62255
+  type: 'test'
+  ...
+# Subtest: recovering a lost receipt retires only its free portion and never charges it twice
+ok 3 - recovering a lost receipt retires only its free portion and never charges it twice
+  ---
+  duration_ms: 0.516429
+  type: 'test'
+  ...
+# Subtest: provider recoveries prioritize customer lots proportionally with stable cent remainder
+ok 4 - provider recoveries prioritize customer lots proportionally with stable cent remainder
+  ---
+  duration_ms: 1.23377
+  type: 'test'
+  ...
+# Subtest: forgiven principal is a business loss and is not allocated another customer credit
+ok 5 - forgiven principal is a business loss and is not allocated another customer credit
+  ---
+  duration_ms: 0.280181
+  type: 'test'
+  ...
+# Subtest: a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+ok 6 - a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+  ---
+  duration_ms: 0.762636
+  type: 'test'
+  ...
+# Subtest: an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+ok 7 - an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+  ---
+  duration_ms: 0.292805
+  type: 'test'
+  ...
+# Subtest: attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+ok 8 - attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+  ---
+  duration_ms: 0.662587
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 113.704871

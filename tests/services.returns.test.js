@@ -54,10 +54,10 @@ test('historical service refund approves and settles once with no stock faciliti
   record.sale.status={name:'Completada'}
   const settlements=[]
   // Full transaction boundary for scoped payment availability.
-  const tx={$queryRaw:async()=>[{id:'R'}],return:{findFirst:async()=>record,update:async({data})=>{record={...record,...data,status:{name:data.status_id===2?'Aprobada':'Completada'}};return record}},returnStatus:{findFirst:async({where})=>({id:where.name==='Aprobada'?2:3,name:where.name})},returnItem:{update:async({data})=>Object.assign(record.return_items[0],data)},sale:{update:async({data})=>Object.assign(record.sale,data)},returnSettlement:{findFirst:async()=>settlements[0] || null,create:async({data})=>{const row={id:'settlement',...data};settlements.push(row);return row}},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo'})},cashRegisterSession:{findFirst:async()=>({id:'CS'})}}
+  const tx={$queryRaw:async sql=>String(sql).includes('cash_register_sessions')?[{id:'00000000-0000-4000-8000-000000000001',status:'OPEN',opened_by_id:'U',register_active:true,register_kind:'PHYSICAL'}]:[{id:'R'}],return:{findFirst:async()=>record,update:async({data})=>{record={...record,...data,status:{name:data.status_id===2?'Aprobada':'Completada'}};return record}},returnStatus:{findFirst:async({where})=>({id:where.name==='Aprobada'?2:3,name:where.name})},returnItem:{update:async({data})=>Object.assign(record.return_items[0],data)},sale:{update:async({data})=>Object.assign(record.sale,data)},returnSettlement:{findFirst:async()=>settlements[0] || null,create:async({data})=>{const row={id:'settlement',...data};settlements.push(row);return row}},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo'})},cashRegisterSession:{findFirst:async()=>({id:'CS'})}}
   tx.systemSetting={findUnique:async()=>null}
-  await approveReturn(tx,{id:'R',scope:{branch_id:'B'},companyId:'A',resolution:'REFUND_ORIGINAL',lines:[{return_item_id:1}]})
-  const params={id:'R',scope:{branch_id:'B'},companyId:'A',payload:{idempotency_key:'once',lines:[{return_item_id:1}],settlement:{payment_method_id:1,cash_register_session_id:'CS'}}}
+  await approveReturn(tx,{permissions:['returns.approve'],id:'R',scope:{branch_id:'B'},companyId:'A',resolution:'REFUND_ORIGINAL',lines:[{return_item_id:1}]})
+  const params={permissions:['returns.complete'],id:'R',scope:{branch_id:'B'},companyId:'A',userId:'U',payload:{idempotency_key:'once',lines:[{return_item_id:1}],settlement:{payment_method_id:1,cash_register_session_id:'00000000-0000-4000-8000-000000000001'}}}
   const client={$transaction:fn=>fn(tx)}
   tx.$executeRaw=async()=>0
   tx.companyPaymentMethod={findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Efectivo',is_credit:false}})}

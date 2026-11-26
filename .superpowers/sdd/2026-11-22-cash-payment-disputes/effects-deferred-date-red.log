@@ -1,0 +1,35 @@
+TAP version 13
+# Subtest: a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+not ok 1 - a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+  ---
+  duration_ms: 2670.407628
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    
+    Invalid `prisma.$executeRaw()` invocation:
+    
+    
+    Raw query failed. Code: `P0001`. Message: `ERROR: dispute_accounting_date`
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    ei.handleRequestError (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:124:7283)
+    ei.handleAndLogRequestError (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:124:6608)
+    ei.request (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:124:6315)
+    async a (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:133:9551)
+    async Object.postDisputeEffect (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/services/accounting/cashDisputePosting.js:128:3)
+    async Proxy._transactionWithCallback (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:133:8120)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:42:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2817.880238

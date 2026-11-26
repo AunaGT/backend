@@ -463,10 +463,26 @@ model AppointmentRequest {
 /// proveedores, clientes, contabilidad y sucursales. Los usuarios pueden
 /// pertenecer a varias empresas (UserCompany).
 model Company {
+  cash_physical_movements CashPhysicalMovement[]
+  cash_money_events CashMoneyEvent[]
   commercial_packages CommercialPackage[]
   commercial_package_versions CommercialPackageVersion[]
   commercial_package_branches CommercialPackageBranch[]
   commercial_package_commands CommercialPackageCommand[]
+  integration_identities IntegrationIdentity[]
+  integration_credentials IntegrationCredential[]
+  integration_audits IntegrationAuditEvent[]
+  portal_templates PortalTemplate[]
+  portal_versions PortalTemplateVersion[]
+  portal_defaults PortalTemplateDefault[]
+  portal_assets PortalAsset[]
+  portal_sections PortalSavedSection[]
+  portal_receipts PortalWriteReceipt[]
+  portal_audits PortalAudit[]
+  portal_code_policy PortalCodePolicy?
+  fiscal_connectors FiscalConnector[]
+  fiscal_connector_versions FiscalConnectorVersion[]
+  fiscal_events FiscalEvent[]
   document_templates DocumentTemplate[]
   document_versions DocumentTemplateVersion[]
   document_defaults DocumentTemplateDefault[]
@@ -572,6 +588,7 @@ model CompanyModule {
 
 /// Pertenencia usuario ↔ empresa (N a N). El email del usuario es único global.
 model UserCompany {
+  integration_credentials IntegrationCredential[]
   user_id            String             @db.Uuid
   user               User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
   company_id         String             @db.Uuid
@@ -592,7 +609,16 @@ model UserCompany {
 /// Sucursal. Toda entidad transaccional lleva branch_id; la empresa se deriva
 /// de la sucursal.
 model Branch {
+  cash_physical_movements CashPhysicalMovement[]
+  cash_register_access CashRegisterAccess[]
+  cash_register_commands CashRegisterCommand[]
+  cash_money_events CashMoneyEvent[]
   commercial_packages CommercialPackageBranch[]
+  integration_mutations IntegrationDraftMutation[]
+  integration_operations IntegrationDraftOperation[]
+  integration_credentials IntegrationCredentialBranch[]
+  fiscal_establishments FiscalEstablishment[]
+  fiscal_operations FiscalOperation[]
   document_snapshots DocumentSnapshot[]
   sale_stock_alert_jobs SaleStockAlertJob[]
   employee_deductions EmployeeDeduction[]
@@ -680,6 +706,146 @@ model UserBranch {
 
 /// Stock por sucursal: la verdad para vender. `products.stock` queda como
 /// espejo (suma de sucursales) durante la transición.
+model IntegrationCredential {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  integration_id String @db.Uuid
+  integration IntegrationIdentity @relation(fields: [company_id,integration_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  customer_policy String @default("EXISTING_ONLY") @db.VarChar(24)
+  customer_payment_term_id Int?
+  customerPaymentTerm PaymentTerm? @relation(fields: [company_id,customer_payment_term_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  owner_id String @db.Uuid
+  owner UserCompany @relation(fields: [owner_id, company_id], references: [user_id, company_id], onDelete: Restrict, onUpdate: NoAction)
+  created_by String @db.Uuid
+  name String @db.VarChar(100)
+  public_id String @unique @db.VarChar(32)
+  secret_hash String @db.VarChar(64)
+  scopes String[]
+  created_at DateTime @default(now())
+  expires_at DateTime?
+  revoked_at DateTime?
+  paused_at DateTime?
+  last_used_at DateTime?
+  replaces_id String? @db.Uuid
+  branches IntegrationCredentialBranch[]
+  audits IntegrationAuditEvent[]
+  operations IntegrationDraftOperation[]
+  mutations IntegrationDraftMutation[]
+  @@unique([company_id,id])
+  @@unique([company_id,integration_id,id])
+  @@index([company_id,created_at,id])
+  @@map("integration_credentials")
+}
+
+model IntegrationIdentity {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  created_at DateTime @default(now())
+  credentials IntegrationCredential[]
+  customers IntegrationCustomerReference[]
+  @@unique([company_id,id])
+  @@map("integration_identities")
+}
+
+model IntegrationCustomerReference {
+  company_id String @db.Uuid
+  integration_id String @db.Uuid
+  external_id String @db.VarChar(100)
+  customer_id String @db.Uuid
+  created_at DateTime @default(now())
+  integration IntegrationIdentity @relation(fields: [company_id,integration_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  customer Supplier @relation(fields: [company_id,customer_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  @@id([company_id,integration_id,external_id])
+  @@index([company_id,customer_id])
+  @@map("integration_customer_references")
+}
+
+model IntegrationDraftOperation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  integration_id String @db.Uuid
+  credential_id String @db.Uuid
+  branch_id String @db.Uuid
+  document_id String @unique @db.Uuid
+  type String @db.VarChar(5)
+  request_key String @db.VarChar(100)
+  input_hash String @db.VarChar(64)
+  receipt Json
+  currency_code String @db.VarChar(3)
+  external_reference String? @db.VarChar(100)
+  created_at DateTime @default(now())
+  credential IntegrationCredential @relation(fields: [company_id,integration_id,credential_id], references: [company_id,integration_id,id], onDelete: Restrict, onUpdate: NoAction)
+  branch Branch @relation(fields: [company_id,branch_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  document CommercialDocument @relation(fields: [branch_id,document_id], references: [branch_id,id], onDelete: Restrict, onUpdate: Cascade)
+  mutations IntegrationDraftMutation[]
+  @@unique([company_id,integration_id,document_id], map: "integration_draft_operations_origin_key")
+  @@unique([branch_id,document_id])
+  @@unique([company_id,integration_id,type,request_key])
+  @@index([company_id,integration_id,type,document_id])
+  @@map("integration_draft_operations")
+}
+
+model IntegrationDraftMutation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  integration_id String @db.Uuid
+  credential_id String @db.Uuid
+  branch_id String @db.Uuid
+  document_id String @db.Uuid
+  action String @db.VarChar(12)
+  request_key String @db.VarChar(100)
+  input_hash String @db.VarChar(64)
+  receipt Json
+  created_at DateTime @default(now())
+  credential IntegrationCredential @relation(fields: [company_id,integration_id,credential_id], references: [company_id,integration_id,id], onDelete: Restrict, onUpdate: NoAction)
+  branch Branch @relation(fields: [company_id,branch_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  operation IntegrationDraftOperation @relation(fields: [company_id,integration_id,document_id], references: [company_id,integration_id,document_id], onDelete: Restrict, onUpdate: NoAction)
+  document CommercialDocument @relation(fields: [branch_id,document_id], references: [branch_id,id], onDelete: Restrict, onUpdate: Cascade)
+  @@unique([company_id,integration_id,document_id,action,request_key])
+  @@map("integration_draft_mutations")
+}
+
+model IntegrationCredentialBranch {
+  company_id String @db.Uuid
+  credential_id String @db.Uuid
+  branch_id String @db.Uuid
+  credential IntegrationCredential @relation(fields: [company_id,credential_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  branch Branch @relation(fields: [company_id,branch_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  @@id([company_id,credential_id,branch_id])
+  @@map("integration_credential_branches")
+}
+
+model IntegrationAuditEvent {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  credential_id String @db.Uuid
+  credential IntegrationCredential @relation(fields: [company_id,credential_id], references: [company_id,id], onDelete: Restrict, onUpdate: NoAction)
+  actor_id String? @db.Uuid
+  branch_id String? @db.Uuid
+  action String @db.VarChar(16)
+  route String? @db.VarChar(60)
+  status Int?
+  request_id String? @db.Uuid
+  metadata Json @default("{}")
+  created_at DateTime @default(now())
+  @@index([company_id,credential_id,created_at,id])
+  @@index([company_id,created_at,id])
+  @@index([action,created_at,id])
+  @@map("integration_audit_events")
+}
+
+model IntegrationRateWindow {
+  bucket String @db.VarChar(80)
+  window_at DateTime
+  count Int @default(0)
+  @@id([bucket,window_at])
+  @@index([window_at])
+  @@map("integration_rate_windows")
+}
+
 model ProductStock {
   id         String  @id @default(uuid()) @db.Uuid
   product_id String  @db.Uuid
@@ -964,6 +1130,9 @@ model CompanyPaymentMethod {
 }
 
 model PaymentMethod {
+  cash_physical_movements CashPhysicalMovement[]
+  opening_cash_sessions CashRegisterSession[] @relation("OpeningCashMethod")
+  cash_money_events CashMoneyEvent[]
   company_id String? @db.Uuid
   company Company? @relation("CompanyOwnedPaymentMethods", fields: [company_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "payment_method_owner_fk")
   base_code String? @unique @db.VarChar(20)
@@ -1021,6 +1190,7 @@ model ReturnStatus {
 }
 
 model PaymentTerm {
+  integration_credentials IntegrationCredential[]
   id                     Int                   @id @default(autoincrement())
   company_id             String                @db.Uuid
   company                Company               @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -1032,6 +1202,7 @@ model PaymentTerm {
   incoming_merchandise   IncomingMerchandise[]
 
   @@unique([company_id, name])
+  @@unique([company_id, id])
   @@map("payment_terms")
 }
 
@@ -1089,6 +1260,7 @@ enum SalesChannel {
 }
 
 model Supplier {
+  integration_references IntegrationCustomerReference[]
   supplier_payments SupplierPayment[]
   appointment_engagements AppointmentEngagement[]
   id                     String                @id @default(uuid()) @db.Uuid
@@ -1410,6 +1582,11 @@ model RolePermission {
 }
 
 model User {
+  cash_physical_movements CashPhysicalMovement[]
+  cash_register_access CashRegisterAccess[] @relation("CashRegisterAccessUser")
+  cash_register_access_created CashRegisterAccess[] @relation("CashRegisterAccessCreator")
+  cash_register_commands CashRegisterCommand[]
+  cash_money_events CashMoneyEvent[]
   commercial_packages CommercialPackage[]
   commercial_package_versions CommercialPackageVersion[]
   commercial_package_commands CommercialPackageCommand[]
@@ -1561,6 +1738,8 @@ model Alert {
 }
 
 model Sale {
+  cash_money_events CashMoneyEvent[]
+  event_payment_terms Json?
   package_groups Json?
   document_snapshots DocumentSnapshot[]
   stock_alert_job SaleStockAlertJob?
@@ -1675,7 +1854,11 @@ enum StockReservationKind {
 }
 
 model CommercialDocument {
+  event_payment_terms Json?
   package_groups Json?
+  integration_revision String @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  integration_mutations IntegrationDraftMutation[]
+  integration_operation IntegrationDraftOperation?
   unit_metadata_version Int @default(1)
   quoted_engagement AppointmentEngagement? @relation("EngagementQuote")
   ordered_engagement AppointmentEngagement? @relation("EngagementOrder")
@@ -2060,6 +2243,9 @@ enum SupplierPaymentStatus {
 }
 
 model SupplierPayment {
+  cash_money_events CashMoneyEvent[]
+  cash_register_session_id String? @db.Uuid
+  cashRegisterSession CashRegisterSession? @relation(fields: [cash_register_session_id], references: [id], onDelete: Restrict)
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
   company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
@@ -2086,6 +2272,7 @@ model SupplierPayment {
   cancel_reason String? @db.VarChar(500)
   applications IncomingMerchandisePaymentEntry[]
   @@unique([company_id, registered_by, request_key])
+  @@index([cash_register_session_id])
   @@index([company_id, supplier_id, paid_at(sort: Desc)])
   @@index([branch_id, paid_at(sort: Desc)])
   @@map("supplier_payments")
@@ -2118,6 +2305,10 @@ model MerchandisePaymentAuditEvent {
 /// Espejo de IncomingMerchandisePaymentEntry, pero con un padre porque el cliente
 /// paga «a cuenta» un monto que cruza varias facturas y se le entrega un recibo.
 model CustomerPayment {
+  cash_money_events CashMoneyEvent[]
+  request_key String? @db.Uuid
+  request_hash String? @db.VarChar(64)
+  @@unique([branch_id, registered_by, request_key], map: "customer_payment_request_key")
   commitments PaymentCommitment[]
   allocation_events PaymentAllocationEvent[]
   refunds CustomerPaymentRefund[]
@@ -2268,6 +2459,7 @@ model ReturnReplacementItem {
 }
 
 model ReturnSettlement {
+  cash_money_events CashMoneyEvent[]
   receipt_allocations PaymentAllocationEvent[]
   id                       String               @id @default(uuid()) @db.Uuid
   return_id                String               @db.Uuid
@@ -2294,7 +2486,143 @@ model ReturnSettlement {
 // ========================================
 
 /// Punto de cobro físico o lógico (hoy: una caja «Principal» por defecto; preparado para multi-caja).
+model CashPhysicalMovement {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  cash_register_id String @db.Uuid
+  cashRegister CashRegister @relation(fields: [branch_id, cash_register_id], references: [branch_id, id], onDelete: Restrict)
+  cash_register_session_id String @db.Uuid
+  cashRegisterSession CashRegisterSession @relation(fields: [cash_register_id, cash_register_session_id], references: [cash_register_id, id], onDelete: Restrict)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  direction String @db.VarChar(3)
+  amount Decimal @db.Decimal(12, 2)
+  payment_method_id Int
+  paymentMethod PaymentMethod @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
+  payment_method_name String @db.VarChar(100)
+  currency_code String @db.VarChar(3)
+  economic_at DateTime @default(now()) @db.Timestamptz(3)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  reason String @db.VarChar(500)
+  counterparty_label String @db.VarChar(120)
+  reference String? @db.VarChar(255)
+  corrects_movement_id String? @unique @db.Uuid
+  original CashPhysicalMovement? @relation("CashMovementCorrection", fields: [corrects_movement_id], references: [id], onDelete: Restrict)
+  correction CashPhysicalMovement? @relation("CashMovementCorrection")
+  events CashMoneyEvent[]
+  @@unique([company_id, branch_id, actor_id, request_key])
+  @@index([company_id, branch_id, created_at, id], map: "cash_physical_movements_scope_date")
+  @@index([cash_register_session_id], map: "cash_physical_movements_session")
+  @@map("cash_physical_movements")
+}
+
+model CashMoneyEvent {
+  physical_movement_id String? @db.Uuid
+  /// 3B.2: asiento de custodia dentro de un turno abierto (FK y guardas en la migración 20261031100000_cash_custody).
+  custody_entry_id String? @db.Uuid
+  physicalMovement CashPhysicalMovement? @relation(fields: [physical_movement_id], references: [id], onDelete: Restrict)
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields: [company_id], references: [id], onDelete: Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields: [company_id, branch_id], references: [company_id, id], onDelete: Restrict)
+  cash_register_id String @db.Uuid
+  cashRegister CashRegister @relation(fields: [branch_id, cash_register_id], references: [branch_id, id], onDelete: Restrict)
+  cash_register_session_id String @db.Uuid
+  cashRegisterSession CashRegisterSession @relation(fields: [cash_register_id, cash_register_session_id], references: [cash_register_id, id], onDelete: Restrict)
+  source_type String @db.VarChar(30)
+  source_id String @db.Uuid
+  direction String @db.VarChar(3)
+  amount Decimal @db.Decimal(12, 2)
+  payment_method_id Int
+  paymentMethod PaymentMethod @relation(fields: [payment_method_id], references: [id], onDelete: Restrict)
+  payment_method_name String @db.VarChar(100)
+  settlement_kind String @db.VarChar(4)
+  currency_code String @db.VarChar(3)
+  actor_id String @db.Uuid
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  economic_at DateTime @db.Timestamptz(3)
+  recorded_at DateTime @default(now()) @db.Timestamptz(3)
+  reference String? @db.VarChar(255)
+  content_hash String @db.VarChar(64)
+  sale_id String? @db.Uuid
+  sale Sale? @relation(fields: [sale_id], references: [id], onDelete: Restrict)
+  customer_payment_id String? @db.Uuid
+  customerPayment CustomerPayment? @relation(fields: [customer_payment_id], references: [id], onDelete: Restrict)
+  customer_payment_refund_id String? @db.Uuid
+  customerPaymentRefund CustomerPaymentRefund? @relation(fields: [customer_payment_refund_id], references: [id], onDelete: Restrict)
+  return_settlement_id String? @db.Uuid
+  returnSettlement ReturnSettlement? @relation(fields: [return_settlement_id], references: [id], onDelete: Restrict)
+  supplier_payment_id String? @db.Uuid
+  supplierPayment SupplierPayment? @relation(fields: [supplier_payment_id], references: [id], onDelete: Restrict)
+  @@unique([source_type, source_id], map: "cash_money_event_origin_key")
+  @@index([company_id, branch_id, recorded_at])
+  @@index([cash_register_session_id, recorded_at])
+  @@map("cash_money_events")
+}
+
+enum CashRegisterType {
+  PHYSICAL
+  VIRTUAL
+}
+
+enum CashRegisterOperationMode {
+  INDIVIDUAL
+  SHARED
+}
+
+model CashRegisterAccess {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  register_id String @db.Uuid
+  user_id String @db.Uuid
+  active Boolean @default(true)
+  created_by String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  branch Branch @relation(fields: [company_id,branch_id], references: [company_id,id], onDelete: Restrict)
+  register CashRegister @relation(fields: [branch_id,register_id], references: [branch_id,id], onDelete: Restrict)
+  user User @relation("CashRegisterAccessUser", fields: [user_id], references: [id], onDelete: Restrict)
+  creator User @relation("CashRegisterAccessCreator", fields: [created_by], references: [id], onDelete: Restrict)
+  @@unique([register_id,user_id])
+  @@index([company_id,branch_id,user_id,active], map: "cash_register_access_scope_user")
+  @@map("cash_register_access")
+}
+
+model CashRegisterCommand {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  action String @db.VarChar(20)
+  register_id String @db.Uuid
+  before_snapshot Json?
+  after_snapshot Json
+  result_snapshot Json
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  branch Branch @relation(fields: [company_id,branch_id], references: [company_id,id], onDelete: Restrict)
+  register CashRegister @relation(fields: [branch_id,register_id], references: [branch_id,id], onDelete: Restrict)
+  actor User @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  @@unique([company_id,branch_id,actor_id,request_key])
+  @@index([register_id,created_at], map: "cash_register_commands_register_date")
+  @@map("cash_register_commands")
+}
+
 model CashRegister {
+  cash_physical_movements CashPhysicalMovement[]
+  access_control_version Int @default(0)
+  access CashRegisterAccess[]
+  commands CashRegisterCommand[]
+  cash_money_events CashMoneyEvent[]
+  money_event_version Int @default(0)
   hardware_workstations HardwareWorkstation[]
   id         String   @id @default(uuid()) @db.Uuid
   branch_id  String   @db.Uuid
@@ -2303,6 +2631,10 @@ model CashRegister {
   code       String   @db.VarChar(40)
   is_default Boolean  @default(false)
   active     Boolean  @default(true)
+  kind CashRegisterType @default(PHYSICAL)
+  operation_mode CashRegisterOperationMode @default(INDIVIDUAL)
+  currency_code String? @db.VarChar(3)
+  revision Int @default(1)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -2525,6 +2857,15 @@ enum CashRegisterSessionStatus {
 
 /// Apertura de caja: una sesión OPEN por caja (índice único parcial en migración SQL).
 model CashRegisterSession {
+  cash_physical_movements CashPhysicalMovement[]
+  cash_money_events CashMoneyEvent[]
+  supplier_payments SupplierPayment[]
+  money_event_version Int @default(0)
+  business_timezone String? @db.VarChar(100)
+  opening_cash_method_id Int?
+  opening_cash_method_name String? @db.VarChar(100)
+  openingCashMethod PaymentMethod? @relation("OpeningCashMethod", fields: [opening_cash_method_id], references: [id], onDelete: Restrict)
+  @@unique([cash_register_id, id], map: "cash_session_register_identity_key")
   drawerIntents HardwareDrawerIntent[]
   customer_payment_refunds CustomerPaymentRefund[]
   id               String       @id @default(uuid()) @db.Uuid
@@ -2540,6 +2881,14 @@ model CashRegisterSession {
   closedBy     User?                     @relation("CashSessionClosedBy", fields: [closed_by_id], references: [id], onDelete: SetNull)
 
   opening_float Decimal @db.Decimal(12, 2)
+  /// 3B.2: fondo retenido heredado y consumido al abrir; opening_float es lo contado.
+  opening_inherited_amount Decimal? @db.Decimal(12, 2)
+  /// NULL en turnos anteriores: no inferir moneda/fecha operativa del historial.
+  register_type CashRegisterType?
+  operation_mode CashRegisterOperationMode?
+  currency_code String? @db.VarChar(3)
+  business_date DateTime? @db.Date
+  revision Int @default(1)
   notes         String? @db.Text
 
   cash_closure_id String?      @unique @db.Uuid
@@ -2562,6 +2911,7 @@ model CashRegisterSession {
 // ========================================
 
 model CashClosure {
+  calculation_snapshot Json?
   id             String   @id @default(uuid()) @db.Uuid
   /// Directo (no vía sesión) porque hay cierres legacy sin sesión de caja
   branch_id      String   @db.Uuid
@@ -2654,6 +3004,65 @@ model CashClosurePayment {
   @@index([cash_closure_id])
   @@index([payment_method_id])
   @@map("cash_closure_payments")
+}
+
+// Foreign keys, immutable documents and decision transitions are enforced by the additive SQL migration.
+model CashClosureCorrection {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  closure_id String @db.Uuid
+  previous_correction_id String? @db.Uuid
+  status String @default("PENDING")
+  sequence Int?
+  currency_code String
+  reason String
+  accounting_date DateTime @db.Date
+  proposed_by_id String @db.Uuid
+  proposed_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @default(now()) @db.Timestamptz
+  base_key String
+  content_hash String
+  denominations Json @default("[]")
+  decided_by_id String? @db.Uuid
+  decided_at DateTime? @db.Timestamptz
+  decision_reason String?
+  self_review Boolean @default(false)
+  policy_snapshot Json?
+  accounting_status String @default("DEFERRED")
+  journal_entry_id String? @unique @db.Uuid
+  cash_account_id Int?
+  difference_account_id Int?
+  @@unique([closure_id,sequence])
+  @@index([company_id,branch_id,closure_id,proposed_at(sort: Desc),id], map:"cash_correction_parent")
+  @@map("cash_closure_corrections")
+}
+model CashClosureCorrectionLine {
+  correction_id String @db.Uuid
+  closure_payment_id Int
+  payment_method_id Int
+  payment_method_name String
+  settlement_kind String
+  original_expected Decimal @db.Decimal(12,2)
+  previous_actual Decimal @db.Decimal(12,2)
+  corrected_actual Decimal @db.Decimal(12,2)
+  delta Decimal @db.Decimal(13,2)
+  corrected_difference Decimal @db.Decimal(13,2)
+  @@id([correction_id,closure_payment_id])
+  @@map("cash_closure_correction_lines")
+}
+model CashClosureCorrectionCommand {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  actor_id String @db.Uuid
+  correction_id String @db.Uuid
+  action String
+  request_key String @db.Uuid
+  content_hash String
+  result Json
+  created_at DateTime @default(now()) @db.Timestamptz
+  @@unique([company_id,actor_id,action,request_key])
+  @@map("cash_closure_correction_commands")
 }
 
 model CashClosureDenomination {
@@ -2924,6 +3333,127 @@ model InventoryCountLine {
 // Configuración del sistema (módulo Configuración)
 // ========================================
 
+model PortalTemplate {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  name String @db.VarChar(150)
+  document_type String @db.VarChar(10)
+  state String @default("ACTIVE") @db.VarChar(20)
+  revision Int @default(1)
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  versions PortalTemplateVersion[]
+  assets PortalAsset[]
+  @@unique([company_id,id])
+  @@index([company_id,state,updated_at,id])
+  @@map("portal_templates")
+}
+
+model PortalTemplateVersion {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  template_id String @db.Uuid
+  template PortalTemplate @relation(fields:[company_id,template_id],references:[company_id,id],onDelete:Restrict)
+  number Int
+  state String @default("DRAFT") @db.VarChar(20)
+  renderer_version Int @default(1)
+  design Json
+  design_hash String @db.VarChar(64)
+  code_hash String @db.VarChar(64)
+  custom_artifacts Json @default("{}")
+  acknowledged_code_hash String? @db.VarChar(64)
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  published_at DateTime?
+  defaults PortalTemplateDefault[]
+  @@unique([company_id,id])
+  @@unique([company_id,template_id,number])
+  @@map("portal_template_versions")
+}
+
+model PortalTemplateDefault {
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  document_type String @db.VarChar(10)
+  version_id String @db.Uuid
+  version PortalTemplateVersion @relation(fields:[company_id,version_id],references:[company_id,id],onDelete:Restrict)
+  @@id([company_id,document_type])
+  @@map("portal_template_defaults")
+}
+
+model PortalAsset {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  template_id String @db.Uuid
+  template PortalTemplate @relation(fields:[company_id,template_id],references:[company_id,id],onDelete:Restrict)
+  path String @unique @db.VarChar(500)
+  sha256 String @db.VarChar(64)
+  width Int
+  height Int
+  bytes Int
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  @@unique([company_id,id])
+  @@index([company_id,template_id,created_at])
+  @@map("portal_assets")
+}
+
+model PortalSavedSection {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  name String @db.VarChar(150)
+  document_type String @db.VarChar(10)
+  design Json
+  revision Int @default(1)
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  @@unique([company_id,id])
+  @@index([company_id,created_at])
+  @@map("portal_saved_sections")
+}
+
+model PortalWriteReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  actor_id String @db.Uuid
+  request_id String @db.Uuid
+  input_hash String @db.VarChar(64)
+  result Json
+  created_at DateTime @default(now())
+  @@unique([company_id,actor_id,request_id])
+  @@map("portal_write_receipts")
+}
+
+model PortalAudit {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  actor_id String @db.Uuid
+  template_id String @db.Uuid
+  action String @db.VarChar(30)
+  revision Int
+  design_hash String? @db.VarChar(64)
+  created_at DateTime @default(now())
+  @@index([company_id,template_id,created_at])
+  @@map("portal_audits")
+}
+
+model PortalCodePolicy {
+  company_id String @id @db.Uuid
+  company Company @relation(fields:[company_id],references:[id],onDelete:Restrict)
+  enabled Boolean @default(false)
+  revision Int @default(1)
+  updated_by String @db.Uuid
+  updated_at DateTime @updatedAt
+  @@map("portal_code_policies")
+}
+
 model DocumentTemplate {
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
@@ -3063,6 +3593,139 @@ model DocumentEvent {
   @@map("document_events")
 }
 
+model FiscalConnector {
+  operations FiscalOperation[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  provider String @default("INFILE") @db.VarChar(30)
+  environment String @db.VarChar(20)
+  state String @default("DRAFT") @db.VarChar(30)
+  revision Int @default(1)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  versions FiscalConnectorVersion[]
+  events FiscalEvent[]
+  @@unique([company_id,provider,environment], map:"fiscal_connector_identity")
+  @@unique([company_id,id,environment])
+  @@map("fiscal_connectors")
+}
+
+model FiscalConnectorVersion {
+  operations FiscalOperation[]
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  connector_id String @db.Uuid
+  environment String @db.VarChar(20)
+  connector FiscalConnector @relation(fields:[company_id,connector_id,environment], references:[company_id,id,environment], onDelete:Restrict)
+  number Int
+  credentials Json?
+  endpoints Json @default("{}")
+  profile Json?
+  establishments FiscalEstablishment[]
+  contract_id String @default("infile-unified-offline-v1") @db.VarChar(80)
+  created_by String @db.Uuid
+  created_at DateTime @default(now())
+  @@unique([company_id,connector_id,number])
+  @@unique([company_id,id,environment])
+  @@map("fiscal_connector_versions")
+}
+
+model FiscalEstablishment {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  connector_version_id String @db.Uuid
+  environment String @db.VarChar(20)
+  connector_version FiscalConnectorVersion @relation(fields:[company_id,connector_version_id,environment], references:[company_id,id,environment], onDelete:Restrict)
+  branch_id String @db.Uuid
+  branch Branch @relation(fields:[company_id,branch_id], references:[company_id,id], onDelete:Restrict)
+  data Json
+  @@unique([connector_version_id,branch_id])
+  @@index([company_id,branch_id])
+  @@map("fiscal_establishments")
+}
+
+model FiscalEvent {
+  operation_id String? @db.Uuid
+  operation FiscalOperation? @relation(fields:[company_id,connector_id,environment,operation_id],references:[company_id,connector_id,environment,id],onDelete:Restrict,onUpdate:NoAction)
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  company Company @relation(fields:[company_id], references:[id], onDelete:Restrict)
+  connector_id String @db.Uuid
+  environment String @db.VarChar(20)
+  connector FiscalConnector @relation(fields:[company_id,connector_id,environment], references:[company_id,id,environment], onDelete:Restrict)
+  actor_id String @db.Uuid
+  action String @db.VarChar(40)
+  request_key String @db.VarChar(64)
+  input_hash String @db.VarChar(64)
+  hash_key_id String @db.VarChar(40)
+  result Json
+  created_at DateTime @default(now())
+  @@unique([company_id,actor_id,action,request_key], map:"fiscal_event_request_identity")
+  @@index([company_id,environment,created_at,id])
+  @@map("fiscal_events")
+}
+
+model FiscalOperation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  connector_id String @db.Uuid
+  connector_version_id String @db.Uuid
+  environment String @default("TEST") @db.VarChar(20)
+  mode String @default("LOCAL_SIMULATION") @db.VarChar(30)
+  action String @default("ISSUE") @db.VarChar(20)
+  source_key String @db.Uuid
+  created_by String @db.Uuid
+  identifier String @unique @db.VarChar(64)
+  snapshot Json
+  snapshot_sha256 String @db.VarChar(64)
+  xml_bytes Bytes?
+  xml_sha256 String? @db.VarChar(64)
+  state String @default("QUEUED") @db.VarChar(20)
+  revision Int @default(1)
+  attempt_count Int @default(0)
+  local_failures Int @default(0)
+  accepted_attempt_id String? @db.Uuid
+  result Json?
+  error_code String? @db.VarChar(64)
+  available_at DateTime @default(now())
+  lease_token String? @db.Uuid
+  lease_until DateTime?
+  worker_id String? @db.VarChar(80)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  connector FiscalConnector @relation(fields:[company_id,connector_id,environment],references:[company_id,id,environment],onDelete:Restrict,onUpdate:NoAction)
+  connector_version FiscalConnectorVersion @relation(fields:[company_id,connector_version_id,environment],references:[company_id,id,environment],onDelete:Restrict,onUpdate:NoAction)
+  branch Branch @relation(fields:[company_id,branch_id],references:[company_id,id],onDelete:Restrict,onUpdate:NoAction)
+  attempts FiscalAttempt[] @relation("OperationAttempts")
+  accepted_attempt FiscalAttempt? @relation("AcceptedAttempt",fields:[company_id,id,accepted_attempt_id],references:[company_id,operation_id,id],onDelete:Restrict,onUpdate:NoAction)
+  events FiscalEvent[]
+  @@unique([company_id,branch_id,action,source_key])
+  @@unique([company_id,id])
+  @@unique([company_id,connector_id,environment,id])
+  @@map("fiscal_operations")
+}
+
+model FiscalAttempt {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  operation_id String @db.Uuid
+  number Int
+  kind String @db.VarChar(20)
+  lease_token String @db.Uuid
+  started_at DateTime @default(now())
+  finished_at DateTime?
+  outcome String? @db.VarChar(30)
+  inbox Json?
+  operation FiscalOperation @relation("OperationAttempts",fields:[company_id,operation_id],references:[company_id,id],onDelete:Restrict,onUpdate:NoAction)
+  acceptedBy FiscalOperation[] @relation("AcceptedAttempt")
+  @@unique([operation_id,number])
+  @@unique([company_id,operation_id,id])
+  @@map("fiscal_attempts")
+}
+
 model SystemSetting {
   id          Int      @id @default(autoincrement())
   company_id  String   @db.Uuid
@@ -3134,6 +3797,10 @@ enum AccountingPeriodStatus {
 }
 
 enum JournalSourceType {
+  CASH_DISPUTE_EFFECT
+  CASH_DISPUTE_DISPOSITION
+  CASH_DISPUTE_ADJUSTMENT
+  CASH_CLOSURE_CORRECTION
   MANUAL
   SALE
   RETURN
@@ -3158,6 +3825,8 @@ enum JournalSourceType {
   CUSTOMER_ADVANCE
   CUSTOMER_ADVANCE_APPLIED
   CUSTOMER_PAYMENT_REFUND
+  /// Liquidación de cobros diferidos (4B): banco por el neto, deducciones y transitoria. Al final por ADD VALUE.
+  CASH_SETTLEMENT
 }
 
 /// Cuenta contable (catálogo). `is_group` = agrupadora, no recibe movimientos.
@@ -3660,6 +4329,8 @@ model EmployeeDeduction {
 }
 
 model AppointmentEngagement {
+  event_payment_terms Json?
+  event_payment_reference Json?
   package_groups Json?
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
@@ -3804,6 +4475,7 @@ model PaymentAllocationEvent {
 }
 
 model CustomerPaymentRefund {
+  cash_money_events CashMoneyEvent[]
   id String @id @default(uuid()) @db.Uuid
   company_id String @db.Uuid
   branch_id String @db.Uuid
@@ -3851,4 +4523,438 @@ model AppointmentEngagementHistory {
   @@unique([engagement_id, request_key, action], map: "engagement_history_attempt_key")
   @@index([company_id, engagement_id, created_at])
   @@map("appointment_engagement_history")
+}
+
+/// 3B.2 — custodia de efectivo fuera de turno. Relaciones, saldo no negativo e inmutabilidad
+/// viven en la migración 20261031100000_cash_custody; el código usa SQL parametrizado.
+model CashCustody {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  name String @db.VarChar(120)
+  currency_code String @db.VarChar(3)
+  active Boolean @default(true)
+  created_by_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([branch_id, id])
+  @@map("cash_custodies")
+}
+model CashTurnHandover {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  cash_register_id String @db.Uuid
+  cash_register_session_id String @unique @db.Uuid
+  actor_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  delivered_amount Decimal @db.Decimal(12, 2)
+  retained_amount Decimal @db.Decimal(12, 2)
+  expected_cash Decimal? @db.Decimal(12, 2)
+  currency_code String @db.VarChar(3)
+  destination_custody_id String? @db.Uuid
+  notes String? @db.VarChar(500)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id, branch_id, actor_id, request_key])
+  @@map("cash_turn_handovers")
+}
+model CashCustodyTransfer {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  sender_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  origin_kind String @db.VarChar(10)
+  origin_custody_id String? @db.Uuid
+  origin_register_id String? @db.Uuid
+  origin_session_id String? @db.Uuid
+  destination_kind String @db.VarChar(10)
+  destination_custody_id String? @db.Uuid
+  destination_register_id String? @db.Uuid
+  amount Decimal @db.Decimal(12, 2)
+  currency_code String @db.VarChar(3)
+  reason String @db.VarChar(500)
+  reference String? @db.VarChar(255)
+  status String @default("PENDING") @db.VarChar(10)
+  received_amount Decimal? @db.Decimal(12, 2)
+  receiver_id String? @db.Uuid
+  received_at DateTime? @db.Timestamptz(3)
+  receipt_reason String? @db.VarChar(500)
+  returns_transfer_id String? @unique @db.Uuid
+  handover_id String? @unique @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id, branch_id, sender_id, request_key])
+  @@map("cash_custody_transfers")
+}
+model CashCustodyEntry {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  holder_kind String @db.VarChar(8)
+  custody_id String? @db.Uuid
+  cash_register_id String? @db.Uuid
+  cash_register_session_id String? @db.Uuid
+  direction String @db.VarChar(3)
+  amount Decimal @db.Decimal(12, 2)
+  currency_code String @db.VarChar(3)
+  actor_id String @db.Uuid
+  payment_method_id Int?
+  payment_method_name String? @db.VarChar(100)
+  leg String @db.VarChar(8)
+  transfer_id String? @db.Uuid
+  handover_id String? @unique @db.Uuid
+  opening_session_id String? @unique @db.Uuid
+  economic_at DateTime @default(now()) @db.Timestamptz(3)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([transfer_id, leg])
+  @@map("cash_custody_entries")
+}
+
+/// 3C — política de diferencias y revisión auditada. Índice único por alcance, transiciones e inmutabilidad
+/// viven en la migración 20261101100000_cash_review; el código usa SQL parametrizado.
+/// Las columnas nuevas de cash_closures (review_flow_version, supersedes_closure_id, policy_snapshot, review_result,
+/// review_classification) y cash_custody_transfers.self_received no se declaran: el cliente generado las
+/// seleccionaría siempre y el código desplegado antes de la migración rompería toda consulta de arqueos.
+model CashDifferencePolicy {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String? @db.Uuid
+  cash_threshold Decimal @default(0) @db.Decimal(12, 2)
+  digital_threshold Decimal @default(0) @db.Decimal(12, 2)
+  blind_count Boolean @default(false)
+  owner_self_review Boolean @default(false)
+  revision Int @default(1)
+  updated_by_id String @db.Uuid
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  @@map("cash_difference_policies")
+}
+model CashClosureReview {
+  id String @id @default(uuid()) @db.Uuid
+  cash_closure_id String @db.Uuid
+  action String @db.VarChar(24)
+  reason String? @db.VarChar(1000)
+  actor_id String @db.Uuid
+  self_review Boolean @default(false)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([cash_closure_id, action])
+  @@map("cash_closure_reviews")
+}
+/// 4A — aviso de pago informado por el cliente; no es dinero hasta confirmarse en un período de caja virtual.
+/// Guardas, transiciones y evidencia por empresa viven en la migración 20261102100000_cash_payment_notices; el código usa SQL parametrizado.
+model CashPaymentNotice {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  amount Decimal @db.Decimal(12, 2)
+  currency_code String @db.VarChar(3)
+  payment_method_id Int
+  reported_paid_on DateTime @db.Date
+  reported_reference String? @db.VarChar(120)
+  link_kind String? @db.VarChar(10)
+  link_id String? @db.Uuid
+  notes String? @db.VarChar(1000)
+  created_by_id String @db.Uuid
+  request_key String @db.Uuid
+  request_hash String @db.VarChar(64)
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  status String @default("PENDING") @db.VarChar(10)
+  customer_payment_id String? @unique @db.Uuid
+  confirmed_by_id String? @db.Uuid
+  confirmed_at DateTime? @db.Timestamptz(3)
+  paid_on DateTime? @db.Date
+  external_reference String? @db.VarChar(120)
+  verification_id String? @db.VarChar(120)
+  evidence_path String? @db.VarChar(300)
+  attested Boolean?
+  cash_register_session_id String? @db.Uuid
+  rejected_by_id String? @db.Uuid
+  rejected_at DateTime? @db.Timestamptz(3)
+  rejection_reason String? @db.VarChar(1000)
+  @@unique([company_id, branch_id, created_by_id, request_key])
+  @@map("cash_payment_notices")
+}
+
+/// 4B — versiones de configuración de un medio bancario (DIRECT/DEFERRED); el gestor propone y solo el admin aprueba.
+/// Guardas, transiciones y la clasificación congelada por evento viven en la migración 20261103100000_cash_bank_settlements.
+model CashBankMethodVersion {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  payment_method_id Int
+  version Int
+  mode String @db.VarChar(8)
+  destination_label String @db.VarChar(150)
+  bank_account_id Int?
+  clearing_account_id Int?
+  fee_account_id Int?
+  base_version_id String? @db.Uuid
+  status String @default("PROPOSED") @db.VarChar(10)
+  proposed_by_id String @db.Uuid
+  proposed_at DateTime @default(now()) @db.Timestamptz(3)
+  decided_by_id String? @db.Uuid
+  decided_at DateTime? @db.Timestamptz(3)
+  decision_reason String? @db.VarChar(500)
+  @@unique([company_id, payment_method_id, version])
+  @@map("cash_bank_method_versions")
+}
+model CashBankMethodSetting {
+  company_id String @db.Uuid
+  payment_method_id Int
+  active_version_id String @unique @db.Uuid
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  @@id([company_id, payment_method_id])
+  @@map("cash_bank_method_settings")
+}
+model CashBankEventMode {
+  event_id String @id @db.Uuid
+  version_id String @db.Uuid
+  mode String @db.VarChar(8)
+  account_id Int?
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@map("cash_bank_event_modes")
+}
+
+/// 5 — consolidación diaria por sucursal y fecha operativa: instantánea inmutable del día; no mueve dinero ni crea asientos.
+/// Guardas (sin turnos operando ni arqueos pendientes, inmutable) en la migración 20261104100000_cash_daily_consolidation.
+model CashDailyConsolidation {
+  id String @id @default(uuid()) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  business_date DateTime @db.Date
+  content_hash String @db.VarChar(64)
+  snapshot Json
+  finalized_by_id String @db.Uuid
+  finalized_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id, branch_id, business_date])
+  @@map("cash_daily_consolidations")
+}
+
+
+// Disputas: documentos nuevos; las FKs de alcance e inmutabilidad viven en la migración.
+model CashPaymentDispute {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  event_id String @db.Uuid
+  customer_id String? @db.Uuid
+  payment_method_id Int
+  currency_code String @db.VarChar(3)
+  claimed Decimal @db.Decimal(12,2)
+  provider_reference String @db.VarChar(120)
+  provider_reference_key String @db.VarChar(240)
+  replaces_dispute_id String? @unique @db.Uuid
+  reason String @db.VarChar(1000)
+  deadline DateTime? @db.Date
+  status String @default("OPEN") @db.VarChar(24)
+  version Int @default(1)
+  won Decimal @default(0) @db.Decimal(12,2)
+  lost Decimal @default(0) @db.Decimal(12,2)
+  created_by_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  // The active-reference unique index is partial and lives in the guarded migration.
+  @@index([company_id,payment_method_id,provider_reference_key],map:"cash_dispute_provider_reference_lookup")
+  @@unique([company_id,branch_id,id],map:"cash_dispute_scope_key")
+  @@index([event_id])
+  @@index([company_id,branch_id,created_at(sort:Desc)])
+  @@map("cash_payment_disputes")
+}
+model CashDisputeEvent {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dispute_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  kind String @db.VarChar(32)
+  principal Decimal @default(0) @db.Decimal(12,2)
+  fee Decimal @default(0) @db.Decimal(12,2)
+  reference String? @db.VarChar(255)
+  evidence Json @default("{}")
+  payload Json @default("{}")
+  economic_on DateTime? @db.Date
+  accounting_on DateTime? @db.Date
+  accounting_reason String? @db.VarChar(1000)
+  reversal_of_id String? @db.Uuid
+  settlement_id String? @db.Uuid
+  deduction_id String? @unique @db.Uuid
+  journal_entry_id String? @db.Uuid
+  accounting_status String @default("DEFERRED") @db.VarChar(16)
+  actor_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id,branch_id,dispute_id,id],map:"cash_dispute_event_scope_key")
+  @@index([dispute_id,created_at])
+  @@map("cash_dispute_events")
+}
+model CashDisputeProposal {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dispute_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  kind String @db.VarChar(24)
+  payload Json
+  preview_key String @db.VarChar(64)
+  expected_version Int
+  status String @default("PENDING") @db.VarChar(16)
+  proposed_by_id String @db.Uuid
+  proposed_at DateTime @default(now()) @db.Timestamptz(3)
+  decided_by_id String? @db.Uuid
+  decided_at DateTime? @db.Timestamptz(3)
+  decision_reason String? @db.VarChar(1000)
+  self_review Boolean @default(false)
+  @@unique([company_id,branch_id,dispute_id,id],map:"cash_dispute_proposal_scope_key")
+  @@index([dispute_id,status])
+  @@map("cash_dispute_proposals")
+}
+model CashDisputeCommand {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  actor_id String @db.Uuid
+  action String @db.VarChar(40)
+  request_key String @db.Uuid
+  content_hash String @db.VarChar(64)
+  result Json
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id,branch_id,actor_id,action,request_key],map:"cash_dispute_command_attempt")
+  @@map("cash_dispute_commands")
+}
+model CashDisputeLot {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dispute_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  proposal_id String? @db.Uuid
+  event_id String? @db.Uuid
+  target_lot_id String? @db.Uuid
+  payment_id String? @db.Uuid
+  kind String @db.VarChar(24)
+  principal Decimal @db.Decimal(12,2)
+  account_id Int?
+  payload Json @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id,branch_id,dispute_id,id],map:"cash_dispute_lot_scope_key")
+  @@index([dispute_id])
+  @@index([target_lot_id])
+  @@map("cash_dispute_lots")
+}
+
+/// Attribution only: the refund or return settlement remains the single money source.
+model CashRefundAllocation {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  payment_id String @db.Uuid
+  origin_event_id String? @db.Uuid
+  source_type String @db.VarChar(32)
+  source_id String @db.Uuid
+  action String @db.VarChar(12)
+  amount Decimal @db.Decimal(12,2)
+  funding_lot_id String? @db.Uuid
+  actor_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@index([payment_id])
+  @@index([source_type,source_id])
+  @@index([funding_lot_id])
+  @@index([origin_event_id])
+  @@map("cash_refund_allocations")
+}
+model CustomerReceiptRestriction {
+  payment_id String @db.Uuid
+  dispute_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  held Decimal @default(0) @db.Decimal(12,2)
+  retired Decimal @default(0) @db.Decimal(12,2)
+  version Int @default(1)
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  @@id([payment_id,dispute_id])
+  @@index([company_id,branch_id,customer_id])
+  @@map("customer_receipt_restrictions")
+}
+model CustomerDisputeCharge {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dispute_id String @db.Uuid
+  lot_id String @unique @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  currency_code String @db.VarChar(3)
+  reference String @db.VarChar(40)
+  amount Decimal @db.Decimal(12,2)
+  issued_on DateTime @db.Date
+  due_on DateTime @db.Date
+  reason String @db.VarChar(1000)
+  created_by_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([company_id,branch_id,customer_id,id],map:"customer_dispute_charge_scope_key")
+  @@unique([company_id,reference])
+  @@index([customer_id,due_on])
+  @@map("customer_dispute_charges")
+}
+model CustomerDisputeChargeApplication {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  charge_id String @db.Uuid
+  payment_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  amount Decimal @db.Decimal(12,2)
+  action String @default("APPLY") @db.VarChar(16)
+  reversal_of_id String? @db.Uuid
+  actor_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@index([charge_id])
+  @@index([payment_id])
+  @@map("customer_dispute_charge_applications")
+}
+model CustomerRecoveryCredit {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dispute_id String @db.Uuid
+  event_id String @db.Uuid
+  lot_id String @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  currency_code String @db.VarChar(3)
+  amount Decimal @db.Decimal(12,2)
+  actor_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([event_id,lot_id])
+  @@unique([company_id,branch_id,customer_id,id],map:"customer_recovery_credit_scope_key")
+  @@index([customer_id])
+  @@map("customer_recovery_credits")
+}
+model CustomerRecoveryCreditApplication {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  credit_id String @db.Uuid
+  sale_id String? @db.Uuid
+  charge_id String? @db.Uuid
+  company_id String @db.Uuid
+  branch_id String @db.Uuid
+  customer_id String @db.Uuid
+  amount Decimal @db.Decimal(12,2)
+  action String @default("APPLY") @db.VarChar(16)
+  reversal_of_id String? @db.Uuid
+  actor_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  @@index([credit_id])
+  @@index([sale_id])
+  @@index([charge_id])
+  @@map("customer_recovery_credit_applications")
+}
+model CashDisputeSettings {
+  company_id String @id @db.Uuid
+  owner_self_review Boolean @default(false)
+  dispute_account_id Int?
+  loss_account_id Int?
+  fee_account_id Int?
+  receivables_account_id Int?
+  advances_account_id Int?
+  revision Int @default(1)
+  updated_by_id String @db.Uuid
+  reason String @db.VarChar(1000)
+  updated_at DateTime @default(now()) @db.Timestamptz(3)
+  @@map("cash_dispute_settings")
 }

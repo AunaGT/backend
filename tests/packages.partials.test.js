@@ -43,6 +43,11 @@ test('real order invoices preserve group on both fractions and do not move stock
   h.tx.appointmentEngagement={findFirst:async()=>null}
   const {invoice}=require('../src/modules/orders/fulfillment')
   const request=()=>({params:{id:id(501)},companyId:'A',branchId:'B',user:{sub:'U'},body:{request_key:randomUUID(),payment_method_id:1,lines:[{line_id:source.id,qty:'0.5'}]}})
+  const settings=h.tx.systemSetting.findUnique
+  h.tx.systemSetting.findUnique=async query=>query.where.company_id_key.key==='currency_code'?{value:'USD'}:settings(query)
+  await assert.rejects(invoice(h.tx,request(),async()=> 'CS'),{code:'CURRENCY_MISMATCH'})
+  assert.equal(h.state.sales.length,0);assert.deepEqual(h.state.movements,[])
+  h.tx.systemSetting.findUnique=settings
   const first=await invoice(h.tx,request(),async()=> 'CS'),last=await invoice(h.tx,request(),async()=> 'CS')
   assert.deepEqual([first.sale.total,last.sale.total],[10,9.99]);assert.equal(h.state.sales.length,2)
   assert.ok(h.state.sales.every(s=>s.package_groups[0].amount==='19.99'))

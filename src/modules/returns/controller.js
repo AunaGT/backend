@@ -377,8 +377,7 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
-      const canOverridePolicy = String(req.user?.role?.name || req.user?.role_name || '').toLowerCase() === 'admin' ||
-        (Array.isArray(req.user?.permissions) && req.user.permissions.includes('returns.override_policy'))
+      const canOverridePolicy = hasPerm(req.user, 'returns.override_policy')
       const requestInstant = new Date()
       const policyResult = evaluateReturnEligibility({
         saleDate: sale.date,
@@ -620,6 +619,10 @@ exports.updateStatus = async (req, res, next) => {
   try {
     const { id } = req.params
     const { status_name } = req.body
+
+    if (!hasPerm(req.user, status_name === 'Completada' ? 'returns.complete' : 'returns.approve')) {
+      return res.status(403).json({ message: 'No tienes permiso para esta resolución de la devolución' })
+    }
 
     if (!id || !status_name) {
       return res.status(400).json({ message: 'id y status_name son requeridos' })

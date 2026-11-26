@@ -982,6 +982,7 @@ function sendCsv(res, filename, headerLines = [], sections = []) {
 
 async function salesReport(req, res, next) {
   try {
+  const includeFinancial = require('../../middlewares/tenant').hasPerm(req.user, 'reports.financial')
   const branding = await getBrandingForPdf(prisma, req.companyId)
   const meta = await prepareReportMeta(req, branding)
   const companyName = branding.company_name
@@ -990,7 +991,7 @@ async function salesReport(req, res, next) {
   const { period='month', year, format='pdf', month, quarter, semester } = req.query
   const { startUtc, endUtc, label } = periodRange(period, year, { month, quarter, semester })
     const data = await getSalesData(startUtc, endUtc, req)
-    if (meta) return res.json(buildSalesReport(data, meta))
+    if (meta) return res.json(buildSalesReport(data, meta, includeFinancial))
     const scope = await reportScope(req)
     if (String(format).toLowerCase() === 'csv' || String(format).toLowerCase() === 'excel') {
       const total = data.totalRevenueGross || 1
@@ -1002,8 +1003,7 @@ async function salesReport(req, res, next) {
         `Ventas Brutas,${money(data.totalRevenueGross)}`,
         `Devoluciones,${money(data.totalReturned)}`,
         `Ventas Netas,${money(data.totalRevenue)}`,
-        `Costos Totales,${money(data.totalCost)}`,
-        `Ganancia Neta,${money(data.totalProfit)}`,
+        ...(includeFinancial ? [`Costos Totales,${money(data.totalCost)}`, `Ganancia Neta,${money(data.totalProfit)}`] : []),
         `Tickets,${data.tickets}`,
         ...(data.unitsComparable?[`Unidades Vendidas,${data.unidadesTotales}`]:[]),
         `Ticket Promedio,${money(data.ticketPromedio)}`
@@ -1040,8 +1040,7 @@ async function salesReport(req, res, next) {
       { label: 'Ventas Brutas', value: money(data.totalRevenueGross) },
       { label: 'Devoluciones', value: money(data.totalReturned) },
       { label: 'Ventas Netas', value: money(data.totalRevenue) },
-      { label: 'Costos Totales', value: money(data.totalCost) },
-      { label: 'Ganancia Neta', value: money(data.totalProfit) },
+      ...(includeFinancial ? [{ label: 'Costos Totales', value: money(data.totalCost) }, { label: 'Ganancia Neta', value: money(data.totalProfit) }] : []),
       { label: 'Tickets', value: String(data.tickets) },
       ...(data.unitsComparable?[{ label: 'Unidades Vendidas', value: String(data.unidadesTotales) }]:[]),
       { label: 'Ticket Promedio', value: money(data.ticketPromedio) },

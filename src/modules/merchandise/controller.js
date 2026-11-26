@@ -28,7 +28,7 @@ function roundMoney (n) {
 const advancedItem=item=>item.unit_metadata_version===2&&item.unit_snapshot?.version===2
 const exact=value=>new Prisma.Decimal(String(value)).toFixed()
 function incomingItem(item,product=item.product){
-  const legacy={id:item.id,product,quantity:item.quantity,unit_cost:item.unit_cost}
+  const legacy={id:item.id,product:require('../../middlewares/costVisibility').projectCosts(product),quantity:item.quantity,unit_cost:item.unit_cost}
   if(!advancedItem(item))return {...legacy,...(item.line_total!=null?{line_total:new Prisma.Decimal(String(item.line_total)).toFixed(2),subtotal:new Prisma.Decimal(String(item.line_total)).toFixed(2)}:{subtotal:Number(item.quantity)*Number(item.unit_cost)})}
   return {...legacy,quantity:exact(item.quantity),unit_cost:exact(item.unit_cost),unit_metadata_version:2,unit_snapshot:item.unit_snapshot,unit_label:item.unit_snapshot.presentation?.label??item.unit_snapshot.baseUnit.label,base_qty:exact(item.base_qty),base_unit_cost:exact(item.base_unit_cost),line_total:new Prisma.Decimal(String(item.line_total)).toFixed(2),subtotal:new Prisma.Decimal(String(item.line_total)).toFixed(2)}
 }
@@ -75,7 +75,6 @@ const incomingDetailInclude = {
           size: true,
           barcode: true,
           image_url: true,
-          cost: true,
           price: true,
           stock: true
         }

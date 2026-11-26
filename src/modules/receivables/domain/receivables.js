@@ -19,8 +19,9 @@
  */
 
 const { round2 } = require('../../../services/accounting/logic')
-const {allocationForReceipt,allocationSelect}=require('./paymentAllocations')
+const {allocationForReceipt,allocationSelect,hydrateReceiptAllocations}=require('./paymentAllocations')
 const {confirmedSaleWhere,CONFIRMED_SALE_STATUS}=require('../../sales/commercialState')
+const Charges=require('./chargeDocuments')
 
 /** Mismo epsilon que compras: por debajo de medio centavo se considera saldado. */
 const ROUND_EPS = 0.005
@@ -83,7 +84,7 @@ function planFifo(openSales, amount) {
     if (remaining <= ROUND_EPS) break
     const take = round2(Math.min(remaining, sale.balance))
     if (take <= 0) continue
-    applications.push({ sale_id: sale.id, amount: take })
+    applications.push(sale.documentType === 'DISPUTE_CHARGE' ? { documentType: 'DISPUTE_CHARGE', documentId: sale.id, amount: take } : { sale_id: sale.id, amount: take })
     remaining = round2(remaining - take)
   }
   return { applications, unapplied: round2(Math.max(0, remaining)) }
@@ -100,25 +101,29 @@ function planManual(openSales, requested, amount) {
   if (!Number.isFinite(total) || total <= 0) {
     throw new ReceivableError('El monto del cobro debe ser mayor a 0')
   }
-  const byId = new Map(openSales.map((s) => [s.id, s]))
+  // Un cargo por contracargo y una venta pueden compartir cobro; cada documento se identifica por su tipo.
+  const keyOf = (type, id) => `${type}:${id}`
+  const byId = new Map(openSales.map((s) => [keyOf(s.documentType || 'SALE', s.id), s]))
   const applications = []
   const vistas = new Set()
   let asignado = 0
 
   for (const raw of requested) {
-    const saleId = String(raw?.sale_id || '')
+    const type = raw?.documentType || 'SALE'
+    if (!['SALE', 'DISPUTE_CHARGE'].includes(type)) throw new ReceivableError('Tipo de documento inválido')
+    const saleId = String((type === 'SALE' ? raw?.sale_id ?? raw?.documentId : raw?.documentId) || '')
     const monto = round2(Number(raw?.amount))
-    if (!saleId) throw new ReceivableError('Cada aplicación necesita una venta')
-    if (vistas.has(saleId)) {
-      throw new ReceivableError('Una misma venta no puede aparecer dos veces en el cobro')
+    if (!saleId) throw new ReceivableError('Cada aplicación necesita una venta o cargo')
+    if (vistas.has(keyOf(type, saleId))) {
+      throw new ReceivableError('Un mismo documento no puede aparecer dos veces en el cobro')
     }
-    vistas.add(saleId)
+    vistas.add(keyOf(type, saleId))
     if (!Number.isFinite(monto) || monto <= 0) {
       throw new ReceivableError('El monto aplicado a cada venta debe ser mayor a 0')
     }
-    const sale = byId.get(saleId)
+    const sale = byId.get(keyOf(type, saleId))
     if (!sale) {
-      throw new ReceivableError('Una de las ventas seleccionadas ya no tiene saldo pendiente', 409)
+      throw new ReceivableError(type === 'SALE' ? 'Una de las ventas seleccionadas ya no tiene saldo pendiente' : 'Uno de los cargos seleccionados ya no tiene saldo pendiente', 409)
     }
     if (monto > sale.balance + ROUND_EPS) {
       throw new ReceivableError(
@@ -127,7 +132,7 @@ function planManual(openSales, requested, amount) {
         { sale_id: saleId, saldo: sale.balance, monto }
       )
     }
-    applications.push({ sale_id: saleId, amount: monto })
+    applications.push(type === 'SALE' ? { sale_id: saleId, amount: monto } : { documentType: type, documentId: saleId, amount: monto })
     asignado = round2(asignado + monto)
   }
 
@@ -165,6 +170,17 @@ async function openSalesOf(db, customerId, branchWhereClause = {}) {
     .filter((s) => s.balance > ROUND_EPS)
 }
 
+/**
+ * Documentos por cobrar: ventas al crédito y cargos por contracargo, en el orden
+ * que consume el FIFO (vence antes; sin vencimiento, por fecha del documento).
+ */
+async function openDocumentsOf(db, customerId, branchWhereClause = {}, options = {}) {
+  const [sales, charges] = await Promise.all([openSalesOf(db, customerId, branchWhereClause), Charges.openChargesOf(db, customerId, branchWhereClause, options)])
+  const when = d => new Date(d.due_date || d.date || 0).getTime()
+  return [...sales.map(s => ({ ...s, documentType: 'SALE' })), ...charges]
+    .sort((a, b) => when(a) - when(b) || new Date(a.date || 0) - new Date(b.date || 0) || String(a.id).localeCompare(String(b.id)))
+}
+
 /** Recalcula `payment_status` de una venta desde sus abonos. */
 async function syncSaleStatus(tx, saleId) {
   const sale = await tx.sale.findUnique({
@@ -197,23 +213,28 @@ function planApplicationRelease(entries, amount) {
 
 /** Devuelve a saldo a favor la parte de abonos que ya excede el total ajustado. */
 async function releaseSaleOverpayment(tx, saleId, amount, resolution=null) {
+  return (await releaseSaleOverpaymentWithPlan(tx,saleId,amount,resolution)).released
+}
+async function releaseSaleOverpaymentWithPlan(tx, saleId, amount, resolution=null) {
   const source=await tx.sale.findUnique({where:{id:saleId},select:{appointment_engagement:{select:{id:true,company_id:true,branch_id:true,customer_id:true}}}})
   if(source?.appointment_engagement&&amount>ROUND_EPS){
     if(!resolution)throw Object.assign(new ReceivableError('Decide si el dinero vuelve a la contratación o al saldo libre antes de liberar el abono',409),{code:'ENGAGEMENT_RESOLUTION_REQUIRED'})
-    return require('../engagementPayments').releaseEngagementSaleOverpayment(tx,source.appointment_engagement,saleId,amount,resolution)
+    const released=await require('../engagementPayments').releaseEngagementSaleOverpayment(tx,source.appointment_engagement,saleId,amount,resolution)
+    return {released,allocations:[]}
   }
   const entries = await tx.salePaymentEntry.findMany({
     where: { sale_id: saleId },
-    select: { id: true, amount: true, created_at: true },
+    select: { id: true, customer_payment_id:true, amount: true, created_at: true },
     orderBy: { created_at: 'desc' },
   })
   const plan = planApplicationRelease(entries, amount)
+  const allocations=plan.map(item=>({paymentId:entries.find(e=>e.id===item.id).customer_payment_id,amount:item.release.toFixed(2)}))
   for (const item of plan) {
     if (item.remaining <= ROUND_EPS) await tx.salePaymentEntry.delete({ where: { id: item.id } })
     else await tx.salePaymentEntry.update({ where: { id: item.id }, data: { amount: item.remaining } })
   }
   await syncSaleStatus(tx, saleId)
-  return round2(plan.reduce((sum, item) => sum + item.release, 0))
+  return {released:round2(plan.reduce((sum,item)=>sum+item.release,0)),allocations}
 }
 
 /**
@@ -221,7 +242,7 @@ async function releaseSaleOverpayment(tx, saleId, amount, resolution=null) {
  * a favor. Se deriva igual que la deuda (`amount − Σ aplicaciones`) para no
  * tener dos números que puedan desincronizarse.
  */
-async function unappliedPayments(db, customerId, branchWhereClause = {}) {
+async function receiptBalances(db, customerId, branchWhereClause = {}) {
   const payments = await db.customerPayment.findMany({
     where: { customer_id: customerId, ...branchWhereClause },
     select: {
@@ -230,9 +251,11 @@ async function unappliedPayments(db, customerId, branchWhereClause = {}) {
     },
     orderBy: { paid_at: 'asc' },
   })
-  return payments
+  return (await hydrateReceiptAllocations(db,payments))
     .map(p=>{const allocation=allocationForReceipt(p);return {...p,allocation,unapplied:Number(allocation.available)}})
-    .filter((p) => p.unapplied > ROUND_EPS)
+}
+async function unappliedPayments(db, customerId, branchWhereClause = {}) {
+  return (await receiptBalances(db,customerId,branchWhereClause)).filter(p=>p.unapplied>ROUND_EPS)
 }
 
 /** Saldo a favor total del cliente. */
@@ -249,20 +272,34 @@ async function availableCredit(db, customerId, branchWhereClause = {}) {
  * cliente que ya dejó el dinero adelantado no está expuesto.
  */
 async function customerBalance(db, customerId, branchWhereClause = {}, now = new Date()) {
-  const [open, credito] = await Promise.all([
+  const [open, funds, charges, recoveries] = await Promise.all([
     openSalesOf(db, customerId, branchWhereClause),
-    availableCredit(db, customerId, branchWhereClause),
+    receiptBalances(db, customerId, branchWhereClause),
+    Charges.openChargesOf(db, customerId, branchWhereClause),
+    Charges.recoveryCreditsOf(db, customerId, branchWhereClause),
   ])
-  const saldo = round2(open.reduce((s, v) => s + v.balance, 0))
+  const credito=round2(funds.reduce((sum,p)=>sum+p.unapplied,0))
+  const recuperacion=round2(recoveries.reduce((sum,c)=>sum+c.available,0))
+  const held=round2(funds.reduce((sum,p)=>sum+Number(p.allocation.held||0),0))
   const vencidas = open.filter((s) => s.due_date && new Date(s.due_date) < now)
+  const cargosVencidos = charges.filter(c => Charges.chargeOverdue(c.due_date, now))
+  const documentos = [...open, ...charges], vencidos = [...vencidas, ...cargosVencidos]
+  const saldo = round2(documentos.reduce((s, v) => s + v.balance, 0))
   return {
     saldo,
-    vencido: round2(vencidas.reduce((s, v) => s + v.balance, 0)),
-    vencido_30_mas: round2(vencidas.filter(v => Math.floor((now - new Date(v.due_date)) / 86400000) > 30).reduce((s, v) => s + v.balance, 0)),
+    vencido: round2(vencidos.reduce((s, v) => s + v.balance, 0)),
+    vencido_30_mas: round2(vencidos.filter(v => Math.floor((now - new Date(v.due_date)) / 86400000) > 30).reduce((s, v) => s + v.balance, 0)),
     facturas_abiertas: open.length,
     facturas_vencidas: vencidas.length,
+    cargos_abiertos: charges.length,
+    cargos_vencidos: cargosVencidos.length,
+    cargos_saldo: round2(charges.reduce((s, c) => s + c.balance, 0)),
+    documentos_abiertos: documentos.length,
+    documentos_vencidos: vencidos.length,
     credito_disponible: credito,
-    saldo_neto: round2(Math.max(0, saldo - credito)),
+    credito_recuperacion: recuperacion,
+    credito_en_revision: held,
+    saldo_neto: round2(Math.max(0, saldo - credito - recuperacion)),
   }
 }
 
@@ -289,14 +326,15 @@ const CUSTOMER_TERM_PICK = {
  * tenga `sales.credit.override`.
  */
 async function checkCredit(db, customer, amount, branchWhereClause = {}, now = new Date()) {
-  const { saldo, vencido, facturas_vencidas, credito_disponible, saldo_neto } =
+  const { saldo, vencido, facturas_vencidas, cargos_vencidos, credito_disponible, saldo_neto } =
     await customerBalance(db, customer.id, branchWhereClause, now)
   const nuevo = round2(saldo_neto + round2(amount))
   const limite = customer.credit_limit == null ? null : round2(Number(customer.credit_limit))
 
   const razones = []
-  if (facturas_vencidas > 0) {
-    razones.push(`tiene ${facturas_vencidas} factura(s) vencida(s) por ${vencido.toFixed(2)}`)
+  if (facturas_vencidas > 0 || cargos_vencidos > 0) {
+    const partes = [facturas_vencidas ? `${facturas_vencidas} factura(s)` : null, cargos_vencidos ? `${cargos_vencidos} cargo(s) por contracargo` : null].filter(Boolean)
+    razones.push(`tiene ${partes.join(' y ')} vencido(s) por ${vencido.toFixed(2)}`)
   }
   if (limite != null && nuevo > limite + ROUND_EPS) {
     razones.push(`excede su límite de ${limite.toFixed(2)} por ${round2(nuevo - limite).toFixed(2)}`)
@@ -311,6 +349,7 @@ async function checkCredit(db, customer, amount, branchWhereClause = {}, now = n
     limite,
     vencido,
     facturas_vencidas,
+    cargos_vencidos,
     motivo: razones.length ? `El cliente ${razones.join(' y ')}` : null,
   }
 }
@@ -328,11 +367,25 @@ async function applyPayment(tx, params) {
     allowAdvance = false,
   } = params
 
+  let cash = false
+  let session = null
+  if (kind === 'PAYMENT') {
+    const method = await require('../../../services/paymentMethods/access').resolvePaymentMethod(tx, { companyId: params.companyId, methodId: paymentMethodId, purpose: 'RECEIPT' })
+    cash = require('../../../services/paymentMethods/behavior').isCashMethod(method, name => /efectivo|cash/i.test(name))
+    if (cash && !cashRegisterSessionId) throw Object.assign(new ReceivableError('Abre tu turno de caja antes de recibir efectivo', 409), { code: 'CASH_SESSION_REQUIRED' })
+    if (cashRegisterSessionId) {
+      const boundary = require('../../../services/cashSessionBoundary')
+      session = await boundary.lockScopedSession(tx, { companyId: params.companyId, branchId, userId }, cashRegisterSessionId)
+      if (session.money_event_version === 1 && params.externalRequest && !params.requestAttempt?.key) throw Object.assign(new ReceivableError('Actualiza la pantalla para obtener una clave segura antes de cobrar.', 428), { code: 'PAYMENT_KEY_REQUIRED' })
+      boundary.assertSessionOperation(session, { userId, isAdmin: params.isAdmin }, { settlementKind: method.settlement_kind ?? (cash ? 'CASH' : null) })
+    }
+  }
   await lockCustomer(tx, customerId)
 
   // Las ventas se releen dentro de la transacción (y después del lock): el saldo
   // pudo cambiar entre el momento en que la UI lo mostró y este cobro.
-  const open = await openSalesOf(tx, customerId, { branch_id: branchId })
+  // Un ajuste de cartera no condona cargos por contracargo: eso se resuelve en su expediente.
+  const open = kind === 'PAYMENT' ? await openDocumentsOf(tx, customerId, { branch_id: branchId }, { lock: true }) : await openSalesOf(tx, customerId, { branch_id: branchId })
   const { applications, unapplied } = manualApplications?.length
     ? planManual(open, manualApplications, amount)
     : planFifo(open, amount)
@@ -371,13 +424,17 @@ async function applyPayment(tx, params) {
       reference: reference || null,
       notes: notes || null,
       registered_by: userId,
-      applications: { create: applications.map((a) => ({ sale_id: a.sale_id, amount: a.amount })) },
+      applications: { create: applications.filter(a => a.sale_id).map((a) => ({ sale_id: a.sale_id, amount: a.amount })) },
     },
     select: { id: true },
   })
+  const chargeApplications = applications.filter(a => a.documentType === 'DISPUTE_CHARGE')
+  if (chargeApplications.length) await Charges.applyReceiptToCharges(tx, { companyId: params.companyId, branchId, userId }, { paymentId: payment.id, customerId, applications: chargeApplications })
 
-  for (const a of applications) await syncSaleStatus(tx, a.sale_id)
-  if(kind==='PAYMENT'&&params.hardware)await require('../../config/hardware/drawer/events').enqueueDrawerIntent(tx,params.hardware.scope,{origin:params.hardware.origin,sourceId:payment.id,workstationId:params.hardware.workstationId})
+  if (kind === 'PAYMENT' && params.requestAttempt) await require('../paymentAttempts').savePaymentAttempt(tx, payment.id, params.requestAttempt)
+  for (const a of applications) if (a.sale_id) await syncSaleStatus(tx, a.sale_id)
+  if (kind === 'PAYMENT' && session) await require('../../cash-closure/events').recordMoneyEvent(tx, { companyId: params.companyId, branchId, userId, isAdmin: params.isAdmin }, { session, sourceType: 'CUSTOMER_PAYMENT', sourceId: payment.id })
+  if(kind==='PAYMENT'&&cash&&params.hardware)await require('../../config/hardware/drawer/events').enqueueDrawerIntent(tx,params.hardware.scope,{origin:params.hardware.origin,sourceId:payment.id,workstationId:params.hardware.workstationId})
   return { paymentId: payment.id, applications, unapplied }
 }
 
@@ -386,30 +443,52 @@ async function applyPayment(tx, params) {
  * viejo a la factura más vieja. No mueve dinero ni genera asiento: ese dinero ya
  * entró y ya se contabilizó cuando se recibió el cobro; esto solo lo reparte.
  */
-async function applyAvailableCredit(tx, customerId, branchId) {
+async function applyAvailableCredit(tx, customerId, branchId, scope = null) {
   await lockCustomer(tx, customerId)
-  const [open, credits] = await Promise.all([
-    openSalesOf(tx, customerId, { branch_id: branchId }),
+  // Sin actor no se pueden registrar aplicaciones a cargos: se conserva el reparto anterior, solo ventas.
+  const [open, credits, recoveries] = await Promise.all([
+    scope ? openDocumentsOf(tx, customerId, { branch_id: branchId }, { lock: true }) : openSalesOf(tx, customerId, { branch_id: branchId }),
     unappliedPayments(tx, customerId, { branch_id: branchId }),
+    scope ? Charges.recoveryCreditsOf(tx, customerId, { branch_id: branchId }) : [],
   ])
+  const chargeScope = scope && { companyId: scope.companyId, branchId, userId: scope.userId }
 
   const applied = []
+  // El crédito de recuperación solo cubre cargos por contracargo; se usa antes que el dinero de los recibos.
+  for (const credit of recoveries) {
+    let left = credit.available
+    for (const doc of open.filter(d => d.documentType === 'DISPUTE_CHARGE')) {
+      if (left <= ROUND_EPS) break
+      if (doc.balance <= ROUND_EPS) continue
+      const take = round2(Math.min(left, doc.balance))
+      await Charges.applyRecoveryCreditToCharge(tx, chargeScope, { creditId: credit.id, chargeId: doc.id, customerId, amount: take })
+      doc.balance = round2(doc.balance - take)
+      left = round2(left - take)
+      applied.push({ documentType: 'DISPUTE_CHARGE', documentId: doc.id, recovery_credit_id: credit.id, amount: take })
+    }
+  }
   for (const credit of credits) {
     let left = credit.unapplied
     for (const sale of open) {
       if (left <= ROUND_EPS) break
       if (sale.balance <= ROUND_EPS) continue
       const take = round2(Math.min(left, sale.balance))
-      await tx.salePaymentEntry.create({
-        data: { sale_id: sale.id, customer_payment_id: credit.id, amount: take },
-      })
+      if (sale.documentType === 'DISPUTE_CHARGE') {
+        await Charges.applyReceiptToCharges(tx, chargeScope, { paymentId: credit.id, customerId, applications: [{ documentId: sale.id, amount: take }] })
+        applied.push({ documentType: 'DISPUTE_CHARGE', documentId: sale.id, payment_id: credit.id, amount: take })
+      } else {
+        await tx.salePaymentEntry.create({
+          data: { sale_id: sale.id, customer_payment_id: credit.id, amount: take },
+        })
+        applied.push({ sale_id: sale.id, payment_id: credit.id, amount: take })
+      }
       sale.balance = round2(sale.balance - take)
       left = round2(left - take)
-      applied.push({ sale_id: sale.id, payment_id: credit.id, amount: take })
     }
   }
+  if (recoveries.length && applied.some(a => a.recovery_credit_id)) await Charges.refreshChargeOrigins(tx, chargeScope, [...new Set(applied.filter(a => a.recovery_credit_id).map(a => a.documentId))])
 
-  for (const saleId of new Set(applied.map((a) => a.sale_id))) {
+  for (const saleId of new Set(applied.filter(a => a.sale_id).map((a) => a.sale_id))) {
     await syncSaleStatus(tx, saleId)
   }
   return applied
@@ -435,9 +514,11 @@ module.exports = {
   planFifo,
   planManual,
   openSalesOf,
+  openDocumentsOf,
   syncSaleStatus,
   planApplicationRelease,
   releaseSaleOverpayment,
+  releaseSaleOverpaymentWithPlan,
   customerBalance,
   unappliedPayments,
   availableCredit,

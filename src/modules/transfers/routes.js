@@ -10,6 +10,7 @@
 
 const { Router } = require('express')
 const router = Router()
+router.use(require('../../middlewares/costVisibility').protectCostResponses)
 const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const Transfers = require('./controller')
 

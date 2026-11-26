@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: a bank withdrawal posts principal to dispute assets and its fee separately without charging the customer
+ok 1 - a bank withdrawal posts principal to dispute assets and its fee separately without charging the customer
+  ---
+  duration_ms: 7.113248
+  type: 'test'
+  ...
+# Subtest: recovery credits undisposed funds before the exact disposed destinations, without inventing sales or VAT
+ok 2 - recovery credits undisposed funds before the exact disposed destinations, without inventing sales or VAT
+  ---
+  duration_ms: 3.912054
+  type: 'test'
+  ...
+# Subtest: mixed disposition debits advances, receivables and the merchant loss exactly once
+ok 3 - mixed disposition debits advances, receivables and the merchant loss exactly once
+  ---
+  duration_ms: 1.449912
+  type: 'test'
+  ...
+# Subtest: forgiving a customer charge reclassifies that debt to a loss without another bank entry
+ok 4 - forgiving a customer charge reclassifies that debt to a loss without another bank entry
+  ---
+  duration_ms: 1.725083
+  type: 'test'
+  ...
+# Subtest: an older client reports a linked-dispute database guard as a recoverable settlement conflict
+ok 5 - an older client reports a linked-dispute database guard as a recoverable settlement conflict
+  ---
+  duration_ms: 129.195022
+  type: 'test'
+  ...
+# Subtest: bank methods and settlements each need their own authority
+ok 6 - bank methods and settlements each need their own authority
+  ---
+  duration_ms: 28.24086
+  type: 'test'
+  ...
+# Subtest: 4B permissions are registered only for the canonical admin and listed in the catalog
+ok 7 - 4B permissions are registered only for the canonical admin and listed in the catalog
+  ---
+  duration_ms: 10.766402
+  type: 'test'
+  ...
+# Subtest: posting builders use the frozen bank account of the money event and keep the old rule otherwise
+ok 8 - posting builders use the frozen bank account of the money event and keep the old rule otherwise
+  ---
+  duration_ms: 26.511118
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 338.215793

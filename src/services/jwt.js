@@ -11,38 +11,12 @@
 const jwt_simple = require('jwt-simple')
 const moment = require('moment')
 const { secret, ACCESS_TOKEN_MINUTES } = require('../config/security')
-const { expandPermissions } = require('../config/permissionDeps')
-
+// Solo lo que el servidor verifica: el token viaja en una cookie y los navegadores descartan
+// en silencio las de más de 4096 bytes. Rol, permisos y datos personales se leen de la base
+// en cada petición (loadSessionUser), así que llevarlos aquí solo hacía crecer la cookie.
 exports.crearToken = function (usuario) {
-  // prefer a full role object when available, otherwise fallback to role_id/role_name
-  const roleObj = usuario.role
-    ? { id: usuario.role.id, name: usuario.role.name }
-    : usuario.role_id
-    ? { id: usuario.role_id, name: usuario.role_name || null }
-    : null
-
-  // Intentar extraer permisos del objeto de usuario si vienen incluidos
-  let permissions = []
-  if (usuario.role && Array.isArray(usuario.role.permissions)) {
-    permissions = usuario.role.permissions
-      .map((rp) => rp.permission && rp.permission.code)
-      .filter(Boolean)
-  } else if (Array.isArray(usuario.permissions)) {
-    permissions = usuario.permissions
-  }
-
-  // El token lleva los permisos ya expandidos: quien puede editar puede ver,
-  // sin que cada middleware tenga que acordarse de la dependencia.
-  permissions = expandPermissions(permissions)
-
   const payload = {
     sub: usuario.id,
-    name: usuario.name,
-    email: usuario.email,
-    role_id: usuario.role_id,
-    role_name: usuario.role?.name || usuario.role_name || null,
-    role: roleObj,
-    permissions,
     auth_version: usuario.auth_version || 0,
     ...(usuario.sid ? { sid: usuario.sid } : {}),
     iat: moment().unix(),

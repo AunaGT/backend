@@ -1,0 +1,13 @@
+## Task 8: Posteo contable y reversión con procedencia
+
+**Files:** `cashDisputePosting.js`; modificar `accounting/core.js` solo para reutilizar config/locks, `postingEngine.js`, `engagementPosting.js`, `accounting/controller.js`; tests `cashDisputes.accounting.test.js`, `cashDisputes.accounting.pg.e2e.js`, `cashDisputes.concurrent.pg.e2e.js`.
+
+**Interfaces:** `postDisputeEffect(tx,scope,effectId,{accountingDate}) -> {entryId,status}`; `postDisputeDisposition(tx,scope,proposalId,{accountingDate})`; `postDisputeChain(tx,scope,caseId,{accountingDateBySource})`; `prepareDisputeEntryReversal(tx,scope,entry) -> resources`; `assertDisputeEntryReversible(tx,scope,entry) -> void`.
+
+- [ ] RED por tabla contable de la spec: retiro, retención, disposición mixta, recuperación antes/después, saldo cancelado en Clientes vs Anticipos y condonación. Source único y líneas balanceadas; deuda no contabiliza ingresos/IVA. Cobro mixto acredita Clientes una vez; sobrante explícito según contrapartida verificada.
+- [ ] Configurar cuentas por empresa con validación de tipo/moneda/estado y congelarlas por lote. Si origen no contabilizado muestra bloqueo/enlace a acción existente; falta de fuente verificable nunca usa default silencioso. Deducción vieja de gasto necesita reclass explícita en período abierto; no se edita entrada anterior.
+- [ ] Asiento de efecto/disposición/ajuste solo por fuente propia; efectos de liquidación usan sus líneas integradas. Adaptar selector de postingEngine/engagementPosting para no tratar créditos no monetarios o ajustes de cargo como recibo nuevo ni contabilizar dos veces una colección. Fuentes nuevas no entran a backfill de activación del módulo.
+- [ ] Con módulo activo: todo o rollback. Con módulo apagado: operación/cartera sin cuentas obligatorias, estado DEFERRED. Posteo posterior explícito arma cadena ordenada, con fechas elegidas por fuente, cuenta válida y fecha abierta; no un único today que refecha historia. No inventar ni postear originales desde cron.
+- [ ] Mover prelock de reversión relevante antes de lockAccountingCompany; luego releer entrada/reversal y aplicar protección dentro de transacción. Incluir entradas originales de cobro/liquidación aunque no tengan aún caso. Genérico no revierte una fuente de disputa ni base dependiente; ruta de compensación preserva trazabilidad y crédito del cliente.
+- [ ] Ejecutar contabilidad y carreras PG con barreras deterministas: aprobación↔cobro, recuperación↔refund, settlement void↔link, reversión↔nuevo caso, período/año↔efecto. Esperar un resultado válido y/o409, ningún40P01, ningún asiento parcial/duplicado. Regresiones cashCorrections/cashSettlements/receivables y contabilidad: GREEN.
+

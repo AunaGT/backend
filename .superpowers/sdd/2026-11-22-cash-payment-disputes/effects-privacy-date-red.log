@@ -1,0 +1,60 @@
+TAP version 13
+# Subtest: a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+not ok 1 - a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+  ---
+  duration_ms: 2487.745237
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:12:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + {
+    +   disputeAccountId: 5,
+    +   feeAccountId: 3,
+    +   fundingAccountId: 1,
+    +   policyRevision: 1
+    + }
+    - undefined
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+    feeAccountId: 3
+    policyRevision: 1
+    disputeAccountId: 5
+    fundingAccountId: 1
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:24:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+not ok 2 - a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+  ---
+  duration_ms: 2563.24345
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:29:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'DISPUTE_INPUT_INVALID'
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.effects.pg.e2e.js:34:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5197.961889

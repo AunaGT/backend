@@ -1,0 +1,31 @@
+const test=require('node:test'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),{randomUUID}=require('node:crypto'),{PrismaClient}=require('@prisma/client')
+const target=process.env.INTEGRATIONS_EXPIRY_TEST_DATABASE_URL
+if(target!=='postgresql://DiegoPatzan@127.0.0.1:55459/postgres'||process.env.DATABASE_URL!==target||process.env.DIRECT_URL!==target)throw Error('An explicit isolated expiry test database is required')
+test('optional expiry migration preserves existing deadlines and enforces bounded or explicitly unlimited keys',async t=>{
+ const db=new PrismaClient({datasources:{db:{url:target}}}),other=new PrismaClient({datasources:{db:{url:target}}});t.after(async()=>{await db.$disconnect();await other.$disconnect()})
+ await db.$executeRawUnsafe('ALTER TABLE integration_credentials DROP CONSTRAINT IF EXISTS integration_credentials_expiry_check')
+ // Start from the previously deployed NOT NULL and bounded-expiry contract.
+ await db.$executeRawUnsafe('ALTER TABLE integration_credentials ALTER COLUMN expires_at SET NOT NULL')
+ await db.$executeRawUnsafe("ALTER TABLE integration_credentials ADD CONSTRAINT integration_credentials_check CHECK(expires_at>created_at AND expires_at<=created_at+INTERVAL '365 days')")
+ const company=await db.company.create({data:{name:'Expiry QA',code:randomUUID().slice(0,12)}}),role=await db.role.create({data:{name:'admin',system_key:'ADMIN'}}),owner=await db.user.create({data:{name:'Synthetic Owner',email:randomUUID()+'@invalid.test',password:'synthetic',role_id:role.id}})
+ await db.userCompany.create({data:{company_id:company.id,user_id:owner.id,role_id:role.id}})
+ const branch=await db.branch.create({data:{company_id:company.id,name:'QA',code:'QA'}});await db.userBranch.create({data:{user_id:owner.id,branch_id:branch.id}})
+ const m=require('../src/modules/integrations/management'),{authenticateIntegration}=require('../src/modules/integrations/auth'),now=new Date(),scope={companyId:company.id,actorId:owner.id,isAdmin:true,permissions:[],branchId:branch.id},input={name:'Private QA',ownerId:owner.id,branchIds:[branch.id],scopes:['products.read'],days:7}
+ const before=await m.createCredential(db,scope,input,now)
+ await assert.rejects(()=>m.createCredential(db,scope,{...input,days:null},now))
+ const result=spawnSync('psql',[target,'-v','ON_ERROR_STOP=1','-f','prisma/migrations/20261025210000_integration_optional_expiry/migration.sql'],{encoding:'utf8'});assert.equal(result.status,0,result.stderr)
+ const unchanged=await db.integrationCredential.findUnique({where:{id:before.credential.id}})
+ assert.equal(unchanged.expires_at.toISOString(),before.credential.expiresAt);assert.deepEqual(unchanged.scopes,['products.read'])
+ const forever=await m.createCredential(db,scope,{...input,days:null},now),future=new Date(now.getTime()+10*365*86400000)
+ assert.equal(forever.credential.expiresAt,null);assert.equal((await authenticateIntegration(db,'Bearer '+forever.apiKey,future)).credentialId,forever.credential.id)
+ await assert.rejects(()=>authenticateIntegration(db,'Bearer '+before.apiKey,future),{status:401})
+ for(const days of [-1,0,366])await assert.rejects(()=>db.integrationCredential.update({where:{id:before.credential.id},data:{expires_at:new Date(now.getTime()+days*86400000)}}))
+ const results=[]
+ for(let offset=0;offset<19;offset+=5)results.push(...await Promise.allSettled(Array.from({length:Math.min(5,19-offset)},(_,i)=>m.createCredential(i%2?db:other,scope,{...input,days:null},now))))
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,18)
+ assert.equal(results.find(r=>r.status==='rejected').reason.integrationCode,'KEY_LIMIT')
+ assert.equal(await db.integrationCredential.count({where:{company_id:company.id,revoked_at:null,OR:[{expires_at:null},{expires_at:{gt:now}}]}}),20)
+ await m.revokeCredential(db,scope,forever.credential.id,now)
+ await assert.rejects(()=>authenticateIntegration(db,'Bearer '+forever.apiKey,future),{status:401})
+ assert.equal((await m.getCredential(db,scope,forever.credential.id,now)).status,'REVOKED')
+})

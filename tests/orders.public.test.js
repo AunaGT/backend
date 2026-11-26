@@ -186,7 +186,7 @@ test('getPublicByToken devuelve un pedido cancelado sin datos administrativos', 
   assert.equal(error, undefined)
   assert.equal(moduleCompanyId, 'company-a')
   assert.deepEqual(settingsQuery.where, {
-    key: { in: ['company_name', 'company_logo_url'] },
+    key: { in: ['company_name', 'company_logo_url','currency_code','locale','timezone'] },
     company_id: 'company-a',
   })
   assert.equal(res.body.status, 'CANCELLED')

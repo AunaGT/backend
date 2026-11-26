@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: dispute recording, bank movements and customer debt approval are separate authorities
+ok 1 - dispute recording, bank movements and customer debt approval are separate authorities
+  ---
+  duration_ms: 3.334057
+  type: 'test'
+  ...
+# Subtest: consolidated dispute consultation does not permit commands or fake administrator bypass
+ok 2 - consolidated dispute consultation does not permit commands or fake administrator bypass
+  ---
+  duration_ms: 1.197568
+  type: 'test'
+  ...
+# Subtest: canonical admin still has an explicit policy capability, not an implicit self-review permission
+ok 3 - canonical admin still has an explicit policy capability, not an implicit self-review permission
+  ---
+  duration_ms: 0.339751
+  type: 'test'
+  ...
+# Subtest: scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+ok 4 - scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+  ---
+  duration_ms: 0.257776
+  type: 'test'
+  ...
+# Subtest: targeted dispute registration is idempotent and grants no new permissions to company roles
+ok 5 - targeted dispute registration is idempotent and grants no new permissions to company roles
+  ---
+  duration_ms: 4.521054
+  type: 'test'
+  ...
+# Subtest: a bank withdrawal posts principal to dispute assets and its fee separately without charging the customer
+ok 6 - a bank withdrawal posts principal to dispute assets and its fee separately without charging the customer
+  ---
+  duration_ms: 2.664284
+  type: 'test'
+  ...
+# Subtest: recovery credits undisposed funds before the exact disposed destinations, without inventing sales or VAT
+ok 7 - recovery credits undisposed funds before the exact disposed destinations, without inventing sales or VAT
+  ---
+  duration_ms: 0.981761
+  type: 'test'
+  ...
+# Subtest: mixed disposition debits advances, receivables and the merchant loss exactly once
+ok 8 - mixed disposition debits advances, receivables and the merchant loss exactly once
+  ---
+  duration_ms: 0.708155
+  type: 'test'
+  ...
+# Subtest: forgiving a customer charge reclassifies that debt to a loss without another bank entry
+ok 9 - forgiving a customer charge reclassifies that debt to a loss without another bank entry
+  ---
+  duration_ms: 0.427276
+  type: 'test'
+  ...
+# Subtest: dispute capabilities advertise read access but keep incomplete financial commands closed
+ok 10 - dispute capabilities advertise read access but keep incomplete financial commands closed
+  ---
+  duration_ms: 71.947103
+  type: 'test'
+  ...
+# Subtest: no financial command runs before all dependent writers are integrated
+ok 11 - no financial command runs before all dependent writers are integrated
+  ---
+  duration_ms: 1.088723
+  type: 'test'
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 143.15451

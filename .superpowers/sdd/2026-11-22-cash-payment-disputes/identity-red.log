@@ -1,0 +1,135 @@
+TAP version 13
+# Subtest: dispute recording, bank movements and customer debt approval are separate authorities
+ok 1 - dispute recording, bank movements and customer debt approval are separate authorities
+  ---
+  duration_ms: 1.927342
+  type: 'test'
+  ...
+# Subtest: consolidated dispute consultation does not permit commands or fake administrator bypass
+ok 2 - consolidated dispute consultation does not permit commands or fake administrator bypass
+  ---
+  duration_ms: 0.747017
+  type: 'test'
+  ...
+# Subtest: canonical admin still has an explicit policy capability, not an implicit self-review permission
+ok 3 - canonical admin still has an explicit policy capability, not an implicit self-review permission
+  ---
+  duration_ms: 0.224068
+  type: 'test'
+  ...
+# Subtest: scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+not ok 4 - scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+  ---
+  duration_ms: 1.229298
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.access.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + '372D0FB1-734F-4862-9DBA-893FDE1F16AE'
+    - '372d0fb1-734f-4862-9dba-893fde1f16ae'
+          ^
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: '372d0fb1-734f-4862-9dba-893fde1f16ae'
+  actual: '372D0FB1-734F-4862-9DBA-893FDE1F16AE'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.access.test.js:33:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: targeted dispute registration is idempotent and grants no new permissions to company roles
+ok 5 - targeted dispute registration is idempotent and grants no new permissions to company roles
+  ---
+  duration_ms: 3.270959
+  type: 'test'
+  ...
+# Subtest: same committed attempt returns its exact result but different payload is a conflict
+ok 6 - same committed attempt returns its exact result but different payload is a conflict
+  ---
+  duration_ms: 4.02518
+  type: 'test'
+  ...
+# Subtest: commands require concrete scope and UUID before any transaction query
+ok 7 - commands require concrete scope and UUID before any transaction query
+  ---
+  duration_ms: 0.341833
+  type: 'test'
+  ...
+# Subtest: a finished attempt stores and returns one canonical result without rewriting a previous receipt
+ok 8 - a finished attempt stores and returns one canonical result without rewriting a previous receipt
+  ---
+  duration_ms: 0.476269
+  type: 'test'
+  ...
+# Subtest: shared resource locks sort and deduplicate clients before origins
+ok 9 - shared resource locks sort and deduplicate clients before origins
+  ---
+  duration_ms: 0.446713
+  type: 'test'
+  ...
+# Subtest: UUID case cannot split locks or attempts for the same database identities
+not ok 10 - UUID case cannot split locks or attempts for the same database identities
+  ---
+  duration_ms: 1.848091
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.boundary.test.js:43:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+        action: 'CREATE',
+    +   branchId: 'ABCDEFAB-0000-4000-8000-000000000002',
+    +   companyId: 'ABCDEFAB-0000-4000-8000-000000000001',
+    -   branchId: 'abcdefab-0000-4000-8000-000000000002',
+    -   companyId: 'abcdefab-0000-4000-8000-000000000001',
+        hash: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+        key: '10000000-0000-4000-8000-000000000004',
+        replayed: false,
+    +   userId: 'ABCDEFAB-0000-4000-8000-000000000003'
+    -   userId: 'abcdefab-0000-4000-8000-000000000003'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    replayed: false
+    companyId: 'abcdefab-0000-4000-8000-000000000001'
+    branchId: 'abcdefab-0000-4000-8000-000000000002'
+    userId: 'abcdefab-0000-4000-8000-000000000003'
+    action: 'CREATE'
+    key: '10000000-0000-4000-8000-000000000004'
+    hash: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+  actual:
+    replayed: false
+    companyId: 'ABCDEFAB-0000-4000-8000-000000000001'
+    branchId: 'ABCDEFAB-0000-4000-8000-000000000002'
+    userId: 'ABCDEFAB-0000-4000-8000-000000000003'
+    action: 'CREATE'
+    key: '10000000-0000-4000-8000-000000000004'
+    hash: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.boundary.test.js:50:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 8
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 113.991291

@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 1 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 2438.81635
+  type: 'test'
+  ...
+# Subtest: database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+ok 2 - database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+  ---
+  duration_ms: 2460.789708
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 3 - a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 3018.039912
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8070.403037

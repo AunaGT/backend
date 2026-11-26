@@ -1,0 +1,6 @@
+{
+  "watch": ["index.js", "app.js", "src", "scripts/dev-server.js", "scripts/document-worker.js"],
+  "ext": "js,cjs,mjs,json",
+  "signal": "SIGTERM",
+  "delay": "500ms"
+}

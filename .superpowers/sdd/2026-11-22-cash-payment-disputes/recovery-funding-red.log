@@ -1,0 +1,86 @@
+TAP version 13
+# Subtest: pending claims and unrecovered withdrawals share the refunded original coverage
+ok 1 - pending claims and unrecovered withdrawals share the refunded original coverage
+  ---
+  duration_ms: 3.003407
+  type: 'test'
+  ...
+# Subtest: a recovered closed case releases coverage; invalid and excessive money is rejected
+ok 2 - a recovered closed case releases coverage; invalid and excessive money is rejected
+  ---
+  duration_ms: 0.583767
+  type: 'test'
+  ...
+# Subtest: recovering a lost receipt retires only its free portion and never charges it twice
+ok 3 - recovering a lost receipt retires only its free portion and never charges it twice
+  ---
+  duration_ms: 0.521849
+  type: 'test'
+  ...
+# Subtest: provider recoveries prioritize customer lots proportionally with stable cent remainder
+ok 4 - provider recoveries prioritize customer lots proportionally with stable cent remainder
+  ---
+  duration_ms: 2.242093
+  type: 'test'
+  ...
+# Subtest: forgiven principal is a business loss and is not allocated another customer credit
+ok 5 - forgiven principal is a business loss and is not allocated another customer credit
+  ---
+  duration_ms: 0.332862
+  type: 'test'
+  ...
+# Subtest: a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+not ok 6 - a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+  ---
+  duration_ms: 0.254653
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.domain.test.js:42:1'
+  failureType: 'testCodeFailure'
+  error: 'planBankRecovery is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.domain.test.js:44:20)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+not ok 7 - an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+  ---
+  duration_ms: 0.261166
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.domain.test.js:51:1'
+  failureType: 'testCodeFailure'
+  error: 'El cobro tiene importes incompatibles. Revisa su procedencia antes de continuar.'
+  code: 'DISPUTE_COVERAGE_CONFLICT'
+  stack: |-
+    fail (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/cash-closure/disputes.domain.js:4:66)
+    conflict (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/cash-closure/disputes.domain.js:12:24)
+    calculateOriginCoverage (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/cash-closure/disputes.domain.js:28:24)
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.domain.test.js:53:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+ok 8 - attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+  ---
+  duration_ms: 0.80644
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 6
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 154.066993

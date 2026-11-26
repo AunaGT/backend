@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+ok 1 - a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+  ---
+  duration_ms: 2375.247069
+  type: 'test'
+  ...
+# Subtest: accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+ok 2 - accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+  ---
+  duration_ms: 2596.383346
+  type: 'test'
+  ...
+# Subtest: a standalone provider withholding reduces pending settlement once and cannot be settled again
+ok 3 - a standalone provider withholding reduces pending settlement once and cannot be settled again
+  ---
+  duration_ms: 2455.24657
+  type: 'test'
+  ...
+# Subtest: the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+ok 4 - the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+  ---
+  duration_ms: 2536.173229
+  type: 'test'
+  ...
+# Subtest: settlement and withholding serialize on the original funds in either winner order
+ok 5 - settlement and withholding serialize on the original funds in either winner order
+  ---
+  duration_ms: 2571.110714
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12687.326229

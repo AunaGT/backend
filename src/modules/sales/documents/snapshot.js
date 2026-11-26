@@ -1,13 +1,13 @@
 const {id,lock,resolveProfiles}=require('../../config/documentTemplates/service')
 const {LIMITS}=require('../../config/documentTemplates/contract')
 const {fail}=require('../../config/documentTemplates/permissions')
-const {operationScope,originPermission,has}=require('../../config/hardware/operations')
+const {operationScope,originPermission,canReadSaleReceipt}=require('../../config/hardware/operations')
 const {lockPrintBranding}=require('../../config/hardware/printing/branding')
 const {documentData}=require('./data')
 async function authorizeSaleDocument(db,scope,saleId,{includeData=false}={}) {
   operationScope(scope);originPermission(scope,'RECEIPT');id(saleId)
   const sale=await db.sale.findFirst({where:{id:saleId,branch_id:scope.branchId,branch:{company_id:scope.companyId}},...(includeData?{include:{status:true,sale_items:true,cashRegisterSession:{select:{cash_register_id:true}},payment_method:{select:{name:true}},branch:{include:{company:{select:{name:true,tax_id:true,address:true,logo_url:true}}}}}}:{select:{id:true,created_by:true}})})
-  if(!sale||sale.created_by!==scope.actorId&&!['sales.view','sales.view_detail','sales.view_invoice'].some(p=>has(scope,p)))throw fail(404,'Venta no encontrada')
+  if(!canReadSaleReceipt(scope,sale))throw fail(404,'Venta no encontrada')
   return sale
 }
 async function prepareSaleSnapshot(db,scope,{saleId,purpose='INTERNAL_RECEIPT'}) {

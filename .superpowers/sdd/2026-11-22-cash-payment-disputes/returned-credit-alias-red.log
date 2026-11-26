@@ -1,0 +1,27 @@
+TAP version 13
+# Subtest: credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+not ok 1 - credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+  ---
+  duration_ms: 2668.047577
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.aliases.pg.e2e.js:5:1'
+  failureType: 'testCodeFailure'
+  error: 'require(...).recordReturnedSaleCredit is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    completeApprovedReturn (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/returns/application.js:527:80)
+    async Proxy._transactionWithCallback (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:133:8120)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.aliases.pg.e2e.js:25:7)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7056.114066

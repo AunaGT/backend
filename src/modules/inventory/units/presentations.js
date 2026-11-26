@@ -10,7 +10,7 @@ async function listPresentations(db,scope,id,{includeArchived=false}={}) {
   return rows.map(p=>presentationDTO(p,codes))
 }
 async function savePresentation(tx,scope,productId,input,id=null) {
-  authorize(scope,['products.edit','products.create'],true);await assertEnabled(tx,scope)
+  authorize(scope,['products.edit'],true);await assertEnabled(tx,scope)
   objectInput(input,['unit_revision','name','label','factor','measure_unit_id','quantity_decimals','purchase_enabled','sale_enabled','active','prices','promotion_valid_until','barcode'])
   await lockCompany(tx,scope.companyId)
   await assertEnabled(tx,scope)

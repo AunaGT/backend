@@ -74,7 +74,7 @@ test('every report endpoint requires its owning modules after authentication', a
   const owners = { sales: ['sales'], inventory: ['inventory'], suppliers: ['contacts'], financial: ['sales', 'inventory'],
     alerts: ['alerts'], products: ['inventory'], 'stock-by-location': ['inventory'], kardex: ['inventory'],
     'internal-moves': ['inventory'], replenishment: ['inventory'], occupancy: ['inventory'], merchandise: ['merchandise'],
-    'inventory-count-session/:id': ['inventory-count'], 'inventory-counts': ['inventory-count'] }
+    'inventory-count-session/:id': ['inventory-count'], 'inventory-counts': ['inventory-count'], disputes: ['cash-closure'] }
   const auth = (req, res, next) => next()
   await withMocks({
     [require.resolve('../src/middlewares/autenticacion')]: { Auth: auth, hasPermission: () => (req, res, next) => next() },

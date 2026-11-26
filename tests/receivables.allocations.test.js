@@ -15,3 +15,8 @@ test('over-allocation, invalid money and silently rounded fractions are rejected
     assert.throws(() => rules.receiptAllocation({received:value,applied:'0',committed:'0',refunded:'0'}),{code:'INVALID_MONEY'})
   }
 })
+test('disputed free funds and retired principal cannot be spent again or hide charge applications',()=>{
+  assert.deepEqual(rules.receiptAllocation({received:'100',applied:'30',committed:'20',refunded:'0',held:'25',retired:'10',chargeApplied:'5'}),
+    {received:'100.00',applied:'30.00',committed:'20.00',refunded:'0.00',available:'10.00',held:'25.00',retired:'10.00',chargeApplied:'5.00'})
+  assert.throws(()=>rules.receiptAllocation({received:'100',applied:'60',committed:'0',refunded:'0',held:'41'}),{code:'PAYMENT_ALLOCATION_CONFLICT'})
+})

@@ -1,5 +1,6 @@
 const {fail,uuid,ROLES}=require('./validation')
 const has=(scope,code)=>scope.isAdmin||scope.permissions?.includes(code)
+const canReadSaleReceipt=(scope,sale)=>!!sale&&(has(scope,'sales.view_invoice')||(has(scope,'sales.create')&&sale.created_by===scope.actorId))
 function operationScope(scope){
   if(!scope.companyId||!scope.actorId||!scope.branchId||scope.branchId==='all'||scope.isConsolidated)fail(400,'Selecciona una empresa y sucursal')
   return{company_id:scope.companyId,branch_id:scope.branchId}
@@ -7,7 +8,7 @@ function operationScope(scope){
 function originPermission(scope,purpose){
   operationScope(scope)
   if(purpose==='RECEIPT'){
-    if(!['sales.create','sales.view','sales.view_detail','sales.view_invoice'].some(p=>has(scope,p)))fail(403,'No tienes permiso para obtener este ticket')
+    if(!['sales.create','sales.view_invoice'].some(p=>has(scope,p)))fail(403,'No tienes permiso para obtener este ticket')
   }else if(purpose==='LABEL'){
     if(!has(scope,'products.view')||!['products.export','reports.view'].some(p=>has(scope,p)))fail(403,'No tienes permiso para preparar etiquetas')
   }else fail(400,'Destino no válido')
@@ -29,4 +30,4 @@ async function resolveWorkstation(db,scope,input){
   originPermission(scope,input.purpose)
   return resolveRoute(db,scope,{...input,role:input.purpose})
 }
-module.exports={has,operationScope,originPermission,resolveRoute,resolveWorkstation}
+module.exports={has,canReadSaleReceipt,operationScope,originPermission,resolveRoute,resolveWorkstation}

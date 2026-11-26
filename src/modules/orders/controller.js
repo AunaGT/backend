@@ -7,6 +7,7 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
 const { Prisma } = require('@prisma/client')
+const {lockCommercialDocument,assertDocumentUnchanged}=require('../../services/commercialDocumentConcurrency')
 const {publicUnitLine}=require('../../services/units/publicLine')
 const { documentPaymentTerms, creditDueDate, initialPaymentAmount, recordInitialPayment, getTimezone } = require('../../services/commercialPayment')
 const { checkCredit, lockCustomer, CUSTOMER_TERM_PICK } = require('../receivables')
@@ -32,6 +33,7 @@ const {commercialQuantity,lineSnapshot,assertServicesEnabled}=require('../../ser
 const Units=require('../inventory/units')
 const {resolveCommercialLines}=require('../../services/units/saleLines')
 const {isV2,unitFields}=require('../../services/units/commercial')
+const Packages=require('../../services/commercialPackages')
 const {validMoney}=require('../../utils/importValidation')
 const {checkoutKey,checkoutHash,assertCheckoutReplay,lockCheckoutAttempt}=require('../sales/checkoutAttempts')
 const {
@@ -157,6 +159,7 @@ async function validateCustomerContact(tx, customerContactId) {
 }
 
 async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) {
+  Packages.assertFreePackageItems(items)
   if(await Units.unitsEnabled(tx,ctx.companyId)){
     const resolved=await resolveCommercialLines(tx,ctx.scope(),items,{tier:await resolvePriceTierForContext(tx,ctx),allowOverride:true})
     const lines=resolved.map((line,index)=>{const {unit_cost,...saved}=line;return {...saved,sort_order:index,...(isV2(line)?{base_fulfilled:'0',base_invoiced:'0'}:{})}})
@@ -246,15 +249,16 @@ async function resolveOrderLines(tx, items, ctx, { freezePrices = false } = {}) 
   }
 }
 
-async function requireCashSession(tx, user, explicitRegisterId, branchId) {
-  let cashSessionIdForSale = null
-  const isAdmin = String(user.role?.name || user.role_name || '').toLowerCase() === 'admin'
+async function requireCashSession(tx, user, explicitRegisterId, branchId, companyId, { settlementKind } = {}) {
+  let cashSession = null
+  const isAdmin = require('../users/roles/policy').isSystemAdmin(user.role)
   // Caja: la explícita (POS) > la asignada al usuario > la predeterminada. Siempre de la sucursal.
   let register = null
   if (explicitRegisterId) {
     register = await tx.cashRegister.findFirst({
       where: { id: String(explicitRegisterId), active: true, branch_id: branchId },
     })
+    if (!register) throw Object.assign(new Error('NO_CASH_REGISTER'), { status: 404 })
   }
   if (!register && user.sub) {
     const u = await tx.user.findUnique({
@@ -278,22 +282,16 @@ async function requireCashSession(tx, user, explicitRegisterId, branchId) {
     select: { id: true, opened_by_id: true, openedBy: { select: { name: true } } },
   })
   if (openSess) {
-    // Mismo control que en sales.controller.js: el turno abierto en la caja
-    // resuelta tiene que ser del vendedor actual, no de quien sea que la
-    // haya dejado abierta.
-    if (!isAdmin && String(openSess.opened_by_id) !== String(user.sub)) {
-      const err = new Error('CASH_SESSION_OTHER_USER')
-      err.status = 403
-      err.openedByName = openSess.openedBy?.name || 'otro usuario'
-      throw err
-    }
-    cashSessionIdForSale = openSess.id
-  } else if (!isAdmin) {
+    const boundary = require('../../services/cashSessionBoundary')
+    const session = await boundary.lockScopedSession(tx, { companyId, branchId, userId: user.sub }, openSess.id)
+    boundary.assertSessionOperation(session, { userId: user.sub, isAdmin }, { settlementKind })
+    cashSession = session
+  } else if (!isAdmin || settlementKind === 'CASH') {
     const err = new Error('CASH_SESSION_REQUIRED')
     err.status = 403
     throw err
   }
-  return cashSessionIdForSale
+  return cashSession
 }
 
 exports.list = async (req, res, next) => {
@@ -401,7 +399,7 @@ exports.getById = async (req, res, next) => {
     })
     if (!doc) return res.status(404).json({ message: 'Pedido no encontrado' })
     const origin=await require('../appointments').linkedEngagementOrigins(prisma,req,{orderId:doc.id})
-    res.json({...doc,engagementId:origin.orderEngagementId})
+    res.json({...doc,engagementId:origin.orderEngagementId,...(doc.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').publicEventPaymentTerms(doc.event_payment_terms)}:{})})
   } catch (e) {
     next(e)
   }
@@ -474,6 +472,8 @@ exports.getPublicByToken = async (req, res, next) => {
         subtotal: true,
         discount_total: true,
         total: true,
+        package_groups: true,
+        ...require('../../services/eventPaymentTermsStorage').eventPaymentSelect(prisma),
         notes: true,
         branch: { select: { company_id: true, name: true, code: true } },
         customerContact: {
@@ -487,6 +487,7 @@ exports.getPublicByToken = async (req, res, next) => {
             item_name: true, item_kind: true, unit_label: true, quantity_decimals: true,
             unit_price: true,
             line_total: true,
+            package_component_key: true,
             product: { select: { name: true, barcode: true } },
           },
         },
@@ -509,18 +510,24 @@ exports.getPublicByToken = async (req, res, next) => {
 
     const moduleBlock = await getCompanyModuleBlock(order.branch.company_id, 'orders')
     if (moduleBlock) return res.status(403).json(moduleBlock)
-    if(await Units.unitsEnabled(prisma,order.branch.company_id))order.lines=await prisma.commercialDocumentLine.findMany({where:{document_id:order.id},orderBy:{sort_order:'asc'},select:{qty:true,qty_fulfilled:true,item_name:true,item_kind:true,unit_label:true,quantity_decimals:true,unit_price:true,line_total:true,unit_metadata_version:true,unit_snapshot:true,base_qty:true,base_fulfilled:true,base_invoiced:true,product:{select:{name:true,barcode:true}}}})
+    if(await Units.unitsEnabled(prisma,order.branch.company_id))order.lines=await prisma.commercialDocumentLine.findMany({where:{document_id:order.id},orderBy:{sort_order:'asc'},select:{package_component_key:true,qty:true,qty_fulfilled:true,item_name:true,item_kind:true,unit_label:true,quantity_decimals:true,unit_price:true,line_total:true,unit_metadata_version:true,unit_snapshot:true,base_qty:true,base_fulfilled:true,base_invoiced:true,product:{select:{name:true,barcode:true}}}})
 
     const companyRows = await prisma.systemSetting.findMany({
       where: {
-        key: { in: ['company_name', 'company_logo_url'] },
+        key: { in: ['company_name', 'company_logo_url','currency_code','locale','timezone'] },
         company_id: order.branch.company_id,
       },
     })
     const company = Object.fromEntries(companyRows.map((row) => [row.key, row.value]))
+    const portal=await require('../../services/customerPagesPublic').resolvePublicPortal(prisma,{companyId:order.branch.company_id,documentType:'ORDER'})
+    res.set?.({'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
 
     res.json({
+      ...(portal?{portal}:{}),
+      ...(order.package_groups?.length?{packageGroups:Packages.publicPackageGroups(order.package_groups)}:{}),
+      ...(order.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').publicEventPaymentTerms(order.event_payment_terms)}:{}),
       ...(order.lines.some(l=>l.unit_metadata_version===2)?{unit_metadata_version:2}:{}),
+      currency_code:order.package_groups?.[0]?.currency||company.currency_code||'GTQ',locale:company.locale||'es-GT',timezone:company.timezone||'America/Guatemala',
       reference: order.reference,
       status: order.status,
       created_at: order.created_at,
@@ -542,6 +549,7 @@ exports.getPublicByToken = async (req, res, next) => {
       company_name: company.company_name || 'Auna',
       company_logo_url: String(company.company_logo_url || '').trim(),
       lines: order.lines.map((line) => ({
+        ...Packages.packageLineFields(line),
         product_name: line.item_name ?? line.product?.name ?? null,
         item_kind: line.item_kind, unit_label: line.unit_label, quantity_decimals: line.quantity_decimals,
         barcode: line.product?.barcode || null,
@@ -672,6 +680,9 @@ exports.update = async (req, res, next) => {
     }
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const current=await lockCommercialDocument(tx,{companyId:req.companyId,branchId:existing.branch_id,type:ORDER_DOC_TYPE},existing.id)
+      assertDocumentUnchanged(current,existing.integration_revision)
+      if(current.package_groups?.length||current.event_payment_terms)throw Object.assign(new Error('Este pedido conserva un acuerdo cotizado. Cámbialo desde una nueva cotización de origen'),{status:409,code:'SOURCE_OWNS_AGREEMENT'})
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
       const { lines, subtotal, total } = await resolveOrderLines(tx, items, {
@@ -743,6 +754,8 @@ exports.changeBranch = async (req, res, next) => {
     }
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const current=await lockCommercialDocument(tx,{companyId:req.companyId,branchId:order.branch_id,type:ORDER_DOC_TYPE},order.id)
+      assertDocumentUnchanged(current,order.integration_revision)
       const branch = await loadBranch(tx, branchId)
       // El correlativo es por sucursal (@@unique([branch_id, reference])): al mudarse
       // toma un número de la serie nueva, arrastrar el viejo rompería la numeración.
@@ -782,6 +795,8 @@ exports.confirm = async (req, res, next) => {
       await tx.$queryRaw`SELECT d.id FROM commercial_documents d JOIN branches b ON b.id=d.branch_id WHERE d.id=${order.id}::uuid AND b.company_id=${req.companyId}::uuid FOR UPDATE OF d`
       order=await tx.commercialDocument.findFirst({where,include:{lines:{orderBy:{sort_order:'asc'}}}})
       if(!order||order.status!=='DRAFT')throw Object.assign(new Error('El pedido ya no está en borrador'),{status:409})
+      Packages.assertPackageAgreement(order,{requireComplete:true})
+      await Packages.assertPackageCurrency(tx,req.companyId,order.package_groups)
       const lineRows=order.lines
       if(!lineRows?.length)throw Object.assign(new Error('El pedido debe tener al menos una línea'),{status:409})
       if(lineRows.some(line=>line.item_kind==='SERVICE'))await assertServicesEnabled(tx,req.companyId)
@@ -917,9 +932,16 @@ exports.convertToSale = async (req, res, next) => {
         const previous=await tx.sale.findFirst({where:{branch_id:order.branch_id,idempotency_key:attemptKey}})
         if(previous){assertCheckoutReplay(previous,req,attemptHash);return {order:null,sale:previous}}
       }
+      const paymentMethod = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:paymentMethodId,purpose:'SALE'})
+      const cash = require('../../services/paymentMethods/behavior').isCashMethod(paymentMethod, name => /efectivo|cash/i.test(name))
+      const cashSession = await requireCashSession(tx, user, cashRegisterId, order.branch_id, req.companyId, { settlementKind: paymentMethod.is_credit ? 'CREDIT' : cash ? 'CASH' : paymentMethod.settlement_kind ?? null })
+      const cashSessionIdForSale = cashSession?.id || null
+      if (cashSession?.money_event_version === 1 && !attemptKey) throw Object.assign(new Error('Actualiza la pantalla para obtener una clave segura antes de cobrar.'), { status: 428, code: 'CHECKOUT_KEY_REQUIRED' })
       await tx.$queryRaw`SELECT id FROM commercial_documents WHERE id=${order.id}::uuid FOR UPDATE`
       order=await tx.commercialDocument.findFirst({where:{id:order.id,branch_id:req.branchId,branch:{company_id:req.companyId}},include:{lines:{orderBy:{sort_order:'asc'}}}})
       if(!order||!['CONFIRMED','PARTIALLY_FULFILLED'].includes(order.status))throw Object.assign(new Error('El pedido ya no está pendiente de entrega'),{status:409})
+      Packages.assertPackageAgreement(order,{requireComplete:true})
+      await Packages.assertPackageCurrency(tx,req.companyId,order.package_groups)
       order={...order,lines:require('../../services/commercialDocumentFulfillment').netDocumentLines(order)}
       fulfillments=resolveFulfillmentLines(order.lines,linesRaw)
       if(!fulfillments.length)throw Object.assign(new Error('No hay líneas pendientes por entregar'),{status:409})
@@ -927,15 +949,6 @@ exports.convertToSale = async (req, res, next) => {
       const stockLines=fulfillments.map(({line,...selection})=>({...line,...selection}))
       const lineMaps=unitMode?await require('../../services/units/commercialPhysical').reservationStockMaps(tx,order.id,fulfillments,{branchId:order.branch_id}):null
       const physicalLines=lineMaps?lineMaps.flatMap(map=>[...map].map(([product_id,qty])=>({product_id,qty,base_qty:qty}))):stockLines
-      const cashSessionIdForSale = await requireCashSession(tx, user, cashRegisterId, order.branch_id)
-
-      const paymentMethod = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:paymentMethodId,purpose:'SALE'})
-      if (!paymentMethod) {
-        const err = new Error('Método de pago no encontrado')
-        err.status = 400
-        throw err
-      }
-
       await assertLinesAvailable(
         tx,
         physicalLines,
@@ -954,6 +967,7 @@ exports.convertToSale = async (req, res, next) => {
       const subtotal = netLineTotals.reduce((sum,amount)=>sum.add(amount),new Prisma.Decimal(0)).toNumber()
       if (totalItems>2147483647 || !validMoney(subtotal)) throw Object.assign(new Error('Factura fuera de rango'),{status:400})
       const total = subtotal
+      if(order.package_groups?.length)Packages.assertPackageAgreement({package_groups:order.package_groups,total,sale_items:fulfillments.map(({line,qty,...selection},i)=>({...line,...selection,qty,...(!isV2(line)?{base_qty:qty}:{}),price:isV2(line)?selection.unit_price:line.unit_price,net_total:netLineTotals[i]}))},{kind:'SALE',allowPartial:true})
       const initialAmount = initialPaymentAmount(req.body, total, paymentMethod.is_credit)
       let dueDate = null
       if (paymentMethod.is_credit) {
@@ -997,6 +1011,8 @@ exports.convertToSale = async (req, res, next) => {
           total,
           total_returned: 0,
           adjusted_total: total,
+          ...(order.package_groups?.length?{package_groups:Packages.copyPackageGroups(order.package_groups)}:{}),
+          ...require('../../services/eventPaymentTermsStorage').copyEventPaymentTerms(order),
           status_id: completadaStatus.id,
           created_by: user.sub,
           cash_register_session_id: cashSessionIdForSale || undefined,
@@ -1021,6 +1037,7 @@ exports.convertToSale = async (req, res, next) => {
           net_total: netLineTotals[index],
           qty,
           ...lineSnapshot(line),
+          ...Packages.packageLineFields(line),...(!isV2(line)&&line.package_component_key?unitFields({...line,qty,base_qty:qty}):{}),
           ...(isV2(line)?{...unitFields(selection),unit_label:selection.unit_label,quantity_decimals:selection.quantity_decimals,base_returned:'0'}:{}),
         })),
       })
@@ -1052,6 +1069,7 @@ exports.convertToSale = async (req, res, next) => {
         data: { document_id: order.id, sale_id: sale.id },
       })
       await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
+      if (cashSession && !paymentMethod.is_credit) await require('../cash-closure/events').recordMoneyEvent(tx, { companyId: req.companyId, branchId: order.branch_id, userId: user.sub, isAdmin: require('../users/roles/policy').isSystemAdmin(user.role) }, { session: cashSession, sourceType: 'SALE', sourceId: sale.id })
       if(!paymentMethod.is_credit&&paymentMethod.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,require('../config/hardware/drawer/events').requestHardwareScope(req),{origin:'POS_SALE',sourceId:sale.id})
 
       const refreshedLines = await tx.commercialDocumentLine.findMany({

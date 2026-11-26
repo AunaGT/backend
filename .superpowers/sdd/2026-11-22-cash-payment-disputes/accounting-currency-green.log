@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+ok 1 - posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+  ---
+  duration_ms: 2847.048729
+  type: 'test'
+  ...
+# Subtest: a closed accounting period rolls back every new dispute entry and preserves the pending source
+ok 2 - a closed accounting period rolls back every new dispute entry and preserves the pending source
+  ---
+  duration_ms: 2240.286869
+  type: 'test'
+  ...
+# Subtest: generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+ok 3 - generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+  ---
+  duration_ms: 2292.047505
+  type: 'test'
+  ...
+# Subtest: changing company currency never silently converts a frozen dispute source
+ok 4 - changing company currency never silently converts a frozen dispute source
+  ---
+  duration_ms: 2269.10279
+  type: 'test'
+  ...
+# Subtest: an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+ok 5 - an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+  ---
+  duration_ms: 2351.857513
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12170.581262

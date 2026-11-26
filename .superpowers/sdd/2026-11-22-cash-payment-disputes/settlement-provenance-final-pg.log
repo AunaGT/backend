@@ -1,0 +1,178 @@
+TAP version 13
+# Subtest: posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+ok 1 - posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+  ---
+  duration_ms: 15987.676207
+  type: 'test'
+  ...
+# Subtest: a closed accounting period rolls back every new dispute entry and preserves the pending source
+ok 2 - a closed accounting period rolls back every new dispute entry and preserves the pending source
+  ---
+  duration_ms: 14432.898603
+  type: 'test'
+  ...
+# Subtest: generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+ok 3 - generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+  ---
+  duration_ms: 12495.552284
+  type: 'test'
+  ...
+# Subtest: changing company currency never silently converts a frozen dispute source
+ok 4 - changing company currency never silently converts a frozen dispute source
+  ---
+  duration_ms: 7805.87625
+  type: 'test'
+  ...
+# Subtest: a disposition cannot move principal to a different dispute asset than its withdrawal
+ok 5 - a disposition cannot move principal to a different dispute asset than its withdrawal
+  ---
+  duration_ms: 8565.821969
+  type: 'test'
+  ...
+# Subtest: the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+ok 6 - the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+  ---
+  duration_ms: 8336.753911
+  type: 'test'
+  ...
+# Subtest: an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+ok 7 - an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+  ---
+  duration_ms: 8825.046709
+  type: 'test'
+  ...
+# Subtest: a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+ok 8 - a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+  ---
+  duration_ms: 16089.683396
+  type: 'test'
+  ...
+# Subtest: a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+ok 9 - a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+  ---
+  duration_ms: 15818.938038
+  type: 'test'
+  ...
+# Subtest: accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+ok 10 - accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+  ---
+  duration_ms: 11534.201259
+  type: 'test'
+  ...
+# Subtest: a standalone provider withholding reduces pending settlement once and cannot be settled again
+ok 11 - a standalone provider withholding reduces pending settlement once and cannot be settled again
+  ---
+  duration_ms: 7680.829365
+  type: 'test'
+  ...
+# Subtest: the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+ok 12 - the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+  ---
+  duration_ms: 9267.165189
+  type: 'test'
+  ...
+# Subtest: settlement and withholding serialize on the original funds in either winner order
+ok 13 - settlement and withholding serialize on the original funds in either winner order
+  ---
+  duration_ms: 9412.022639
+  type: 'test'
+  ...
+# Subtest: later withdrawals of one case retain its dispute asset when the company changes its default account
+ok 14 - later withdrawals of one case retain its dispute asset when the company changes its default account
+  ---
+  duration_ms: 8023.359319
+  type: 'test'
+  ...
+# Subtest: additive dispute DDL preserves existing data and isolates all new tables
+ok 15 - additive dispute DDL preserves existing data and isolates all new tables
+  ---
+  duration_ms: 15744.271485
+  type: 'test'
+  ...
+# Subtest: dispute children cannot divert a receipt restriction to another customer or overreserve funds
+ok 16 - dispute children cannot divert a receipt restriction to another customer or overreserve funds
+  ---
+  duration_ms: 15666.04192
+  type: 'test'
+  ...
+# Subtest: a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+ok 17 - a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+  ---
+  duration_ms: 10565.86024
+  type: 'test'
+  ...
+# Subtest: an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+ok 18 - an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+  ---
+  duration_ms: 7125.070376
+  type: 'test'
+  ...
+# Subtest: an approved cancellation cannot hide an outstanding bank withdrawal
+ok 19 - an approved cancellation cannot hide an outstanding bank withdrawal
+  ---
+  duration_ms: 8473.326914
+  type: 'test'
+  ...
+# Subtest: verified historical deductions append a reclassification without another bank debit or changed history
+ok 20 - verified historical deductions append a reclassification without another bank debit or changed history
+  ---
+  duration_ms: 15977.317816
+  type: 'test'
+  ...
+# Subtest: a historical deduction already posted to the dispute asset reuses the settlement journal exactly once
+ok 21 - a historical deduction already posted to the dispute asset reuses the settlement journal exactly once
+  ---
+  duration_ms: 16040.849672
+  type: 'test'
+  ...
+# Subtest: raw partial or cross-origin historical links are rejected before they can masquerade as withdrawals
+ok 22 - raw partial or cross-origin historical links are rejected before they can masquerade as withdrawals
+  ---
+  duration_ms: 11792.432566
+  type: 'test'
+  ...
+# Subtest: linking is exact, scoped and versioned, and a closed accounting period rolls the whole command back
+ok 23 - linking is exact, scoped and versioned, and a closed accounting period rolls the whole command back
+  ---
+  duration_ms: 9655.843426
+  type: 'test'
+  ...
+# Subtest: deferred adoption stays unposted until both original and settlement entries can be verified
+ok 24 - deferred adoption stays unposted until both original and settlement entries can be verified
+  ---
+  duration_ms: 7451.707453
+  type: 'test'
+  ...
+# Subtest: a linked settlement cannot be voided through the old service or raw writer
+ok 25 - a linked settlement cannot be voided through the old service or raw writer
+  ---
+  duration_ms: 9677.175612
+  type: 'test'
+  ...
+# Subtest: a settlement journal with the wrong deduction counterpart cannot authorize a reclassification
+ok 26 - a settlement journal with the wrong deduction counterpart cannot authorize a reclassification
+  ---
+  duration_ms: 8109.23942
+  type: 'test'
+  ...
+# Subtest: deferred accounting inspection explains a frozen account that became inactive before posting
+ok 27 - deferred accounting inspection explains a frozen account that became inactive before posting
+  ---
+  duration_ms: 5131.71113
+  type: 'test'
+  ...
+# Subtest: adoption and settlement void serialize in both orders without orphan effects or deadlocks
+ok 28 - adoption and settlement void serialize in both orders without orphan effects or deadlocks
+  ---
+  duration_ms: 10168.774885
+  type: 'test'
+  ...
+1..28
+# tests 28
+# suites 0
+# pass 28
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 94614.33808

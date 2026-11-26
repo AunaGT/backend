@@ -3,7 +3,7 @@ const {harness,ids}=require('./helpers/hardwareHarness.cjs')
 const {printHistory,reprintJob}=require('../src/modules/config/hardware/printing/service')
 async function fixture(){
  const h=harness()
- h.scope.permissions=['hardware.view','sales.view']
+ h.scope.permissions=['hardware.view','sales.view_invoice']
  for(const actor of [ids.actor,randomUUID()])await h.db.hardwarePrintJob.create({data:{company_id:ids.company,branch_id:ids.branch,actor_id:actor,source_kind:'SALE_TICKET',source_id:randomUUID(),state:'CREATED',document:'MAIN'}})
  const findMany=h.db.hardwarePrintJob.findMany
  h.db.hardwarePrintJob.findMany=async query=>(await findMany(query)).map(row=>Object.fromEntries(Object.keys(query.select).filter(key=>query.select[key]).map(key=>[key,row[key]])))

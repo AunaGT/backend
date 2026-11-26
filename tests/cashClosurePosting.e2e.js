@@ -54,13 +54,18 @@ async function main() {
     theoretical_total: 100, theoretical_sales: 100, theoretical_returns: 0,
     total_transactions: 1, total_customers: 1, average_ticket: 100,
   }
+  const cash = await prisma.paymentMethod.create({ data: { company_id: co.id, name: 'Efectivo QA arqueo', settlement_kind: 'CASH' } })
+  const cashBreakdown = actual => ({ create: {
+    payment_method_id: cash.id, theoretical_amount: 100, theoretical_count: 1,
+    actual_amount: actual, actual_count: 1, difference: actual - 100,
+  } })
 
   console.log('\n== Sin cuenta de arqueo configurada: se omite solo el arqueo ==')
   const sobrante = await prisma.cashClosure.create({
-    data: { ...baseClosure, actual_total: 110, difference: 10 },
+    data: { ...baseClosure, actual_total: 110, difference: 10, payment_breakdowns: cashBreakdown(110) },
   })
   const cero = await prisma.cashClosure.create({
-    data: { ...baseClosure, actual_total: 100, difference: 0 },
+    data: { ...baseClosure, actual_total: 100, difference: 0, payment_breakdowns: cashBreakdown(100) },
   })
   const r1 = await postPendingOperations(prisma, null, co.id)
   const skipReasonSobrante = r1.skipped.find((s) => s.source.includes(`#${sobrante.closure_number}`))
@@ -79,7 +84,7 @@ async function main() {
   })
 
   const faltante = await prisma.cashClosure.create({
-    data: { ...baseClosure, actual_total: 90, difference: -10 },
+    data: { ...baseClosure, actual_total: 90, difference: -10, payment_breakdowns: cashBreakdown(90) },
   })
 
   const r2 = await postPendingOperations(prisma, null, co.id)

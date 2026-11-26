@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 1 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 2661.922534
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 2 - a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 2542.001117
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5363.183264

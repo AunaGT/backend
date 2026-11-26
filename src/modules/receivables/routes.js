@@ -27,7 +27,7 @@ router.get('/customers/:id/credit-check', Auth, hasPermission('sales.create'), R
 // Cobros
 router.post('/payments', Auth, hasPermission('receivables.manage'), Receivables.createPayment)
 router.get('/payments/:id', Auth, hasPermission('receivables.view'), Receivables.receipt)
-router.delete('/payments/:id', Auth, hasPermission('receivables.manage'), Receivables.deletePayment)
+router.delete('/payments/:id', Auth, hasPermission('receivables.cancel_payment'), Receivables.deletePayment)
 router.post(
   '/customers/:id/apply-credit',
   Auth,

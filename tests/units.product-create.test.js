@@ -4,16 +4,26 @@ const units=require('../src/modules/inventory/units')
 const {database,scope}=require('./units.catalog.test')
 
 const configuration=()=>({base_unit_id:'kg',quantity_decimals:6,presentations:[{client_key:'saco',name:'Saco',label:'saco',factor:'24',quantity_decimals:0}],default_purchase_key:'saco',default_sale_key:null})
-async function createInTransaction(db,state,input){
+async function createInTransaction(db,state,input,actorScope=scope){
   const snapshot=structuredClone(state)
   try{
     const data={name:'Café',kind:'STANDARD',stock:0,min_stock:'0',price:'2',...input}
-    const finish=await units.prepareProductWrite(db,scope,null,input,data,{create:true})
+    const finish=await units.prepareProductWrite(db,actorScope,null,input,data,{create:true})
     Object.assign(state.product,{base_unit_id:null,quantity_decimals:0,unit_revision:1,...data})
     const product=await finish(state.product)
     return {product,data,stock:finish.initialStock}
   }catch(error){Object.assign(state,snapshot);throw error}
 }
+test('create-only user can configure the new product but cannot mutate an existing one',async()=>{
+  const creator={...scope,permissions:['products.create']}
+  const {db,state}=database();state.product.base_unit_id=null
+  const {product}=await createInTransaction(db,state,{units_configuration:configuration()},creator)
+  assert.equal(product.presentations.length,1)
+  assert.deepEqual(creator.permissions,['products.create'])
+  await assert.rejects(units.configureProduct(db,creator,'P',{quantity_decimals:state.product.quantity_decimals,unit_revision:state.product.unit_revision}),{status:403})
+  await assert.rejects(units.savePresentation(db,creator,'P',{unit_revision:state.product.unit_revision,name:'Otra',label:'otra',factor:'2',quantity_decimals:0}),{status:403})
+  await assert.rejects(units.prepareProductWrite(db,creator,state.product,{price:'5'},{price:'5'}),{status:403})
+})
 test('new product saves base, presentations and local defaults in its create transaction',async()=>{
   const {db,state}=database();state.product.base_unit_id=null
   const {product,data,stock}=await createInTransaction(db,state,{units_configuration:configuration(),stock:'0.123456',min_stock:'0.000001'})

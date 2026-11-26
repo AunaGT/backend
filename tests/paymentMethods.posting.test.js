@@ -6,7 +6,7 @@ test('closure rejects invalid unidentified collection metadata before any databa
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:{}},[require.resolve('../src/utils/getTimezone')]:{getTimezone:async()=>{throw new Error('Unexpected database work')}}},require.resolve('../src/modules/cash-closure/controller'),async ctrl=>{
     for(const amount of [Infinity,-1,'25',true,{},10000000000]){
       const res=jsonResponse()
-      await ctrl.create({body:{startDate:'2026-10-15T00:00:00',endDate:'2026-10-15T23:59:59',cashierName:'QA',unidentifiedCollectionsAmount:amount},user:{role:{name:'admin'}}},res,e=>{throw e})
+      await ctrl.create({companyId:'A',branchId:'B',body:{startDate:'2026-10-15T00:00:00',endDate:'2026-10-15T23:59:59',cashierName:'QA',unidentifiedCollectionsAmount:amount},user:{sub:'U',permissions:['cashclosure.create_day']}},res,e=>{throw e})
       assert.equal(res.statusCode,400)
       assert.match(res.body.message,/importe.*medio no registrado/i)
     }
@@ -15,9 +15,12 @@ test('closure rejects invalid unidentified collection metadata before any databa
 test('closure persists unidentified collection evidence but still requires a human difference reason',async()=>{
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
   const saved=[]
-  const tx={cashClosure:{create:async({data})=>{saved.push(data);return{id:'C'}},findUnique:async()=>({id:'C'})}}
-  await withMocks({[require.resolve('../src/models/prisma')]:{prisma:{$transaction:async work=>work(tx)}},[require.resolve('../src/utils/getTimezone')]:{getTimezone:async()=> 'America/Guatemala'}},require.resolve('../src/modules/cash-closure/controller'),async ctrl=>{
-    const req={branchId:'B',companyId:'A',user:{sub:'U',role:{name:'admin'}},body:{startDate:'2026-10-15T00:00:00',endDate:'2026-10-15T23:59:59',cashierName:'QA',theoreticalTotal:25,actualTotal:0,unidentifiedCollectionsAmount:25,notes:''}}
+  const tx={cashClosure:{create:async({data})=>{saved.push(data);return{id:'C'}},findUnique:async()=>({id:'C'})},saleStatus:{findFirst:async()=>({id:1})},sale:{findMany:async()=>[]},customerPayment:{findMany:async()=>[{id:'R',amount:25,payment_method_id:null,payment_method:null}]},returnSettlement:{findMany:async()=>[]},customerPaymentRefund:{findMany:async()=>[]}}
+  tx.$transaction=async work=>work(tx)
+  tx.$queryRaw=async()=>[]
+  await withMocks({[require.resolve('../src/models/prisma')]:{prisma:tx},[require.resolve('../src/utils/getTimezone')]:{getTimezone:async()=> 'America/Guatemala'}},require.resolve('../src/modules/cash-closure/controller'),async ctrl=>{
+    const req={branchId:'B',companyId:'A',user:{sub:'U',permissions:['cashclosure.create_day']},body:{startDate:'2026-10-15T00:00:00',endDate:'2026-10-15T23:59:59',cashierName:'QA',theoreticalTotal:25,actualTotal:0,unidentifiedCollectionsAmount:25,notes:'',paymentBreakdowns:[],denominations:[]}}
+    const preview=jsonResponse();await ctrl.calculateTheoretical({...req,query:{startDate:req.body.startDate,endDate:req.body.endDate}},preview,e=>{throw e});req.body.calculationKey=preview.body.calculation_key
     const missing=jsonResponse();await ctrl.create(req,missing,e=>{throw e})
     assert.equal(missing.statusCode,400);assert.equal(saved.length,0)
     const res=jsonResponse();await ctrl.create({...req,body:{...req.body,notes:'Recuento revisado por supervisor'}},res,e=>{throw e})
@@ -36,11 +39,11 @@ test('closure evidence keeps unidentified money explicit without supplying a dif
 })
 test('closure retains legacy unclassified receipt total without inventing a cash method',async()=>{
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
-  const db={saleStatus:{findFirst:async()=>({id:1})},sale:{findMany:async()=>[]},
+  const db={$queryRaw:async()=>[],saleStatus:{findFirst:async()=>({id:1})},sale:{findMany:async()=>[]},
     customerPayment:{findMany:async()=>[{id:'R',amount:25,paid_at:new Date(),payment_method_id:null,payment_method:null,customer:{name:'QA'}}]},
     returnSettlement:{findMany:async()=>[]},customerPaymentRefund:{findMany:async()=>[]}}
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db},[require.resolve('../src/utils/getTimezone')]:{getTimezone:async()=> 'America/Guatemala'}},require.resolve('../src/modules/cash-closure/controller'),async ctrl=>{
-    const res=jsonResponse();await ctrl.calculateTheoretical({companyId:'A',branchId:'B',user:{sub:'U',role:{name:'admin'}},query:{startDate:'2026-10-15T00:00:00Z',endDate:'2026-10-16T00:00:00Z'}},res,e=>{throw e})
+    const res=jsonResponse();await ctrl.calculateTheoretical({companyId:'A',branchId:'B',user:{sub:'U',permissions:['cashclosure.create_day']},query:{startDate:'2026-10-15T00:00:00Z',endDate:'2026-10-16T00:00:00Z'}},res,e=>{throw e})
     assert.equal(res.body.theoretical.total_collections,25)
     assert.equal(res.body.theoretical.net_total,25)
     assert.deepEqual(res.body.payment_breakdown,[])

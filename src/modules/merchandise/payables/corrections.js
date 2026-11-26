@@ -19,7 +19,7 @@ async function cancelSupplierPayment(db, scope, id, raw) {
   uuid(id);
   const { reason } = parseCancellation(raw);
   return db.$transaction(async (tx) => {
-    await assertAccess(tx, scope, { write: true });
+    await assertAccess(tx, scope, { write: true, permission: 'merchandise.cancel_payment' });
     const initial = await loadReceipt(tx, scope, id);
     await lockSupplier(tx, scope, initial.supplier_id);
     const receipt = await loadReceipt(tx, scope, id);
@@ -68,7 +68,7 @@ async function correctHistoricalSettlement(db, scope, id, raw) {
   uuid(id);
   const input = parseHistoricalCorrection(raw);
   return db.$transaction(async (tx) => {
-    await assertAccess(tx, scope, { write: true });
+    await assertAccess(tx, scope, { write: true, permission: 'merchandise.correct_payment' });
     const initial = await scopedEntry(tx, scope, id);
     await lockSupplier(tx, scope, initial.supplier_id);
     const [row] = await loadEntries(tx, scope, [id], initial.supplier_id),
@@ -114,7 +114,7 @@ async function cancelLegacyEntry(db, scope, id, entryId, raw) {
   uuid(entryId);
   const { reason } = parseCancellation(raw);
   return db.$transaction(async (tx) => {
-    await assertAccess(tx, scope, { write: true });
+    await assertAccess(tx, scope, { write: true, permission: 'merchandise.cancel_payment' });
     const initial = await scopedEntry(tx, scope, id);
     await lockSupplier(tx, scope, initial.supplier_id);
     const [row] = await loadEntries(tx, scope, [id], initial.supplier_id),

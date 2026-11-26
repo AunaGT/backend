@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: dispute capabilities advertise read access but keep incomplete financial commands closed
+ok 1 - dispute capabilities advertise read access but keep incomplete financial commands closed
+  ---
+  duration_ms: 53.221474
+  type: 'test'
+  ...
+# Subtest: no financial command runs before all dependent writers are integrated
+ok 2 - no financial command runs before all dependent writers are integrated
+  ---
+  duration_ms: 1.125479
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 112.663955

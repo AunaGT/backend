@@ -9,9 +9,9 @@ router.put('/units/:unitId',Auth,hasPermission('settings.manage'),controller.sav
 router.get('/barcodes/resolve',Auth,read,controller.barcode)
 router.post('/presentations/preview-batch',Auth,hasPermission('sales.create','orders.create','quotes.create'),controller.previewBatch)
 router.get('/:id/presentations',Auth,read,controller.presentations)
-router.post('/:id/presentations',Auth,hasPermission('products.edit','products.create'),controller.savePresentation)
-router.put('/:id/presentations/:presentationId',Auth,hasPermission('products.edit','products.create'),controller.savePresentation)
-router.delete('/:id/presentations/:presentationId',Auth,hasPermission('products.edit','products.create'),controller.archivePresentation)
-router.put('/:id/units',Auth,hasPermission('products.edit','products.create'),controller.configure)
+router.post('/:id/presentations',Auth,hasPermission('products.edit'),controller.savePresentation)
+router.put('/:id/presentations/:presentationId',Auth,hasPermission('products.edit'),controller.savePresentation)
+router.delete('/:id/presentations/:presentationId',Auth,hasPermission('products.edit'),controller.archivePresentation)
+router.put('/:id/units',Auth,hasPermission('products.edit'),controller.configure)
 router.post('/:id/presentations/preview',Auth,hasPermission('sales.create','orders.create','quotes.create','products.register_incoming'),controller.preview)
 module.exports=router

@@ -15,7 +15,7 @@ test('a receipt with applied, committed and refunded money exposes only the cons
   assert.equal(await availableCredit(db,f.contactId,{branch_id:scope.branchId}),5)
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db}},require.resolve('../src/modules/receivables/controller'),async controller=>{
-    const req={companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId},params:{id:received.receiptId}}
+    const req={companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId,permissions:['receivables.cancel_payment']},params:{id:received.receiptId}}
     const response=jsonResponse();await controller.receipt(req,response,error=>{throw error})
     assert.equal(response.body.no_aplicado,5);assert.equal(response.body.comprometido,60);assert.equal(response.body.devuelto,5)
     for(const state of ['APPLIED','RELEASED']){
@@ -56,7 +56,7 @@ test('event advances never pay the same customer previous debt or become availab
   assert.equal(await availableCredit(db,f.contactId,{branch_id:scope.branchId}),0)
   const {withMocks,jsonResponse}=require('./helpers/reportHarness.cjs')
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db}},require.resolve('../src/modules/receivables/controller'),async controller=>{
-    const req={companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId},params:{id:received.receiptId}}
+    const req={companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId,permissions:['receivables.cancel_payment']},params:{id:received.receiptId}}
     let denied
     await controller.deletePayment(req,jsonResponse(),error=>{denied=error})
     assert.equal(denied?.code,'PAYMENT_LINKED_TO_ENGAGEMENT')

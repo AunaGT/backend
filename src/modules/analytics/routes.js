@@ -12,6 +12,10 @@ const { Router } = require('express')
 const ctrl = require('./controller')
 const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const router = Router()
+router.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store')
+  next()
+})
 
 router.use(Auth, hasPermission('analytics.view'))
 
@@ -38,6 +42,6 @@ router.use(Auth, hasPermission('analytics.view'))
  *         description: Resumen preparado para el tablero analítico
  */
 router.get('/first-sale-year', ctrl.firstSaleYear)
-router.get('/summary', ctrl.summary)
+router.get('/summary', hasPermission('reports.financial'), ctrl.summary)
 
 module.exports = router

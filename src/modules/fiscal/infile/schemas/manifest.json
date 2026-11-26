@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "status": "MISSING",
+  "official": false,
+  "files": [],
+  "reason": "G0 y paquete oficial XSD no confirmados. No sustituir por esquemas sintéticos ni cargar rutas del cliente."
+}

@@ -4,7 +4,7 @@ const {freezeEventPaymentTerms}=require('../src/services/eventPaymentTerms')
 const {assertEngagementPaymentAction:guard,parsePaymentException:parse}=require('../src/modules/appointments/engagementPaymentPolicy')
 function fixture(){
  const scope={companyId:id(200),branchId:id(201),branchIds:[id(201)],userId:id(202),permissions:['appointments.view','appointments.attend'],isAdmin:false}
- const e={id:id(1),company_id:scope.companyId,branch_id:scope.branchId,customer_id:id(301),version:1,quote_id:null,sale_id:null,currency_code:'GTQ',agreed_total:new Prisma.Decimal('100'),commercial_snapshot:{},resolution_pending:false,refunds:[],
+ const e={id:id(1),company_id:scope.companyId,branch_id:scope.branchId,customer_id:id(301),version:1,quote_id:null,sale_id:null,currency_code:'GTQ',agreed_total:new Prisma.Decimal('100'),commercial_snapshot:{},resolution_pending:false,refunds:[],commitments:[],
   event_payment_terms:freezeEventPaymentTerms({schemaVersion:1,depositPercent:'25',balanceDaysBefore:2,referenceStartsAt:'2026-12-10T16:00:00Z',referenceTimezone:'America/Guatemala'},{total:'100',currencyCode:'GTQ'}),
   lines:[{id:id(2),item_kind:'SERVICE',qty:'1',quantity_decimals:0,schedules:[{id:id(3),kind:'ACTIVITY',state:'COMPLETED',quantity:'1',session_id:id(4),session:{status:'COMPLETED',starts_at:new Date('2026-12-10T16:00:00Z'),ends_at:new Date('2026-12-10T17:00:00Z')}}]}]}
  const state={paid:'25.00'},history=[]

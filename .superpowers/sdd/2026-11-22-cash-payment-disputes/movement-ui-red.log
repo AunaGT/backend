@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: dispute requests isolate tenant context, preserve attempts and reject a response cancelled during decoding
+not ok 1 - dispute requests isolate tenant context, preserve attempts and reject a response cancelled during decoding
+  ---
+  duration_ms: 80.219285
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/cash-disputes-api.test.cjs:3:1'
+  failureType: 'testCodeFailure'
+  error: 'api.confirmDisputeEffect is not a function'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/cash-disputes-api.test.cjs:10:15)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: dispute summary separates the claim, bank money and customer debt with no editable balance fields
+ok 2 - dispute summary separates the claim, bank money and customer debt with no editable balance fields
+  ---
+  duration_ms: 129.86246
+  type: 'test'
+  ...
+# Subtest: new accounting sources are readable and cannot be reversed through the generic journal action
+ok 3 - new accounting sources are readable and cannot be reversed through the generic journal action
+  ---
+  duration_ms: 9.27107
+  type: 'test'
+  ...
+# Subtest: an unavailable movement form explains the two funding routes and prevents financial submission
+not ok 4 - an unavailable movement form explains the two funding routes and prevents financial submission
+  ---
+  duration_ms: 0.313218
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/cash-disputes-ui.test.cjs:15:1'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, open '/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/src/modules/cash-closure/components/CashDisputeMovementForm.tsx'"
+  code: 'ENOENT'
+  stack: |-
+    Object.readFileSync (node:fs:440:20)
+    load (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/helpers/loadReportModule.cjs:29:23)
+    loadReportModule (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/helpers/loadReportModule.cjs:35:10)
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-frontend/tests/cash-disputes-ui.test.cjs:16:44)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 2
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 436.286474

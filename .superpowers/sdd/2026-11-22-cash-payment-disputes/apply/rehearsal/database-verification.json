@@ -1,0 +1,48 @@
+{
+  "verifiedAt": "2026-11-25T23:24:06.579Z",
+  "rehearsal": true,
+  "identityHash": null,
+  "migrations": [
+    {
+      "name": "20261122220000_cash_dispute_sources",
+      "dataUnchanged": true,
+      "preservedRows": 94,
+      "preservedTableCount": 187
+    },
+    {
+      "name": "20261122220100_cash_payment_disputes",
+      "dataUnchanged": true,
+      "preservedRows": 94,
+      "preservedTableCount": 187
+    }
+  ],
+  "adminRoleId": 1,
+  "permissionIds": [
+    9,
+    10,
+    11,
+    12,
+    13
+  ],
+  "addedPermissions": 5,
+  "addedAdminGrants": 5,
+  "nonAdminGrantsUnchanged": true,
+  "preservedOriginalTables": 185,
+  "preservedOriginalRows": 62,
+  "structure": {
+    "newTables": 12,
+    "rlsOnAll": true,
+    "publicGrants": 0,
+    "enumValues": [
+      "CASH_DISPUTE_ADJUSTMENT",
+      "CASH_DISPUTE_DISPOSITION",
+      "CASH_DISPUTE_EFFECT"
+    ],
+    "disputeTriggers": 33,
+    "chargeOpenFunction": true
+  },
+  "runtimeConnectionVerified": true,
+  "clientRegenerated": false,
+  "apiStarted": false,
+  "commandsReleased": false
+}

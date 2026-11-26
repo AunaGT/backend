@@ -12,6 +12,7 @@ const { prisma, prismaTransaction } = require('../../models/prisma')
 const { normalizeReturnPolicy, validateReturnPolicyInput } = require('../returns/domain')
 const {settingRevisions,assertExpectedRevisions,setSettingsActor,writeSettings}=require('../../services/settingsRevision')
 const {GENERAL_SETTING_KEYS,historyKeys}=require('./settingsKeys')
+const { companyTaxPercent } = require('../../services/taxConfig')
 const {EXPIRY_ALERT_POLICY_KEY,DEFAULT_EXPIRY_ALERT_POLICY,validateExpiryAlertPolicy,expiryPolicyFromStored}=require('../../services/expiryAlertPolicy')
 const sharp = require('sharp')
 const { invalidateSystemConfigCache } = require('../../utils/getTimezone')
@@ -278,6 +279,7 @@ exports.update = async (req, res, next) => {
       return res.status(400).json({ message: 'Se requiere un objeto con las claves a actualizar' })
     }
     const {expectedRevisions:ignored,...payload}=raw
+    if (payload.company_legal_name !== undefined && (typeof payload.company_legal_name !== 'string' || payload.company_legal_name.length > 200 || [...payload.company_legal_name].some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127))) return res.status(400).json({ message: 'La razón social debe ser texto de hasta 200 caracteres, sin saltos de línea' })
 
     if (payload.cash_closure_denominations !== undefined) {
       const err = validateDenominations(payload.cash_closure_denominations)
@@ -303,10 +305,11 @@ exports.update = async (req, res, next) => {
     }
     for (const rateKey of ['iva_rate', 'pequeno_rate']) {
       if (payload[rateKey] !== undefined) {
-        const n = Number(payload[rateKey])
-        if (!Number.isFinite(n) || n < 0 || n >= 100) {
-          return res.status(400).json({ message: `${rateKey} debe ser un número entre 0 y 99` })
+        const value = companyTaxPercent(payload[rateKey])
+        if (value === null) {
+          return res.status(400).json({ message: `${rateKey} debe ser un porcentaje de 0 a menos de 100, con hasta 4 decimales` })
         }
+        payload[rateKey] = value
       }
     }
 
@@ -335,6 +338,7 @@ exports.update = async (req, res, next) => {
       'company_logo_url',
       'cash_closure_denominations',
       // Datos fiscales (Fase 3 / FEL)
+      'company_legal_name',
       'company_nit',
       'fel_enabled',
       'company_address',

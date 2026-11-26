@@ -10,7 +10,7 @@
 
 const { prisma } = require('../../models/prisma')
 const { DateTime } = require('luxon')
-const { closureNotesWithUnidentifiedCollections, applyOpeningFloatToCashBreakdown, applyReturnSettlements, normalizeClosureNotes, requiresDifferenceReason } = require('./domain')
+const { closureNotesWithUnidentifiedCollections } = require('./domain')
 const { getTimezone } = require('../../utils/getTimezone')
 
 const number = (v) => {
@@ -19,20 +19,10 @@ const number = (v) => {
   return Number.isFinite(n) ? n : 0
 }
 
-/** Verifica permiso según tipo de cierre (día = todos, own = solo mi cierre). Devuelve { allowed } o { allowed: false, status, message }. */
-function checkClosureScopePermission(req, isOwnClosure) {
-  const user = req.user
-  if (!user) return { allowed: false, status: 401, message: 'No autenticado' }
-  const perms = Array.isArray(user.permissions) ? user.permissions.map(String) : []
-  const isAdmin = (user.role?.name || user.role_name || '').toLowerCase() === 'admin'
-  if (isAdmin) return { allowed: true }
-  if (isOwnClosure) {
-    const has = perms.includes('cashclosure.create') || perms.includes('cashclosure.create_own')
-    return has ? { allowed: true } : { allowed: false, status: 403, message: 'No tiene permiso para generar solo su cierre' }
-  }
-  const has = perms.includes('cashclosure.create') || perms.includes('cashclosure.create_day')
-  return has ? { allowed: true } : { allowed: false, status: 403, message: 'No tiene permiso para generar cierre del día' }
-}
+const { closureScope: checkClosureScopePermission } = require('./access')
+const { calculateTheoreticalData } = require('./theoretical')
+const { validateDeclaration } = require('./declaration')
+const { reviewClosure } = require('./review')
 
 /**
  * GET /api/cash-closures/validate-stocks
@@ -87,349 +77,10 @@ exports.validateStocks = async (req, res, next) => {
  */
 exports.calculateTheoretical = async (req, res, next) => {
   try {
-    // Aceptar tanto startDate/endDate como start_date/end_date; cashier_id opcional para filtrar por cajero
-    const startDate = req.query.startDate || req.query.start_date
-    const endDate = req.query.endDate || req.query.end_date
-    const cashierId = req.query.cashier_id || req.query.cashierId || null
-    const cashRegisterSessionIdRaw =
-      req.query.cash_register_session_id || req.query.cashRegisterSessionId || null
-    const cashRegisterSessionId = cashRegisterSessionIdRaw
-      ? String(cashRegisterSessionIdRaw).trim()
-      : null
-
-    // Permiso según tipo de cierre: día (sin cashier_id) vs propio (con cashier_id)
-    const isOwn = !!cashierId
-    const permCheck = checkClosureScopePermission(req, isOwn)
-    if (!permCheck.allowed) {
-      return res.status(permCheck.status || 403).json({ message: permCheck.message || 'No autorizado' })
-    }
-    if (isOwn && req.user?.sub && cashierId !== req.user.sub) {
-      return res.status(403).json({ message: 'Solo puede generar el cierre de su propia caja' })
-    }
-
-    const isAdminRole = String(req.user?.role?.name || req.user?.role_name || '').toLowerCase() === 'admin'
-
-    const tz = await getTimezone(prisma, req.companyId)
-    let start
-    let end
-    let sessionOpeningFloat = 0
-
-    if (isOwn) {
-      if (!cashRegisterSessionId) {
-        return res.status(400).json({
-          message:
-            'Para «mi cierre» debe enviar cash_register_session_id (turno ya cerrado en «Nueva venta», pendiente de arqueo).'
-        })
-      }
-      const sess = await prisma.cashRegisterSession.findFirst({
-        where: { id: cashRegisterSessionId }
-      })
-      if (!sess) {
-        return res.status(400).json({ message: 'Sesión de caja no encontrada' })
-      }
-      if (!isAdminRole && String(sess.opened_by_id) !== String(cashierId)) {
-        return res.status(403).json({ message: 'La sesión no corresponde a su turno de caja' })
-      }
-      if (sess.status !== 'CLOSED') {
-        return res.status(400).json({
-          message:
-            'El turno debe estar cerrado en «Nueva venta» (fin de turno) antes de calcular el cierre. Mientras la caja siga abierta no se puede arquear.'
-        })
-      }
-      if (sess.cash_closure_id) {
-        return res.status(400).json({ message: 'Este turno de caja ya tiene un cierre de caja registrado.' })
-      }
-      if (!sess.closed_at) {
-        return res.status(400).json({ message: 'La sesión no tiene fecha de cierre; no se puede calcular.' })
-      }
-      sessionOpeningFloat = number(sess.opening_float)
-      // Fuente de verdad: horas del turno en BD (evita desajuste con sold_at vs strings del formulario)
-      start = sess.opened_at
-      end = sess.closed_at
-    } else {
-      if (!startDate || !endDate) {
-        return res.status(400).json({ message: 'startDate y endDate son requeridos' })
-      }
-      if (startDate.includes('Z')) {
-        start = DateTime.fromISO(startDate, { zone: 'utc' }).setZone(tz).toJSDate()
-        end = DateTime.fromISO(endDate, { zone: 'utc' }).setZone(tz).toJSDate()
-      } else {
-        start = DateTime.fromISO(startDate, { zone: tz }).toJSDate()
-        end = DateTime.fromISO(endDate, { zone: tz }).toJSDate()
-      }
-    }
-
-    if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) {
-      return res.status(400).json({ message: 'Fechas inválidas' })
-    }
-
-    console.log('Calculando cierre para período:', {
-      startDate: startDate || '(sesión)',
-      endDate: endDate || '(sesión)',
-      cashier_id: cashierId || '(todos)',
-      cash_register_session_id: cashRegisterSessionId || '(n/a)',
-      start: start.toISOString(),
-      end: end.toISOString(),
-      own_closure: isOwn
-    })
-
-    // Obtener estado "Completada"
-    const completedStatus = await prisma.saleStatus.findFirst({
-      where: { name: 'Completada' }
-    })
-
-    const periodOr = {
-      OR: [
-        { sold_at: { gte: start, lte: end } },
-        { date: { gte: start, lte: end } }
-      ]
-    }
-
-    /**
-     * Mi cierre con sesión: NO filtrar por sold_at/date entre opened_at y closed_at.
-     * Ventas de antes de la corrección del guardado de fechas (ver sales.controller.js)
-     * tienen sold_at con la hora local reetiquetada como UTC, corrida contra los
-     * timestamps UTC reales de la sesión → el rango las excluye. cash_register_session_id
-     * no depende de esto y sigue siendo la fuente confiable. Legado: sin sesión, sí
-     * período + created_by (ahí periodOr ya compara correctamente en ventas nuevas).
-     */
-    let salesWhere
-    if (isOwn && cashRegisterSessionId) {
-      salesWhere = {
-        status_id: completedStatus?.id,
-        OR: [
-          { cash_register_session_id: cashRegisterSessionId },
-          {
-            AND: [
-              { cash_register_session_id: null },
-              ...(cashierId ? [{ created_by: String(cashierId) }] : []),
-              periodOr
-            ]
-          }
-        ]
-      }
-    } else {
-      salesWhere = {
-        status_id: completedStatus?.id,
-        ...periodOr
-      }
-      if (cashierId) {
-        salesWhere.created_by = String(cashierId)
-      }
-    }
-
-    // Obtener ventas completadas en el período (opcionalmente filtradas por cajero)
-    const { branchWhere } = require('../../middlewares/tenant')
-    Object.assign(salesWhere, branchWhere(req))
-    salesWhere.status={name:require('../sales/commercialState').CONFIRMED_SALE_STATUS}
-    // La venta al crédito no entra al arqueo: no hubo dinero que contar. Lo que
-    // sí entra es el cobro posterior, más abajo.
-    salesWhere.payment_method = { is_credit: false }
-    salesWhere.settlement_source = 'LEGACY'
-    const saleRows = await prisma.sale.findMany({
-      where: salesWhere,
-      include: {
-        payment_method: true,
-        replacement_for_return: { select: { id: true } },
-      }
-    })
-    // La venta vinculada de un cambio no es una entrada de caja por su total:
-    // el cliente solo paga (o recibe) la diferencia, registrada en settlements.
-    const sales = saleRows.filter((sale) => !sale.replacement_for_return)
-
-    // Calcular totales teóricos
-    let theoreticalSales = 0
-    let theoreticalReturns = 0
-    const paymentMethodsMap = new Map()
-
-    for (const sale of sales) {
-      theoreticalSales += number(sale.total)
-
-      // Agrupar por método de pago
-      const methodKey = sale.payment_method_id
-      const methodName = sale.payment_method.name
-      
-      if (!paymentMethodsMap.has(methodKey)) {
-        paymentMethodsMap.set(methodKey, {
-          id: methodKey,
-          name: methodName,
-          settlement_kind:sale.payment_method.settlement_kind??null,
-          theoretical_amount: 0,
-          theoretical_count: 0,
-          sales: []
-        })
-      }
-
-      const method = paymentMethodsMap.get(methodKey)
-      method.theoretical_amount += number(sale.total)
-      method.theoretical_count += 1
-      method.sales.push({
-        id: sale.id,
-        total: sale.total,
-        adjusted_total: sale.total,
-        returned: 0
-      })
-    }
-
-    /**
-     * Cobros de clientes del período: dinero que entró sin ser una venta de hoy
-     * (canceló una venta al crédito anterior). Sin esto el cajero cuadra un
-     * cajón que tiene más efectivo del que el teórico explica, y sale sobrante
-     * cada vez que alguien abona.
-     */
-    let collectionsWhere
-    if (isOwn && cashRegisterSessionId) {
-      collectionsWhere = {
-        OR: [
-          { cash_register_session_id: cashRegisterSessionId },
-          {
-            AND: [
-              { cash_register_session_id: null },
-              ...(cashierId ? [{ registered_by: String(cashierId) }] : []),
-              { paid_at: { gte: start, lte: end } }
-            ]
-          }
-        ]
-      }
-    } else {
-      collectionsWhere = { paid_at: { gte: start, lte: end } }
-      if (cashierId) collectionsWhere.registered_by = String(cashierId)
-    }
-    // Solo cobros de verdad: una nota de crédito o un castigo por incobrable
-    // bajan la deuda pero no meten un centavo al cajón.
-    collectionsWhere.kind = 'PAYMENT'
-    Object.assign(collectionsWhere, branchWhere(req))
-
-    const collections = await prisma.customerPayment.findMany({
-      where: collectionsWhere,
-      include: { payment_method: true, customer: { select: { name: true } } }
-    })
-
-    let theoreticalCollections = 0
-    let unidentifiedCollections = 0
-    for (const col of collections) {
-      const amount = number(col.amount)
-      theoreticalCollections += amount
-
-      const methodKey = col.payment_method_id
-      if (methodKey == null || !col.payment_method) {
-        unidentifiedCollections += amount
-        continue
-      }
-      if (!paymentMethodsMap.has(methodKey)) {
-        paymentMethodsMap.set(methodKey, {
-          id: methodKey,
-          name: col.payment_method.name,
-          settlement_kind:col.payment_method.settlement_kind??null,
-          theoretical_amount: 0,
-          theoretical_count: 0,
-          sales: []
-        })
-      }
-      const method = paymentMethodsMap.get(methodKey)
-      method.theoretical_amount += amount
-      method.theoretical_count += 1
-    }
-
-    let returnSettlementWhere
-    if (isOwn && cashRegisterSessionId) {
-      returnSettlementWhere = { cash_register_session_id: cashRegisterSessionId }
-    } else {
-      returnSettlementWhere = {
-        created_at: { gte: start, lte: end },
-        return: { sale: { ...branchWhere(req) } },
-      }
-      if (cashierId) returnSettlementWhere.registered_by = String(cashierId)
-    }
-    returnSettlementWhere.kind = { in: ['REFUND', 'COLLECTION'] }
-    const returnSettlements = await prisma.returnSettlement.findMany({
-      where: returnSettlementWhere,
-      include: {
-        payment_method: true,
-        return: { select: { reference: true, sale: { select: { reference: true } } } },
-      },
-      orderBy: { created_at: 'asc' },
-    })
-    const settlementTotals = applyReturnSettlements(paymentMethodsMap, returnSettlements)
-    theoreticalReturns = settlementTotals.refunds
-    theoreticalCollections += settlementTotals.collections
-
-    const advanceRefundWhere={status:'CONFIRMED',...branchWhere(req),...(isOwn&&cashRegisterSessionId?{cash_register_session_id:cashRegisterSessionId}:{confirmed_at:{gte:start,lte:end},...(cashierId?{registered_by:String(cashierId)}:{})})}
-    const advanceRefunds=await prisma.customerPaymentRefund.findMany({where:advanceRefundWhere,include:{payment_method:true},orderBy:{confirmed_at:'asc'}})
-    const advanceTotals=applyReturnSettlements(paymentMethodsMap,advanceRefunds.map(refund=>({...refund,kind:'REFUND'})))
-    theoreticalReturns+=advanceTotals.refunds
-
-    let theoreticalTotal = theoreticalSales - theoreticalReturns + theoreticalCollections
-
-    const cashDetail = await applyOpeningFloatToCashBreakdown(prisma,req.companyId,paymentMethodsMap, sessionOpeningFloat)
-    if (cashDetail.openingFloat > 0) {
-      theoreticalTotal += cashDetail.openingFloat
-    }
-
-    // Calcular métricas adicionales
-    const totalTransactions = sales.length
-    const totalCustomers = sales.filter(s => s.customer && s.customer !== 'Desconocido').length
-    const averageTicket = totalTransactions > 0 ? theoreticalTotal / totalTransactions : 0
-
-    // Convertir Map a Array
-    const paymentBreakdown = Array.from(paymentMethodsMap.values()).map(method => ({
-      payment_method_id: method.id,
-      payment_method_name: method.name,
-      settlement_kind:method.settlement_kind??null,
-      theoretical_amount: Number(method.theoretical_amount.toFixed(2)),
-      theoretical_count: method.theoretical_count,
-      sales_detail: method.sales
-    }))
-
-    res.json({
-      period: {
-        start: start.toISOString(),
-        end: end.toISOString()
-      },
-      theoretical: {
-        total_sales: Number(theoreticalSales.toFixed(2)),
-        total_returns: Number(theoreticalReturns.toFixed(2)),
-        total_collections: Number(theoreticalCollections.toFixed(2)),
-        net_total: Number(theoreticalTotal.toFixed(2))
-      },
-      collections: collections.map(c => ({
-        id: c.id,
-        customer: c.customer?.name || null,
-        amount: number(c.amount),
-        payment_method: c.payment_method?.name || null,
-        paid_at: c.paid_at,
-        reference: c.reference
-      })),
-      unidentified_collections_amount: Number(unidentifiedCollections.toFixed(2)),
-      return_settlements: returnSettlements.map((settlement) => ({
-        id: settlement.id,
-        return_reference: settlement.return?.reference || null,
-        sale_reference: settlement.return?.sale?.reference || null,
-        kind: settlement.kind,
-        amount: number(settlement.amount),
-        payment_method: settlement.payment_method?.name || null,
-        created_at: settlement.created_at,
-      })),
-      advance_refunds:advanceRefunds.map(refund=>({id:refund.id,engagement_id:refund.engagement_id,payment_id:refund.payment_id,amount:number(refund.amount),payment_method:refund.payment_method?.name||null,confirmed_at:refund.confirmed_at})),
-      cash_session: cashDetail.openingFloat > 0
-        ? {
-            opening_float: Number(cashDetail.openingFloat.toFixed(2)),
-            cash_sales_amount: Number(cashDetail.cashSalesAmount.toFixed(2)),
-            expected_cash_in_drawer: Number(
-              (cashDetail.cashSalesAmount + cashDetail.openingFloat).toFixed(2)
-            )
-          }
-        : null,
-      metrics: {
-        total_transactions: totalTransactions,
-        total_customers: totalCustomers,
-        average_ticket: Number(averageTicket.toFixed(2))
-      },
-      payment_breakdown: paymentBreakdown
-    })
-  } catch (e) {
-    next(e)
+    const data = await calculateTheoreticalData(prisma, req), flow = require('./reviewFlow')
+    res.json(await flow.isBlind(prisma, req, data) ? flow.blindView(data) : data)
   }
+  catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error) }
 }
 
 /**
@@ -438,265 +89,52 @@ exports.calculateTheoretical = async (req, res, next) => {
  */
 exports.create = async (req, res, next) => {
   try {
-    const {
-      startDate,
-      endDate,
-      cashierName,
-      cashierSignature,
-      cashierId,
-      supervisorName,
-      supervisorSignature,
-      supervisorId,
-      theoreticalTotal,
-      theoreticalSales,
-      theoreticalReturns,
-      actualTotal,
-      totalTransactions,
-      totalCustomers,
-      averageTicket,
-      paymentBreakdowns,  // Array de { payment_method_id, theoretical_amount, theoretical_count, actual_amount, actual_count, notes }
-      denominations,      // Array de { denomination, type, quantity }
-      notes,
-      cash_register_session_id: cashRegisterSessionIdBody
-    } = req.body
-    const authUser = req.user
-
-    // Validaciones
-    if (!startDate || !endDate || !cashierName) {
-      return res.status(400).json({ message: 'Datos incompletos' })
-    }
-
-    // Permiso según tipo de cierre: día (sin cashierId) vs propio (con cashierId)
-    const isOwnClosure = !!cashierId
-    const permCheck = checkClosureScopePermission(req, isOwnClosure)
-    if (!permCheck.allowed) {
-      return res.status(permCheck.status || 403).json({ message: permCheck.message || 'No autorizado' })
-    }
-    if (isOwnClosure && authUser?.sub && cashierId !== authUser.sub) {
-      return res.status(403).json({ message: 'Solo puede registrar el cierre de su propia caja' })
-    }
-
-    const unidentifiedCollectionsAmount = req.body.unidentifiedCollectionsAmount ?? 0
-    if (typeof unidentifiedCollectionsAmount !== 'number' || !Number.isFinite(unidentifiedCollectionsAmount) || unidentifiedCollectionsAmount < 0 || unidentifiedCollectionsAmount > 9999999999.99) {
+    const body = req.body || {}
+    const { startDate, endDate, cashierId } = body
+    const own = Boolean(cashierId)
+    const scope = checkClosureScopePermission(req, own)
+    if (!scope.allowed) return res.status(scope.status).json({ message: scope.message })
+    if (own && cashierId !== req.user.sub) return res.status(403).json({ message: 'Solo puede registrar el cierre de su propia caja' })
+    require('../../middlewares/tenant').requireBranch(req)
+    const unidentified = body.unidentifiedCollectionsAmount
+    if (unidentified !== undefined && (typeof unidentified !== 'number' || !Number.isFinite(unidentified) || unidentified < 0 || unidentified > 9999999999.99)) {
       return res.status(400).json({ message: 'El importe de cobros con medio no registrado debe ser un monto válido no negativo' })
     }
-
-    const tz = await getTimezone(prisma, req.companyId)
-    // Parsear fechas: vienen sin 'Z', son hora local configurada
-    const cleanStartDate = String(startDate).replace('Z', '').replace(/[+-]\d{2}:\d{2}$/, '');
-    const cleanEndDate = String(endDate).replace('Z', '').replace(/[+-]\d{2}:\d{2}$/, '');
-    
-    const startDt = DateTime.fromISO(cleanStartDate, { zone: tz });
-    const endDt = DateTime.fromISO(cleanEndDate, { zone: tz });
-    
-    const startDateUTC = DateTime.utc(
-      startDt.year, startDt.month, startDt.day,
-      startDt.hour, startDt.minute, startDt.second, startDt.millisecond
-    ).toJSDate();
-    
-    const endDateUTC = DateTime.utc(
-      endDt.year, endDt.month, endDt.day,
-      endDt.hour, endDt.minute, endDt.second, endDt.millisecond
-    ).toJSDate();
-
-    console.log('[CASH CLOSURE] Período:', {
-      start: startDateUTC.toISOString(),
-      end: endDateUTC.toISOString(),
-      startGt: startDt.toFormat('yyyy-MM-dd HH:mm:ss'),
-      endGt: endDt.toFormat('yyyy-MM-dd HH:mm:ss')
-    });
-
-    // Calcular diferencia
-    const difference = number(actualTotal) - number(theoreticalTotal)
-    const differencePercentage = theoreticalTotal > 0 
-      ? (difference / theoreticalTotal) * 100 
-      : 0
-    const closureNotes = normalizeClosureNotes(notes)
-    if (requiresDifferenceReason(difference, closureNotes)) {
-      return res.status(400).json({
-        message: 'Debe indicar el motivo del faltante o sobrante antes de guardar el cierre'
-      })
-    }
-
-    const nowLocal = DateTime.now().setZone(tz);
-    const dateUTC = DateTime.utc(
-      nowLocal.year, nowLocal.month, nowLocal.day,
-      nowLocal.hour, nowLocal.minute, nowLocal.second, nowLocal.millisecond
-    ).toJSDate();
-
-    console.log('[CASH CLOSURE] Fecha de creación:', {
-      dateUTC: dateUTC.toISOString(),
-      dateLocal: nowLocal.toFormat('yyyy-MM-dd HH:mm:ss')
-    });
-
-    const cashierUuidStored = isOwnClosure ? (cashierId ? String(cashierId) : authUser?.sub || null) : null
-    const supervisorUuid = supervisorId || null
-    const rawSession = cashRegisterSessionIdBody ?? req.body.cashRegisterSessionId ?? null
-    const cashRegisterSessionId = rawSession ? String(rawSession).trim() : null
-
-    if (isOwnClosure && !cashRegisterSessionId) {
-      return res.status(400).json({
-        message: 'El cierre por cajero debe incluir cash_register_session_id (turno cerrado en «Nueva venta», pendiente de arqueo).'
-      })
-    }
-
-    const createdClosure = await prisma.$transaction(async (tx) => {
-      let sessionToCloseOnSave = null
-      let linkedSession = null
-      if (cashRegisterSessionId) {
-        linkedSession = await tx.cashRegisterSession.findFirst({
-          where: { id: cashRegisterSessionId }
-        })
-        if (!linkedSession) {
-          throw new Error('INVALID_SESSION')
-        }
-
-        if (isOwnClosure) {
-          if (cashierId && String(linkedSession.opened_by_id) !== String(cashierId)) {
-            const adminCloser = String(authUser?.role?.name || authUser?.role_name || '').toLowerCase() === 'admin'
-            if (!adminCloser) throw new Error('SESSION_NOT_YOURS')
-          }
-          if (linkedSession.status !== 'CLOSED') {
-            throw new Error('SESSION_NOT_CLOSED')
-          }
-          if (linkedSession.cash_closure_id) {
-            throw new Error('SESSION_ALREADY_LINKED')
-          }
-        } else if (linkedSession.status === 'OPEN') {
-          sessionToCloseOnSave = linkedSession
-        }
-      }
-
-      const cashClosure = await tx.cashClosure.create({
-        data: {
-          branch_id: require('../../middlewares/tenant').requireBranch(req),
-          date: dateUTC,
-          opening_float: isOwnClosure && linkedSession ? linkedSession.opening_float : null,
-          start_date: startDateUTC,
-          end_date: endDateUTC,
-          cashier_name: cashierName,
-          cashier_signature: cashierSignature || null,
-          cashier_id: cashierUuidStored || undefined,
-          supervisor_name: supervisorName || null,
-          supervisor_signature: supervisorSignature || null,
-          supervisor_validated_at: supervisorSignature ? dateUTC : null,
-          supervisor_id: supervisorUuid || undefined,
-          theoretical_total: theoreticalTotal,
-          theoretical_sales: theoreticalSales,
-          theoretical_returns: theoreticalReturns,
-          actual_total: actualTotal,
-          difference: difference,
-          difference_percentage: Number(differencePercentage.toFixed(2)),
-          total_transactions: totalTransactions,
-          total_customers: totalCustomers,
-          average_ticket: averageTicket,
-          notes: closureNotesWithUnidentifiedCollections(closureNotes, unidentifiedCollectionsAmount),
-          status: 'Pendiente'
-        }
-      })
-
-      if (paymentBreakdowns && paymentBreakdowns.length > 0) {
-        for (const breakdown of paymentBreakdowns) {
-          const methodDiff = number(breakdown.actual_amount) - number(breakdown.theoretical_amount)
-
-          await tx.cashClosurePayment.create({
-            data: {
-              cash_closure_id: cashClosure.id,
-              payment_method_id: breakdown.payment_method_id,
-              theoretical_amount: breakdown.theoretical_amount,
-              theoretical_count: breakdown.theoretical_count,
-              actual_amount: breakdown.actual_amount,
-              actual_count: breakdown.actual_count || null,
-              difference: methodDiff,
-              notes: breakdown.notes || null
-            }
-          })
-        }
-      }
-
-      if (denominations && denominations.length > 0) {
-        for (const denom of denominations) {
-          if (denom.quantity > 0) {
-            const subtotal = number(denom.denomination) * denom.quantity
-
-            await tx.cashClosureDenomination.create({
-              data: {
-                cash_closure_id: cashClosure.id,
-                denomination: denom.denomination,
-                type: denom.type,
-                quantity: denom.quantity,
-                subtotal: subtotal
-              }
-            })
-          }
-        }
-      }
-
-      if (cashRegisterSessionId) {
-        if (isOwnClosure) {
-          const linked = await tx.cashRegisterSession.updateMany({
-            where: { id: cashRegisterSessionId, status: 'CLOSED', cash_closure_id: null },
-            data: { cash_closure_id: cashClosure.id }
-          })
-          if (linked.count !== 1) {
-            throw new Error('SESSION_RACE')
-          }
-        } else if (sessionToCloseOnSave) {
-          const upd = await tx.cashRegisterSession.updateMany({
-            where: { id: cashRegisterSessionId, status: 'OPEN' },
-            data: {
-              status: 'CLOSED',
-              closed_at: dateUTC,
-              closed_by_id: authUser.sub,
-              cash_closure_id: cashClosure.id
-            }
-          })
-          if (upd.count !== 1) {
-            throw new Error('SESSION_RACE')
-          }
-        }
-      }
-
-      return tx.cashClosure.findUnique({
-        where: { id: cashClosure.id },
-        include: {
-          payment_breakdowns: {
-            include: {
-              payment_method: true
-            }
-          },
-          denominations: {
-            orderBy: {
-              denomination: 'desc'
-            }
-          }
-        }
-      })
-    })
-
-    res.status(201).json(createdClosure)
-  } catch (e) {
-    if (e.message === 'SESSION_NOT_YOURS') {
-      return res.status(403).json({ message: 'La sesión de caja no corresponde a este cajero.' })
-    }
-    if (e.message === 'INVALID_SESSION') {
-      return res.status(400).json({
-        message: 'Sesión de caja inválida. Actualice la página y vuelva a intentar.'
-      })
-    }
-    if (e.message === 'SESSION_NOT_CLOSED') {
-      return res.status(400).json({
-        message:
-          'El turno debe estar cerrado en «Nueva venta» antes de guardar el cierre. Mientras la caja siga abierta no se registra el arqueo.'
-      })
-    }
-    if (e.message === 'SESSION_ALREADY_LINKED') {
-      return res.status(400).json({ message: 'Este turno de caja ya tiene un cierre registrado.' })
-    }
-    if (e.message === 'SESSION_RACE') {
-      return res.status(409).json({ message: 'La sesión de caja ya fue cerrada por otro proceso.' })
-    }
-    next(e)
+    if (typeof body.calculationKey !== 'string' || !body.calculationKey) return res.status(428).json({ message: 'Recalcula el arqueo antes de guardar' })
+    const sessionId = body.cash_register_session_id || body.cashRegisterSessionId || null
+    if (!own && sessionId) return res.status(400).json({ message: 'El arqueo vinculado a un turno debe registrarse como cierre propio' })
+    const created = await prisma.$transaction(async tx => {
+      const flow = require('./reviewFlow'), session = sessionId ? await flow.lockDeclaredSession(tx, sessionId) : null
+      const data = await calculateTheoreticalData(tx, { ...req, query: { startDate, endDate, cashier_id: cashierId, cash_register_session_id: sessionId } })
+      if (data.calculation_key !== body.calculationKey) throw Object.assign(new Error('Los movimientos cambiaron. Recalcula el arqueo antes de guardar; tu conteo no se ha registrado.'), { status: 409 })
+      const declaration = validateDeclaration(body, data, { blind: own && await flow.isBlind(tx, req, data) })
+      const expected = data.theoretical.net_total
+      const difference = Number(declaration.difference)
+      const saved = await tx.cashClosure.create({ data: {
+        branch_id: req.branchId, date: new Date(), start_date: new Date(data.period.start), end_date: new Date(data.period.end),
+        cashier_name: String(req.user.name || body.cashierName || 'Cajero').trim().slice(0,100),
+        cashier_id: own ? req.user.sub : undefined,
+        opening_float: own ? data.cash_session?.opening_float ?? 0 : null,
+        theoretical_total: expected, theoretical_sales: data.theoretical.total_sales, theoretical_returns: data.theoretical.total_returns,
+        actual_total: declaration.actualTotal, difference: declaration.difference,
+        difference_percentage: expected ? Math.abs(difference / expected * 100) <= 999.99 ? Number((difference / expected * 100).toFixed(2)) : null : 0,
+        total_transactions: data.metrics.total_transactions, total_customers: data.metrics.total_customers, average_ticket: data.metrics.average_ticket,
+        notes: closureNotesWithUnidentifiedCollections(declaration.notes, data.unidentified_collections_amount), status: 'Pendiente',
+      } })
+      const savedPayments = []
+      for (const { breakdown_key, ...payment } of declaration.payments) savedPayments.push({ ...await tx.cashClosurePayment.create({ data: { cash_closure_id: saved.id, ...payment } }), breakdown_key })
+      for (const denomination of declaration.denominations) await tx.cashClosureDenomination.create({ data: { cash_closure_id: saved.id, ...denomination } })
+      await require('./snapshots').saveClosureSnapshot(tx, saved.id, data, savedPayments)
+      const reviewed = own && await flow.adoptDeclaration(tx, { session, closureId: saved.id, sessionId, data, declaration, companyId: req.companyId, branchId: req.branchId })
+      const result = await tx.cashClosure.findUnique({ where: { id: saved.id }, include: { payment_breakdowns: { include: { payment_method: true } }, denominations: { orderBy: { denomination: 'desc' } } } })
+      const hydrated = (await require('./snapshots').hydrateClosureSnapshots(tx, [result]))[0]
+      // La respuesta de declarar muestra las diferencias, también con conteo ciego.
+      return reviewed ? { ...hydrated, review: await flow.readReview(tx, saved.id) } : hydrated
+    }, { maxWait: 10000, timeout: 30000 })
+    res.status(201).json(created)
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message })
+    next(error)
   }
 }
 
@@ -706,29 +144,10 @@ exports.create = async (req, res, next) => {
  */
 exports.list = async (req, res, next) => {
   try {
-    const { page = 1, pageSize = 20, status, startDate, endDate } = req.query
-
-    const where = { ...require('../../middlewares/tenant').branchWhere(req) }
-    
-    if (status) {
-      where.status = status
-    }
-
-    if (startDate || endDate) {
-      where.date = {
-        ...(startDate ? { gte: new Date(startDate) } : {}),
-        ...(endDate ? { lte: new Date(endDate) } : {})
-      }
-    }
-
-    const totalItems = await prisma.cashClosure.count({ where })
-    let summary
-    if (req.query.includeSummary === 'true') {
-      const groups = await prisma.cashClosure.groupBy({ by: ['status'], where, _count: { _all: true } })
-      summary = { total: totalItems, Pendiente: 0, Aprobado: 0, Rechazado: 0, Validado: 0, Cerrado: 0, ...Object.fromEntries(groups.map(row => [row.status, row._count._all])) }
-    }
-    const totalPages = Math.max(1, Math.ceil(totalItems / Number(pageSize)))
-    const safePage = Math.min(Number(page), totalPages)
+    res.set('Cache-Control', 'private, no-store')
+    const scope = require('./readAccess').readScope(req, req.query.scope)
+    const { ids, page: safePage, pageSize, totalItems, totalPages, summary } = await require('./readQueries').readPage(prisma, scope, { ...req.query, includeSummary: req.query.includeSummary === 'true' })
+    const where = { id: { in: ids }, branch_id: { in: scope.branchIds }, branch: { company_id: scope.companyId } }
 
     const closures = await prisma.cashClosure.findMany({
       where,
@@ -750,15 +169,11 @@ exports.list = async (req, res, next) => {
           }
         }
       },
-      orderBy: {
-        date: 'desc'
-      },
-      skip: (safePage - 1) * Number(pageSize),
-      take: Number(pageSize)
+      orderBy: [{ date: 'desc' }, { id: 'desc' }]
     })
 
     res.json({
-      items: closures,
+      items: await require('./snapshots').hydrateClosureSnapshots(prisma, closures),
       ...(summary ? { summary } : {}),
       page: safePage,
       pageSize: Number(pageSize),
@@ -778,10 +193,13 @@ exports.list = async (req, res, next) => {
  */
 exports.getById = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'private, no-store')
     const { id } = req.params
+    const scope = require('./readAccess').readScope(req)
+    await require('./readQueries').assertReadable(prisma, scope, id)
 
     const closure = await prisma.cashClosure.findFirst({
-      where: { id, ...require('../../middlewares/tenant').branchWhere(req) },
+      where: { id, branch_id: { in: scope.branchIds }, branch: { company_id: scope.companyId } },
       include: {
         payment_breakdowns: {
           include: {
@@ -816,8 +234,9 @@ exports.getById = async (req, res, next) => {
           ? number(closure.cash_register_session.opening_float)
           : null
 
+    const frozenClosure = (await require('./snapshots').hydrateClosureSnapshots(prisma, [closure]))[0]
     res.json({
-      ...closure,
+      ...frozenClosure,
       opening_float: openingFloat
     })
   } catch (e) {
@@ -830,49 +249,8 @@ exports.getById = async (req, res, next) => {
  * Valida un cierre de caja (firma del supervisor)
  */
 exports.validate = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const { supervisorName, supervisorSignature } = req.body
-
-    if (!supervisorName || !supervisorSignature) {
-      return res.status(400).json({ message: 'Nombre y firma del supervisor son requeridos' })
-    }
-
-    const tz = await getTimezone(prisma, req.companyId)
-    const nowLocal = DateTime.now().setZone(tz);
-    const validatedAtUTC = DateTime.utc(
-      nowLocal.year, nowLocal.month, nowLocal.day,
-      nowLocal.hour, nowLocal.minute, nowLocal.second, nowLocal.millisecond
-    ).toJSDate();
-
-    const target = await prisma.cashClosure.findFirst({
-      where: { id, ...require('../../middlewares/tenant').branchWhere(req) },
-      select: { id: true },
-    })
-    if (!target) return res.status(404).json({ message: 'Cierre no encontrado' })
-
-    // status se mantiene (Pendiente); aprobación/rechazo vía PATCH :id/status
-    const updated = await prisma.cashClosure.update({
-      where: { id },
-      data: {
-        supervisor_name: supervisorName,
-        supervisor_signature: supervisorSignature,
-        supervisor_validated_at: validatedAtUTC
-      },
-      include: {
-        payment_breakdowns: {
-          include: {
-            payment_method: true
-          }
-        },
-        denominations: true
-      }
-    })
-
-    res.json(updated)
-  } catch (e) {
-    next(e)
-  }
+  try { res.json(await reviewClosure(prisma, req, { signature: true })) }
+  catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error) }
 }
 
 /**
@@ -881,24 +259,9 @@ exports.validate = async (req, res, next) => {
  */
 exports.getLastClosureDate = async (req, res, next) => {
   try {
-    const scope = String(req.query.scope || 'day').toLowerCase() === 'mine' ? 'mine' : 'day'
-    const authUser = req.user
-
-    const where = {
-      ...require('../../middlewares/tenant').branchWhere(req),
-      ...(scope === 'mine' && authUser?.sub ? { cashier_id: authUser.sub } : {}),
-    }
-
-    const lastClosure = await prisma.cashClosure.findFirst({
-      where,
-      orderBy: {
-        end_date: 'desc'
-      },
-      select: {
-        end_date: true,
-        closure_number: true
-      }
-    })
+    res.set('Cache-Control', 'private, no-store')
+    const scope = require('./readAccess').lastDateScope(req, req.query.scope)
+    const lastClosure = await require('./readQueries').lastClosure(prisma, scope)
 
     const tz = await getTimezone(prisma, req.companyId)
     const fallbackStart = DateTime.now().setZone(tz).startOf('day').toJSDate()
@@ -918,82 +281,8 @@ exports.getLastClosureDate = async (req, res, next) => {
  * Actualiza el estado de un cierre (Aprobado/Rechazado)
  */
 exports.updateStatus = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const { status, supervisor_name, supervisor_id: bodySupervisorId, rejection_reason } = req.body
-    const authUser = req.user
-
-    // Validar que el estado sea válido
-    const validStatuses = ['Aprobado', 'Rechazado', 'Pendiente']
-    if (!status || !validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        message: 'Estado inválido. Debe ser: Aprobado, Rechazado o Pendiente' 
-      })
-    }
-
-    // Buscar el cierre
-    const closure = await prisma.cashClosure.findFirst({
-      where: { id, ...require('../../middlewares/tenant').branchWhere(req) }
-    })
-
-    if (!closure) {
-      return res.status(404).json({ message: 'Cierre no encontrado' })
-    }
-
-    // Actualizar el estado
-    const updateData = {
-      status,
-      updated_at: new Date()
-    }
-
-    // Si se aprueba, registrar supervisor y fecha de validación
-    if (status === 'Aprobado') {
-      if (supervisor_name) {
-        updateData.supervisor_name = supervisor_name
-      }
-      updateData.supervisor_validated_at = new Date()
-      const supervisorUuid = bodySupervisorId || authUser?.sub || null
-      if (supervisorUuid) {
-        updateData.supervisor_id = supervisorUuid
-      }
-    }
-
-    if (status === 'Rechazado' && rejection_reason) {
-      const tz = await getTimezone(prisma, req.companyId)
-      const nowStr = DateTime.now().setZone(tz).toFormat('dd/MM/yyyy HH:mm')
-      const existingNotes = closure.notes || ''
-      updateData.notes = existingNotes 
-        ? `${existingNotes}\n\n--- RECHAZADO ---\nRazón: ${rejection_reason}\nFecha: ${nowStr}`
-        : `--- RECHAZADO ---\nRazón: ${rejection_reason}\nFecha: ${nowStr}`
-    }
-
-    const updatedClosure = await prisma.cashClosure.update({
-      where: { id },
-      data: updateData,
-      include: {
-        payment_breakdowns: {
-          include: {
-            payment_method: true
-          }
-        },
-        denominations: true,
-        cash_register_session: {
-          select: {
-            id: true,
-            opening_float: true,
-            opened_at: true,
-            closed_at: true,
-            cashRegister: { select: { id: true, name: true, code: true } }
-          }
-        }
-      }
-    })
-
-    res.json(updatedClosure)
-  } catch (e) {
-    console.error('Error updating closure status:', e)
-    next(e)
-  }
+  try { res.json(await reviewClosure(prisma, req)) }
+  catch (error) { if (error.status) return res.status(error.status).json({ message: error.message }); next(error) }
 }
 
 module.exports = exports

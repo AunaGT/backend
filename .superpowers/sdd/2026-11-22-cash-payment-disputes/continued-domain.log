@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: dispute recording, bank movements and customer debt approval are separate authorities
+ok 1 - dispute recording, bank movements and customer debt approval are separate authorities
+  ---
+  duration_ms: 4.017249
+  type: 'test'
+  ...
+# Subtest: consolidated dispute consultation does not permit commands or fake administrator bypass
+ok 2 - consolidated dispute consultation does not permit commands or fake administrator bypass
+  ---
+  duration_ms: 1.34992
+  type: 'test'
+  ...
+# Subtest: canonical admin still has an explicit policy capability, not an implicit self-review permission
+ok 3 - canonical admin still has an explicit policy capability, not an implicit self-review permission
+  ---
+  duration_ms: 0.427654
+  type: 'test'
+  ...
+# Subtest: scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+ok 4 - scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+  ---
+  duration_ms: 0.447072
+  type: 'test'
+  ...
+# Subtest: targeted dispute registration is idempotent and grants no new permissions to company roles
+ok 5 - targeted dispute registration is idempotent and grants no new permissions to company roles
+  ---
+  duration_ms: 4.123008
+  type: 'test'
+  ...
+# Subtest: same committed attempt returns its exact result but different payload is a conflict
+ok 6 - same committed attempt returns its exact result but different payload is a conflict
+  ---
+  duration_ms: 6.010079
+  type: 'test'
+  ...
+# Subtest: commands require concrete scope and UUID before any transaction query
+ok 7 - commands require concrete scope and UUID before any transaction query
+  ---
+  duration_ms: 0.359095
+  type: 'test'
+  ...
+# Subtest: a finished attempt stores and returns one canonical result without rewriting a previous receipt
+ok 8 - a finished attempt stores and returns one canonical result without rewriting a previous receipt
+  ---
+  duration_ms: 0.474934
+  type: 'test'
+  ...
+# Subtest: shared resource locks sort and deduplicate clients before origins
+ok 9 - shared resource locks sort and deduplicate clients before origins
+  ---
+  duration_ms: 0.473771
+  type: 'test'
+  ...
+# Subtest: UUID case cannot split locks or attempts for the same database identities
+ok 10 - UUID case cannot split locks or attempts for the same database identities
+  ---
+  duration_ms: 0.793694
+  type: 'test'
+  ...
+# Subtest: pending claims and unrecovered withdrawals share the refunded original coverage
+ok 11 - pending claims and unrecovered withdrawals share the refunded original coverage
+  ---
+  duration_ms: 4.684725
+  type: 'test'
+  ...
+# Subtest: a recovered closed case releases coverage; invalid and excessive money is rejected
+ok 12 - a recovered closed case releases coverage; invalid and excessive money is rejected
+  ---
+  duration_ms: 0.91374
+  type: 'test'
+  ...
+# Subtest: recovering a lost receipt retires only its free portion and never charges it twice
+ok 13 - recovering a lost receipt retires only its free portion and never charges it twice
+  ---
+  duration_ms: 0.869637
+  type: 'test'
+  ...
+# Subtest: provider recoveries prioritize customer lots proportionally with stable cent remainder
+ok 14 - provider recoveries prioritize customer lots proportionally with stable cent remainder
+  ---
+  duration_ms: 3.885501
+  type: 'test'
+  ...
+# Subtest: forgiven principal is a business loss and is not allocated another customer credit
+ok 15 - forgiven principal is a business loss and is not allocated another customer credit
+  ---
+  duration_ms: 0.498007
+  type: 'test'
+  ...
+# Subtest: a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+ok 16 - a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+  ---
+  duration_ms: 1.353417
+  type: 'test'
+  ...
+# Subtest: an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+ok 17 - an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+  ---
+  duration_ms: 0.527272
+  type: 'test'
+  ...
+# Subtest: attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+ok 18 - attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+  ---
+  duration_ms: 1.335563
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 178.212201

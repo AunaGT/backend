@@ -45,6 +45,7 @@ const uploadImage = multer({
 })
 
 const router = Router()
+router.use(require('../../middlewares/costVisibility').protectCostResponses)
 const scannerRead=method=>async(req,res,next)=>{try{res.json(await require('./scanner')[method](require('../../models/prisma').prisma,{companyId:req.companyId,branchId:req.branchId,user:req.user},req.query))}catch(e){next(e)}}
 router.get('/scan',Auth,scannerRead('resolveScan'))
 router.get('/scanner-profile',Auth,scannerRead('scannerProfile'))
@@ -109,7 +110,7 @@ router.post('/barcode-labels/prepare', Auth, hasPermission('products.view'), has
  *               items:
  *                 $ref: '#/components/schemas/Product'
  */
-router.get('/', Auth, Products.list)
+router.get('/', Auth, hasPermission('products.view'), Products.list)
 
 /**
  * @openapi
@@ -147,7 +148,7 @@ router.get('/critical', Auth, hasPermission('products.view', 'alerts.view'), Pro
  *               type: string
  *               format: binary
  */
-router.get('/report.pdf', Auth, hasPermission('products.export', 'reports.view'), Products.reportPdf)
+router.get('/report.pdf', Auth, hasPermission('products.export', 'reports.view'), hasPermission('products.view_costs'), Products.reportPdf)
 
 router.get('/availability', Auth, hasPermission('products.view', 'sales.create', 'orders.view', 'quotes.view'), Products.availability)
 
@@ -332,12 +333,12 @@ router.post(
  */
 // Lotes con existencia del producto (FEFO)
 router.get('/:id/lots', Auth, hasPermission('products.view'), Products.getLots)
-router.get('/:id/bom', Auth, Products.getBom)
+router.get('/:id/bom', Auth, hasPermission('products.view'), Products.getBom)
 router.put('/:id/bom', Auth, hasPermission('products.edit'), Products.updateBom)
 router.post('/:id/kit/assemble', Auth, hasPermission('products.edit'), Products.assembleKit)
 router.post('/:id/kit/disassemble', Auth, hasPermission('products.edit'), Products.disassembleKit)
 router.get('/:id/kit/assemblies', Auth, hasPermission('products.view'), Products.listKitAssemblies)
-router.get('/:id', Auth, Products.getOne)
+router.get('/:id', Auth, hasPermission('products.view'), Products.getOne)
 
 /**
  * @openapi

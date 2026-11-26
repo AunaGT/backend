@@ -1,0 +1,148 @@
+TAP version 13
+# Subtest: creating a case reserves only unallocated receipt funds and replay creates no debt or money
+ok 1 - creating a case reserves only unallocated receipt funds and replay creates no debt or money
+  ---
+  duration_ms: 11226.599359
+  type: 'test'
+  ...
+# Subtest: concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+ok 2 - concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+  ---
+  duration_ms: 9631.019043
+  type: 'test'
+  ...
+# Subtest: reviewing a won result releases an unwithdrawn advance only after independent approval
+ok 3 - reviewing a won result releases an unwithdrawn advance only after independent approval
+  ---
+  duration_ms: 10960.713359
+  type: 'test'
+  ...
+# Subtest: losing before the bank debit creates no debt but protects the affected unused advance
+ok 4 - losing before the bank debit creates no debt but protects the affected unused advance
+  ---
+  duration_ms: 9324.950807
+  type: 'test'
+  ...
+# Subtest: replacing a cancelled incorrect case requires an explicit link and preserves its original history
+ok 5 - replacing a cancelled incorrect case requires an explicit link and preserves its original history
+  ---
+  duration_ms: 3117.177503
+  type: 'test'
+  ...
+# Subtest: a fee-only withdrawal must be resolved before the case can be cancelled
+ok 6 - a fee-only withdrawal must be resolved before the case can be cancelled
+  ---
+  duration_ms: 2666.340135
+  type: 'test'
+  ...
+# Subtest: additive dispute DDL preserves existing data and isolates all new tables
+ok 7 - additive dispute DDL preserves existing data and isolates all new tables
+  ---
+  duration_ms: 10845.285527
+  type: 'test'
+  ...
+# Subtest: dispute children cannot divert a receipt restriction to another customer or overreserve funds
+ok 8 - dispute children cannot divert a receipt restriction to another customer or overreserve funds
+  ---
+  duration_ms: 9812.773504
+  type: 'test'
+  ...
+# Subtest: a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+ok 9 - a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+  ---
+  duration_ms: 2868.306742
+  type: 'test'
+  ...
+# Subtest: an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+ok 10 - an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+  ---
+  duration_ms: 2630.152754
+  type: 'test'
+  ...
+# Subtest: an approved cancellation cannot hide an outstanding bank withdrawal
+ok 11 - an approved cancellation cannot hide an outstanding bank withdrawal
+  ---
+  duration_ms: 2359.972273
+  type: 'test'
+  ...
+# Subtest: origin eligibility, coverage and parent scope are derived from original bank receipts
+ok 12 - origin eligibility, coverage and parent scope are derived from original bank receipts
+  ---
+  duration_ms: 11192.445132
+  type: 'test'
+  ...
+# Subtest: missing dispute schema advertises unavailability and does not block original cash features
+ok 13 - missing dispute schema advertises unavailability and does not block original cash features
+  ---
+  duration_ms: 8737.625402
+  type: 'test'
+  ...
+# Subtest: releasing an event advance into a disputed receipt expands the hold before any free credit is published
+ok 14 - releasing an event advance into a disputed receipt expands the hold before any free credit is published
+  ---
+  duration_ms: 10286.363091
+  type: 'test'
+  ...
+# Subtest: the existing cartera list keeps held advances visible without advertising them as spendable credit
+ok 15 - the existing cartera list keeps held advances visible without advertising them as spendable credit
+  ---
+  duration_ms: 9037.28325
+  type: 'test'
+  ...
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 16 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 10813.434441
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when REFUND gets the lock first
+ok 17 - a concurrent refund and claim share one origin budget when REFUND gets the lock first
+  ---
+  duration_ms: 8806.645521
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+ok 18 - a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+  ---
+  duration_ms: 3472.821286
+  type: 'test'
+  ...
+# Subtest: database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+ok 19 - database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+  ---
+  duration_ms: 2681.313764
+  type: 'test'
+  ...
+# Subtest: attributing a confirmed engagement refund does not count its existing money source twice
+ok 20 - attributing a confirmed engagement refund does not count its existing money source twice
+  ---
+  duration_ms: 2457.290896
+  type: 'test'
+  ...
+# Subtest: completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+ok 21 - completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+  ---
+  duration_ms: 2352.130346
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund with generic attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 22 - a merchant-funded refund with generic attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 3002.580696
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund with partial existing attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 23 - a merchant-funded refund with partial existing attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 2224.76593
+  type: 'test'
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 36064.340994

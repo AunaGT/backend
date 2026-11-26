@@ -33,6 +33,9 @@ function receiptDto(r) {
   return {
     id: r.id,
     status: r.status,
+    cashRegisterSessionId: r.cash_register_session_id || null,
+    cashRegisterName: r.cash_register_name || null,
+    cashOrigin: r.cash_register_session_id ? 'CASH_SESSION' : 'OUTSIDE_CASH',
     companyId: r.company_id,
     companyName: r.company.name,
     branchId: r.branch_id,
@@ -68,7 +71,13 @@ async function loadReceipt(db, scope, id) {
     include: receiptInclude,
   });
   if (!row) fail("Pago no disponible", 404, "NOT_FOUND");
-  return row;
+  return hydrateReceipt(db, row);
+}
+async function hydrateReceipt(db, row) {
+  if (!await require('../../cash-closure/eventStorage').ledgerAvailable(db)) return row;
+  const [metadata] = await db.$queryRaw`SELECT p.cash_register_session_id,r.name AS cash_register_name FROM supplier_payments p
+    LEFT JOIN cash_register_sessions s ON s.id=p.cash_register_session_id LEFT JOIN cash_registers r ON r.id=s.cash_register_id WHERE p.id=${row.id}::uuid`;
+  return { ...row, ...metadata };
 }
 async function lockSupplier(tx, scope, supplierId) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`payables:${scope.companyId}:${supplierId}`},0))`;
@@ -138,13 +147,7 @@ async function syncEntry(tx, scope, id, before, action, reason = null) {
 async function postSupplierPayment(tx, scope, raw, options = {}) {
   const input = parseSupplierPayment(raw, options);
   await assertAccess(tx, scope, { write: true });
-  if (
-    !(await tx.supplier.findFirst({
-      where: { id: input.supplierId, company_id: scope.companyId },
-    }))
-  )
-    fail("Proveedor no disponible", 404, "NOT_FOUND");
-  await lockSupplier(tx, scope, input.supplierId);
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`supplier-receipt:${scope.companyId}:${scope.userId}:${input.requestKey.toLowerCase()}`},0))`;
   const hash = crypto
       .createHash("sha256")
       .update(JSON.stringify(canonical(input)))
@@ -166,8 +169,18 @@ async function postSupplierPayment(tx, scope, raw, options = {}) {
         409,
         "REQUEST_CONFLICT",
       );
-    return receiptDto(existing);
+    return receiptDto(await hydrateReceipt(tx, existing));
   }
+  let cashSession = null;
+  if (input.cashRegisterSessionId) {
+    if (!await require('../../cash-closure/eventStorage').ledgerAvailable(tx)) fail('El vínculo con caja aún no está disponible en este servidor', 409, 'CASH_LINK_UNAVAILABLE');
+    const boundary = require('../../../services/cashSessionBoundary');
+    cashSession = await boundary.lockScopedSession(tx, scope, input.cashRegisterSessionId);
+    if (cashSession.currency_code && cashSession.currency_code !== input.currencyCode) fail('La moneda del pago debe coincidir con la del turno', 409, 'CASH_PAYMENT_CURRENCY');
+    boundary.assertSessionOperation(cashSession, scope, { paidAt: input.paidAt });
+  }
+  if (!(await tx.supplier.findFirst({ where: { id: input.supplierId, company_id: scope.companyId } }))) fail('Proveedor no disponible', 404, 'NOT_FOUND');
+  await lockSupplier(tx, scope, input.supplierId);
   const rows = await loadEntries(
     tx,
     scope,
@@ -181,7 +194,8 @@ async function postSupplierPayment(tx, scope, raw, options = {}) {
     currency = settings.find((s) => s.key === "currency_code")?.value || "GTQ";
   if (input.currencyCode !== currency)
     fail("La moneda no corresponde a la empresa");
-  await require('../../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose:'SUPPLIER_PAYMENT'});
+  const method = await require('../../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose:'SUPPLIER_PAYMENT'});
+  if (cashSession) require('../../../services/cashSessionBoundary').assertSessionOperation(cashSession, scope, { settlementKind: method.settlement_kind ?? (require('../../../services/paymentMethods/behavior').isCashMethod(method, name => /efectivo|cash/i.test(name)) ? 'CASH' : null) });
   const balances = rows.map((row) => ({ id: row.id, ...balanceOf(row) })),
     applications = planApplications(balances, input),
     id = crypto.randomUUID();
@@ -202,6 +216,7 @@ async function postSupplierPayment(tx, scope, raw, options = {}) {
       request_hash: hash,
     },
   });
+  if (cashSession) await tx.$executeRaw`UPDATE supplier_payments SET cash_register_session_id=${cashSession.id}::uuid WHERE id=${id}::uuid`;
   await tx.incomingMerchandisePaymentEntry.createMany({
     data: applications.map((a) => ({
       id: crypto.randomUUID(),
@@ -215,6 +230,7 @@ async function postSupplierPayment(tx, scope, raw, options = {}) {
   });
   for (const row of rows)
     await syncEntry(tx, scope, row.id, balanceOf(row), "PAYMENT_POSTED");
+  if (cashSession) await require('../../cash-closure/events').recordMoneyEvent(tx, scope, { session: cashSession, sourceType: 'SUPPLIER_PAYMENT', sourceId: id });
   return receiptDto(await loadReceipt(tx, scope, id));
 }
 const createSupplierPayment = (db, scope, input, options) =>

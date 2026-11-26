@@ -4,7 +4,7 @@ const {fail,uuid}=require('./domain/validation')
 const {assertAppointmentsEnabled,hasAgendaPermission,appointmentWhere}=require('./access')
 const {publicConditionsFromRow,publicServiceConditions}=require('./index')
 const {assertLineCoverage}=require('./domain/engagement')
-const {engagementMoney,engagementCurrencyReason,allocationSelect,allocationForReceipt}=require('../receivables')
+const {engagementMoney,engagementCurrencyReason,allocationSelect,allocationForReceipt,hydrateReceiptAllocations}=require('../receivables')
 const {effectiveStatus}=require('./presentation')
 const {resolveEffectiveModules}=require('../platform/registry')
 const {isV2}=require('../../services/units/commercial')
@@ -21,6 +21,8 @@ async function loadEngagement(db,scope,id){
   if(!hasAgendaPermission(scope,'appointments.view'))fail(403,'FORBIDDEN','No tienes permiso para consultar Agenda')
   const row=await db.appointmentEngagement.findFirst({where:{id,...engagementWhere(scope)},include:engagementInclude})
   if(!row)fail(404,'NOT_FOUND','Contratación no encontrada')
+  const payments=await hydrateReceiptAllocations(db,row.commitments.map(c=>c.payment))
+  row.commitments=row.commitments.map((c,i)=>({...c,payment:payments[i]}))
   return row
 }
 function conditionInfo(profile,product,branchId,offered){

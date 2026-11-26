@@ -1,0 +1,1277 @@
+{
+  "adminRoleId": 1,
+  "tables": [
+    "_prisma_migrations",
+    "accounting_periods",
+    "accounts",
+    "alert_priorities",
+    "alert_types",
+    "alerts",
+    "appointment_bookings",
+    "appointment_engagement_history",
+    "appointment_engagement_lines",
+    "appointment_engagement_schedules",
+    "appointment_engagements",
+    "appointment_history",
+    "appointment_participants",
+    "appointment_requests",
+    "appointment_session_providers",
+    "appointment_session_resources",
+    "appointment_sessions",
+    "appointment_waitlist",
+    "attendance",
+    "availability_exceptions",
+    "availability_rules",
+    "barcode_print_preparations",
+    "branches",
+    "cash_bank_deposits",
+    "cash_bank_event_modes",
+    "cash_bank_method_settings",
+    "cash_bank_method_versions",
+    "cash_closure_correction_commands",
+    "cash_closure_correction_lines",
+    "cash_closure_corrections",
+    "cash_closure_denominations",
+    "cash_closure_payments",
+    "cash_closure_reviews",
+    "cash_closures",
+    "cash_custodies",
+    "cash_custody_entries",
+    "cash_custody_transfers",
+    "cash_daily_consolidations",
+    "cash_difference_policies",
+    "cash_money_events",
+    "cash_payment_notices",
+    "cash_physical_movements",
+    "cash_register_access",
+    "cash_register_commands",
+    "cash_register_sessions",
+    "cash_registers",
+    "cash_session_participants",
+    "cash_settlement_allocations",
+    "cash_settlement_deductions",
+    "cash_settlements",
+    "cash_turn_handovers",
+    "commercial_document_lines",
+    "commercial_document_sales",
+    "commercial_documents",
+    "commercial_package_branches",
+    "commercial_package_commands",
+    "commercial_package_versions",
+    "commercial_packages",
+    "companies",
+    "company_modules",
+    "company_payment_methods",
+    "customer_payment_refunds",
+    "customer_payments",
+    "customer_price_rules",
+    "document_artifacts",
+    "document_events",
+    "document_snapshots",
+    "document_template_assets",
+    "document_template_defaults",
+    "document_template_versions",
+    "document_templates",
+    "employee_advances",
+    "employee_deductions",
+    "employee_document_types",
+    "employee_documents",
+    "employee_history",
+    "employees",
+    "fiscal_attempts",
+    "fiscal_connector_versions",
+    "fiscal_connectors",
+    "fiscal_establishments",
+    "fiscal_events",
+    "fiscal_operations",
+    "hardware_assignments",
+    "hardware_audit_events",
+    "hardware_devices",
+    "hardware_drawer_attempts",
+    "hardware_drawer_intents",
+    "hardware_drawer_policies",
+    "hardware_print_events",
+    "hardware_print_jobs",
+    "hardware_test_runs",
+    "hardware_workstations",
+    "incoming_merchandise",
+    "incoming_merchandise_items",
+    "incoming_merchandise_payment_entries",
+    "integration_audit_events",
+    "integration_credential_branches",
+    "integration_credentials",
+    "integration_customer_references",
+    "integration_draft_mutations",
+    "integration_draft_operations",
+    "integration_identities",
+    "integration_rate_windows",
+    "inventory_count_lines",
+    "inventory_count_sessions",
+    "journal_entries",
+    "journal_lines",
+    "measure_units",
+    "merchandise_payment_audit_events",
+    "order_deliveries",
+    "order_delivery_lines",
+    "payment_allocation_events",
+    "payment_commitments",
+    "payment_methods",
+    "payment_terms",
+    "payroll_rate_versions",
+    "payroll_runs",
+    "payslip_lines",
+    "payslips",
+    "permissions",
+    "portal_assets",
+    "portal_audits",
+    "portal_code_policies",
+    "portal_saved_sections",
+    "portal_template_defaults",
+    "portal_template_versions",
+    "portal_templates",
+    "portal_write_receipts",
+    "product_barcodes",
+    "product_bom_lines",
+    "product_categories",
+    "product_lots",
+    "product_presentations",
+    "product_stock_locations",
+    "product_stocks",
+    "products",
+    "promotion_branches",
+    "promotion_categories",
+    "promotion_codes",
+    "promotion_coupon_assets",
+    "promotion_products",
+    "promotion_types",
+    "promotions",
+    "purchase_logs",
+    "refresh_tokens",
+    "return_items",
+    "return_replacement_items",
+    "return_settlements",
+    "return_statuses",
+    "returns",
+    "role_permissions",
+    "roles",
+    "sale_dtes",
+    "sale_history",
+    "sale_items",
+    "sale_payment_entries",
+    "sale_promotions",
+    "sale_statuses",
+    "sale_stock_alert_outbox",
+    "sales",
+    "schedule_calendars",
+    "schedule_resources",
+    "service_provider_branches",
+    "service_providers",
+    "service_schedule_branches",
+    "service_schedule_profiles",
+    "service_schedule_providers",
+    "service_schedule_resources",
+    "setting_audit_events",
+    "statuses",
+    "stock_locations",
+    "stock_movements",
+    "stock_reservations",
+    "stock_statuses",
+    "stock_transfer_lines",
+    "stock_transfers",
+    "supplier_categories",
+    "supplier_payment_terms",
+    "supplier_payments",
+    "suppliers",
+    "system_settings",
+    "user_access_events",
+    "user_branches",
+    "user_companies",
+    "users",
+    "warehouses"
+  ],
+  "projection": [
+    {
+      "table": "_prisma_migrations",
+      "count": 44,
+      "hash": "6996b157c6342874a6ae638f6a577baf"
+    },
+    {
+      "table": "accounting_periods",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "accounts",
+      "count": 3,
+      "hash": "a59d868c24bf2268b68b14683a06d21d"
+    },
+    {
+      "table": "alert_priorities",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "alert_types",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "alerts",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_bookings",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_engagement_history",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_engagement_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_engagement_schedules",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_engagements",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_history",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_participants",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_requests",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_session_providers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_session_resources",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_sessions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "appointment_waitlist",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "attendance",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "availability_exceptions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "availability_rules",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "barcode_print_preparations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "branches",
+      "count": 1,
+      "hash": "01016c98481fa17bfdc0bf312cdb1e95"
+    },
+    {
+      "table": "cash_bank_deposits",
+      "count": 1,
+      "hash": "e6eb9f20ff32bfae96576e7280ce04ec"
+    },
+    {
+      "table": "cash_bank_event_modes",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_bank_method_settings",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_bank_method_versions",
+      "count": 1,
+      "hash": "a30776929cbddbe25b61538e0f16985a"
+    },
+    {
+      "table": "cash_closure_correction_commands",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closure_correction_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closure_corrections",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closure_denominations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closure_payments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closure_reviews",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_closures",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_custodies",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_custody_entries",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_custody_transfers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_daily_consolidations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_difference_policies",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_money_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_payment_notices",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_physical_movements",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_register_access",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_register_commands",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_register_sessions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_registers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_session_participants",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_settlement_allocations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_settlement_deductions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "cash_settlements",
+      "count": 1,
+      "hash": "3e5d44f64e749150d9dc99a3663d10b2"
+    },
+    {
+      "table": "cash_turn_handovers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_document_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_document_sales",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_documents",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_package_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_package_commands",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_package_versions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "commercial_packages",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "companies",
+      "count": 1,
+      "hash": "d22bcdee14c758ee6823a2a56d1517cd"
+    },
+    {
+      "table": "company_modules",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "company_payment_methods",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "customer_payment_refunds",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "customer_payments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "customer_price_rules",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_artifacts",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_snapshots",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_template_assets",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_template_defaults",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_template_versions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "document_templates",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employee_advances",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employee_deductions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employee_document_types",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employee_documents",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employee_history",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "employees",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_attempts",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_connector_versions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_connectors",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_establishments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "fiscal_operations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_assignments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_audit_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_devices",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_drawer_attempts",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_drawer_intents",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_drawer_policies",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_print_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_print_jobs",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_test_runs",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "hardware_workstations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "incoming_merchandise",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "incoming_merchandise_items",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "incoming_merchandise_payment_entries",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_audit_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_credential_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_credentials",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_customer_references",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_draft_mutations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_draft_operations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_identities",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "integration_rate_windows",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "inventory_count_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "inventory_count_sessions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "journal_entries",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "journal_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "measure_units",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "merchandise_payment_audit_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "order_deliveries",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "order_delivery_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payment_allocation_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payment_commitments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payment_methods",
+      "count": 5,
+      "hash": "16397089c768a3016aea980e2fbc2480"
+    },
+    {
+      "table": "payment_terms",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payroll_rate_versions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payroll_runs",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payslip_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "payslips",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "permissions",
+      "count": 8,
+      "hash": "78aa2f912a10f5b0463b4d0a4b75a11e"
+    },
+    {
+      "table": "portal_assets",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_audits",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_code_policies",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_saved_sections",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_template_defaults",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_template_versions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_templates",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "portal_write_receipts",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_barcodes",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_bom_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_categories",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_lots",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_presentations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_stock_locations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "product_stocks",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "products",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_categories",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_codes",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_coupon_assets",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_products",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotion_types",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "promotions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "purchase_logs",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "refresh_tokens",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "return_items",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "return_replacement_items",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "return_settlements",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "return_statuses",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "returns",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "role_permissions",
+      "count": 24,
+      "hash": "d8b803f083228898ac34f95affce90e9"
+    },
+    {
+      "table": "roles",
+      "count": 3,
+      "hash": "39a0261bcd90cd79eb537768ac7776e0"
+    },
+    {
+      "table": "sale_dtes",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sale_history",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sale_items",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sale_payment_entries",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sale_promotions",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sale_statuses",
+      "count": 1,
+      "hash": "48e3b80a01b1b94cd62e996630195db9"
+    },
+    {
+      "table": "sale_stock_alert_outbox",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "sales",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "schedule_calendars",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "schedule_resources",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_provider_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_providers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_schedule_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_schedule_profiles",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_schedule_providers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "service_schedule_resources",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "setting_audit_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "statuses",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_locations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_movements",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_reservations",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_statuses",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_transfer_lines",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "stock_transfers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "supplier_categories",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "supplier_payment_terms",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "supplier_payments",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "suppliers",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "system_settings",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "user_access_events",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "user_branches",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "user_companies",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "table": "users",
+      "count": 1,
+      "hash": "32abe1326b35acd00fd8edff32ece599"
+    },
+    {
+      "table": "warehouses",
+      "count": 0,
+      "hash": "d41d8cd98f00b204e9800998ecf8427e"
+    }
+  ],
+  "permissions": [
+    {
+      "id": 1,
+      "code": "hr.deductions.view",
+      "name": "Ver descuentos de salario",
+      "description": "Puede consultar descuentos manuales y su historial"
+    },
+    {
+      "id": 2,
+      "code": "hr.deductions.manage",
+      "name": "Gestionar descuentos de salario",
+      "description": "Puede registrar, editar y cancelar descuentos pendientes"
+    },
+    {
+      "id": 3,
+      "code": "integrations.view",
+      "name": "Ver integraciones API",
+      "description": "Ver claves e historial sin revelar secretos"
+    },
+    {
+      "id": 4,
+      "code": "integrations.manage",
+      "name": "Administrar claves API",
+      "description": "Crear y revocar claves limitadas; no concede permisos sobre datos de negocio"
+    },
+    {
+      "id": 5,
+      "code": "appointments.override_payment_policy",
+      "name": "Autorizar atención con saldo vencido",
+      "description": "Permite una excepción puntual con motivo; no registra pagos ni modifica saldos"
+    },
+    {
+      "id": 6,
+      "code": "cash.settlements.manage",
+      "name": "Liquidaciones",
+      "description": null
+    },
+    {
+      "id": 7,
+      "code": "receivables.view",
+      "name": "Cartera",
+      "description": null
+    },
+    {
+      "id": 8,
+      "code": "accounting.create",
+      "name": "Contabilidad",
+      "description": null
+    }
+  ],
+  "grants": [
+    {
+      "role_id": 1,
+      "permission_id": 1
+    },
+    {
+      "role_id": 1,
+      "permission_id": 2
+    },
+    {
+      "role_id": 1,
+      "permission_id": 3
+    },
+    {
+      "role_id": 1,
+      "permission_id": 4
+    },
+    {
+      "role_id": 1,
+      "permission_id": 5
+    },
+    {
+      "role_id": 1,
+      "permission_id": 6
+    },
+    {
+      "role_id": 1,
+      "permission_id": 7
+    },
+    {
+      "role_id": 1,
+      "permission_id": 8
+    },
+    {
+      "role_id": 112,
+      "permission_id": 1
+    },
+    {
+      "role_id": 112,
+      "permission_id": 2
+    },
+    {
+      "role_id": 112,
+      "permission_id": 3
+    },
+    {
+      "role_id": 112,
+      "permission_id": 4
+    },
+    {
+      "role_id": 112,
+      "permission_id": 5
+    },
+    {
+      "role_id": 112,
+      "permission_id": 6
+    },
+    {
+      "role_id": 112,
+      "permission_id": 7
+    },
+    {
+      "role_id": 112,
+      "permission_id": 8
+    },
+    {
+      "role_id": 139,
+      "permission_id": 1
+    },
+    {
+      "role_id": 139,
+      "permission_id": 2
+    },
+    {
+      "role_id": 139,
+      "permission_id": 3
+    },
+    {
+      "role_id": 139,
+      "permission_id": 4
+    },
+    {
+      "role_id": 139,
+      "permission_id": 5
+    },
+    {
+      "role_id": 139,
+      "permission_id": 6
+    },
+    {
+      "role_id": 139,
+      "permission_id": 7
+    },
+    {
+      "role_id": 139,
+      "permission_id": 8
+    }
+  ]
+}

@@ -29,7 +29,7 @@ test('detalle de mercancía entrega imágenes reales sin alterar costos ni saldo
     incomingMerchandise: { findFirst: async ({ where, include }) => {
       assert.equal(where.branch.company_id, 'company-a')
       assert.equal(include.items.include.product.select.image_url, true)
-      return { id: 'receipt', supplier: { id: 'supplier', name: 'Proveedor' }, registeredBy: { id: 'user', name: 'Usuario' }, date: new Date(), payment_status: 'PARTIAL', paymentEntries: [{ id: 'payment', amount: 5, paid_at: new Date() }], items: [{ id: 'line', product: { id: 'product', name: 'Producto', image_url: '/product.png' }, quantity: 3, unit_cost: 10 }] }
+      return { id: 'receipt', supplier: { id: 'supplier', name: 'Proveedor' }, registeredBy: { id: 'user', name: 'Usuario' }, date: new Date(), payment_status: 'PARTIAL', paymentEntries: [{ id: 'payment', amount: 5, paid_at: new Date() }], items: [{ id: 'line', product: { id: 'product', name: 'Producto', image_url: '/product.png',cost:999 }, quantity: 3, unit_cost: 10 }] }
     } }
   } } }
   try {
@@ -37,6 +37,8 @@ test('detalle de mercancía entrega imágenes reales sin alterar costos ni saldo
     let data
     await require(controllerPath).getById({ params: { id: 'receipt' }, companyId: 'company-a', branchId:'branch-a', branchIds:['branch-a'],user:{sub:'user'} }, { json: value => { data = value } }, error => { throw error })
     assert.equal(data.items[0].product.image_url, '/product.png')
+    assert.equal(Object.hasOwn(data.items[0].product,'cost'),false)
+    assert.equal(data.items[0].unit_cost,10)
     assert.equal(data.totalValue, 30)
     assert.equal(data.amount_pending, 25)
   } finally {

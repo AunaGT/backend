@@ -2,7 +2,6 @@
  * Configuración de vigencia cotizaciones / pedidos (system_settings).
  */
 
-const { prisma } = require('../models/prisma')
 
 const DEFAULT_QUOTE_DAYS = 30
 const DEFAULT_ORDER_DAYS = 7
@@ -17,7 +16,7 @@ async function getCommercialDocSettings(client, companyId) {
   if (typeof companyId !== 'string' || !companyId.trim()) {
     throw Object.assign(new Error('Empresa requerida para configuración comercial'), { status: 403 })
   }
-  const db = client || prisma
+  const db = client || require('../models/prisma').prisma
   const rows = await db.systemSetting.findMany({
     where: {
       key: { in: ['quote_validity_days', 'order_validity_days', 'quote_soft_hold_hours'] },

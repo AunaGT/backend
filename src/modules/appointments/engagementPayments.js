@@ -22,6 +22,10 @@ async function collectEngagementPayment(db,scope,id,raw){
   await assertCommercialAccess(db,scope,'collect')
   return command(db,scope,'appointments.collect','COLLECT_ENGAGEMENT',input,async tx=>{
     await assertCommercialAccess(tx,scope,'collect')
+    if(input.cashRegisterSessionId){
+      const boundary=require('../../services/cashSessionBoundary')
+      boundary.assertSessionOperation(await boundary.lockScopedSession(tx,scope,input.cashRegisterSessionId),scope)
+    }
     const initial=await require('./commercialQueries').loadEngagement(tx,scope,id)
     await require('./sourceVerification').lockEngagementQuote(tx,scope,initial)
     await lockCustomer(tx,initial.customer_id)

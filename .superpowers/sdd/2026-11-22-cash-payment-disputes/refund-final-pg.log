@@ -1,0 +1,124 @@
+TAP version 13
+# Subtest: creating a case reserves only unallocated receipt funds and replay creates no debt or money
+ok 1 - creating a case reserves only unallocated receipt funds and replay creates no debt or money
+  ---
+  duration_ms: 4753.606483
+  type: 'test'
+  ...
+# Subtest: concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+ok 2 - concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+  ---
+  duration_ms: 3766.462918
+  type: 'test'
+  ...
+# Subtest: reviewing a won result releases an unwithdrawn advance only after independent approval
+ok 3 - reviewing a won result releases an unwithdrawn advance only after independent approval
+  ---
+  duration_ms: 4976.211232
+  type: 'test'
+  ...
+# Subtest: losing before the bank debit creates no debt but protects the affected unused advance
+ok 4 - losing before the bank debit creates no debt but protects the affected unused advance
+  ---
+  duration_ms: 3736.018501
+  type: 'test'
+  ...
+# Subtest: additive dispute DDL preserves existing data and isolates all new tables
+ok 5 - additive dispute DDL preserves existing data and isolates all new tables
+  ---
+  duration_ms: 5504.49468
+  type: 'test'
+  ...
+# Subtest: dispute children cannot divert a receipt restriction to another customer or overreserve funds
+ok 6 - dispute children cannot divert a receipt restriction to another customer or overreserve funds
+  ---
+  duration_ms: 3293.376264
+  type: 'test'
+  ...
+# Subtest: a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+ok 7 - a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+  ---
+  duration_ms: 2366.501108
+  type: 'test'
+  ...
+# Subtest: an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+ok 8 - an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+  ---
+  duration_ms: 2319.111655
+  type: 'test'
+  ...
+# Subtest: origin eligibility, coverage and parent scope are derived from original bank receipts
+ok 9 - origin eligibility, coverage and parent scope are derived from original bank receipts
+  ---
+  duration_ms: 5188.995836
+  type: 'test'
+  ...
+# Subtest: missing dispute schema advertises unavailability and does not block original cash features
+ok 10 - missing dispute schema advertises unavailability and does not block original cash features
+  ---
+  duration_ms: 3203.415669
+  type: 'test'
+  ...
+# Subtest: releasing an event advance into a disputed receipt expands the hold before any free credit is published
+ok 11 - releasing an event advance into a disputed receipt expands the hold before any free credit is published
+  ---
+  duration_ms: 4860.347897
+  type: 'test'
+  ...
+# Subtest: the existing cartera list keeps held advances visible without advertising them as spendable credit
+ok 12 - the existing cartera list keeps held advances visible without advertising them as spendable credit
+  ---
+  duration_ms: 3671.386812
+  type: 'test'
+  ...
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 13 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 5341.395582
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when REFUND gets the lock first
+ok 14 - a concurrent refund and claim share one origin budget when REFUND gets the lock first
+  ---
+  duration_ms: 3414.085766
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+ok 15 - a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+  ---
+  duration_ms: 2449.07897
+  type: 'test'
+  ...
+# Subtest: database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+ok 16 - database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+  ---
+  duration_ms: 2341.264274
+  type: 'test'
+  ...
+# Subtest: attributing a confirmed engagement refund does not count its existing money source twice
+ok 17 - attributing a confirmed engagement refund does not count its existing money source twice
+  ---
+  duration_ms: 2244.898495
+  type: 'test'
+  ...
+# Subtest: completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+ok 18 - completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+  ---
+  duration_ms: 2331.904291
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 19 - a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 2273.407315
+  type: 'test'
+  ...
+1..19
+# tests 19
+# suites 0
+# pass 19
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 20634.047495

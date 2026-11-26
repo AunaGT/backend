@@ -15,6 +15,12 @@ const meta = { generatedAt: '2026-10-09T12:00:00Z', timezone: 'America/Guatemala
 const data = { totalRevenueGross: 100, totalReturned: 25, totalRevenue: 75, totalCost: 40, totalProfit: 35,
   tickets: 1, unidadesTotales: 2, ticketPromedio: 75, salesByBranch: [], categories: [{ category: 'A', revenue: 100 }],
   topProducts: [], salesByMethod: [], salesByPeriod: [], salesByCashier: [], useDaily: true }
+test('operational sales snapshot excludes cost and profit while preserving revenue and tickets',()=>{
+ const report=buildSalesReport(data,meta,false)
+ assert.equal(report.summary.some(m=>['cost','profit'].includes(m.id)),false)
+ assert.equal(report.summary.find(m=>m.id==='net').value,75)
+ assert.equal(report.summary.find(m=>m.id==='tickets').value,1)
+})
 test('sales distinguishes gross and net and labels gross category breakdown', () => {
   const report = buildSalesReport(data, meta)
   assert.equal(report.summary.find(m => m.id === 'net').value, 75)

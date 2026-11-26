@@ -4,10 +4,10 @@ const {parsePackageDefinition,object,uuid,integer,text,array,invalid}=require('.
 const {validateReferences}=require('./references')
 function fail(status,code,message){throw Object.assign(new Error(message),{status,code})}
 const branchIds=scope=>[...new Set(scope.branchIds??(scope.branchId?[scope.branchId]:[]))]
-function authorize(scope,{write=false}={}) {
+function authorize(scope,{write=false,permission}={}) {
   if(!scope?.companyId)fail(403,'FORBIDDEN','Selecciona una empresa')
   uuid(scope.companyId,'companyId')
-  if(!scope.isAdmin&&!scope.permissions?.includes(write?'products.edit':'products.view'))fail(403,'FORBIDDEN','No tienes permiso para gestionar paquetes')
+  if(!scope.isAdmin&&!scope.permissions?.includes(permission??(write?'products.edit':'products.view')))fail(403,'FORBIDDEN','No tienes permiso para esta acción del paquete')
   if(write&&!scope.branchId)fail(400,'BRANCH_REQUIRED','Selecciona una sucursal; la vista consolidada es solo de consulta')
   if(write&&!scope.actorId)fail(403,'FORBIDDEN','Inicia sesión para guardar cambios')
   if(write)uuid(scope.actorId,'actorId')
@@ -19,6 +19,7 @@ async function enabled(db,scope) {
   if(!modules.find(module=>module.code==='inventory')?.effectiveEnabled)fail(403,'MODULE_DISABLED','Inventario no está habilitado para esta empresa')
   if(!db.commercialPackage)fail(503,'PACKAGES_NOT_READY','La actualización de paquetes aún no está instalada')
 }
+async function assertPackageReadAccess(db,scope,permission='products.view'){authorize(scope,{permission});await enabled(db,scope)}
 async function assertPackageWriteAccess(db,scope){
   authorize(scope,{write:true});await enabled(db,scope)
   if(!branchIds(scope).includes(scope.branchId))fail(403,'FORBIDDEN','Sucursal no autorizada')
@@ -39,7 +40,13 @@ function assertSharedAccess(scope,row) {
   if(row.branches.some(branch=>!branchIds(scope).includes(branch.branch_id)))fail(403,'FORBIDDEN','El paquete es compartido; necesitas acceso a todas sus sucursales')
 }
 const receipt=row=>({id:row.id,version:row.version,activeVersion:row.active_version??null,archivedAt:row.archived_at?.toISOString()??null})
-const summary=row=>({...receipt(row),name:row.name,branchIds:row.branches.map(branch=>branch.branch_id)})
+function summary(row){
+ const d=row.draft_definition,Decimal=require('@prisma/client').Prisma.Decimal
+ const prices=(d?.variants??[]).flatMap(v=>v.price==null||v.price===''?[]:[new Decimal(v.price)]).sort((a,b)=>a.comparedTo(b))
+ return {...receipt(row),name:row.name,branchIds:row.branches.map(branch=>branch.branch_id),imageUrl:d?.imageUrl??null,
+  currency:d?.currency??null,description:d?.description??'',variantCount:d?.variants?.length??0,
+  priceFrom:prices[0]?.toFixed(2)??null,priceTo:prices.at(-1)?.toFixed(2)??null}
+}
 async function listPackages(db,scope,query={}) {
   authorize(scope);await enabled(db,scope)
   object(query,['limit','cursor','q','branchId','includeArchived','activeOnly','includeSummary'],'query')
@@ -61,13 +68,17 @@ async function listPackages(db,scope,query={}) {
       db.commercialPackage.count({where:{AND:[filters,{archived_at:{not:null}}]}}),
     ]):undefined,
   ]),items=rows.slice(0,limit)
-  return{items:items.map(summary),nextCursor:rows.length>limit?items.at(-1).id:null,...(counts?{summary:{total:counts[0]+counts[1]+counts[2],active:counts[0],draft:counts[1],archived:counts[2]}}:{})}
+  return{items:items.map(summary),nextCursor:rows.length>limit?items.at(-1).id:null,...(counts?{totalItems:counts[0]+counts[1]+(flag(query.includeArchived,'includeArchived')?counts[2]:0),summary:{total:counts[0]+counts[1]+counts[2],active:counts[0],draft:counts[1],archived:counts[2]}}:{})}
 }
 async function getPackage(db,scope,id) {
   authorize(scope);await enabled(db,scope)
   const row=await load(db,scope,id)
   const active=row.active_version?await db.commercialPackageVersion.findFirst({where:{company_id:scope.companyId,package_id:id,version:row.active_version}}):null
-  return{...summary(row),definition:row.draft_definition,activeDefinition:active?.definition??null}
+  const definitions=[row.draft_definition,active?.definition].filter(Boolean)
+  const ids=[...new Set(definitions.flatMap(d=>(d.variants??[]).flatMap(v=>[...(v.components??[]),...(v.choices??[]).flatMap(c=>c.options??[])].map(c=>c.productId))).filter(Boolean))]
+  const products=ids.length?await db.product.findMany({where:{company_id:scope.companyId,id:{in:ids}},select:{id:true,name:true,service_unit_label:true,base_unit:{select:{label:true}},presentations:{select:{id:true,label:true}}}}):[]
+  const references=products.map(p=>({id:p.id,name:p.name,unitLabel:p.service_unit_label||p.base_unit?.label||'unidad',presentations:(p.presentations??[]).map(v=>({id:v.id,label:v.label}))}))
+  return{...summary(row),definition:row.draft_definition,activeDefinition:active?.definition??null,references}
 }
 async function assignedBranches(tx,scope,ids) {
   if(ids.some(id=>!branchIds(scope).includes(id)))fail(403,'FORBIDDEN','Selecciona sucursales a las que tengas acceso')
@@ -90,7 +101,7 @@ function parseAction(raw) {
   return{expectedVersion:integer(raw.expectedVersion,'expectedVersion',1,2147483647),idempotencyKey:key(raw.idempotencyKey)}
 }
 async function command(db,scope,id,action,input,execute) {
-  authorize(scope,{write:true});if(id!==null)uuid(id,'packageId')
+  authorize(scope,{write:true,permission:action==='ACTIVATE'?'products.packages.publish':action==='ARCHIVE'?'products.packages.archive':'products.edit'});if(id!==null)uuid(id,'packageId')
   const inputHash=createHash('sha256').update(JSON.stringify({id,action,input})).digest('hex')
   return db.$transaction(async tx=>{
     await enabled(tx,scope)
@@ -155,14 +166,16 @@ async function archivePackage(db,scope,id,raw) {
     return receipt({...row,version:row.version+1,archived_at})
   })
 }
-async function loadPackageVersion(tx,scope,id,version,{forNewSelection=true}={}) {
-  authorize(scope);await enabled(tx,scope);uuid(id,'packageId');integer(version,'version',1,2147483647)
+async function loadPackageVersion(tx,scope,id,version,{forNewSelection=true,readPermission='products.view'}={}) {
+  authorize(scope,{permission:readPermission});await enabled(tx,scope);uuid(id,'packageId');integer(version,'version',1,2147483647)
   const row=await tx.commercialPackage.findFirst({where:{id,company_id:scope.companyId},include:{branches:true}})
   const record=await tx.commercialPackageVersion.findFirst({where:{company_id:scope.companyId,package_id:id,version}})
   if(!row||!record||!scope.branchId||!record.branch_ids.includes(scope.branchId)||!branchIds(scope).includes(scope.branchId))fail(404,'NOT_FOUND','Versión del paquete no encontrada')
   if(forNewSelection&&(row.archived_at||row.active_version!==version||!row.branches.some(branch=>branch.branch_id===scope.branchId)))fail(409,'PACKAGE_UNAVAILABLE','La versión del paquete ya no está disponible para selecciones nuevas')
   const definition=parsePackageDefinition(record.definition,{complete:true})
+  const currency=await tx.systemSetting.findUnique({where:{company_id_key:{company_id:scope.companyId,key:'currency_code'}}})
+  if(definition.currency!==(currency?.value||'GTQ'))fail(409,'CURRENCY_MISMATCH','La moneda del paquete no coincide con la empresa. Revisa el catálogo; no se convierten precios automáticamente')
   const products=forNewSelection?await validateReferences(tx,scope,definition,{lock:true}):null
   return{packageId:id,version,definition,branchIds:record.branch_ids,products}
 }
-module.exports={listPackages,getPackage,savePackage,activatePackageVersion,archivePackage,loadPackageVersion,assertPackageWriteAccess}
+module.exports={listPackages,getPackage,savePackage,activatePackageVersion,archivePackage,loadPackageVersion,assertPackageWriteAccess,assertPackageReadAccess}

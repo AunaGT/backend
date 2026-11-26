@@ -14,7 +14,7 @@ async function resolveScan(db,scope,raw){
  const code=scanInput(scope,raw)
  if(!await db.branch.findFirst({where:{id:scope.branchId,company_id:scope.companyId,active:true},select:{id:true}}))fail(404,'Sucursal no disponible')
  const registered=await db.productBarcode.findFirst({where:{company_id:scope.companyId,code,active:true},select:{product_id:true,presentation_id:true}})
- const keys=['id','name','brand','size','barcode','image_url','kind','available_for_sale','category_id','base_unit_id','unit_metadata_version','quantity_decimals','unit_revision','default_sale_presentation_id','default_purchase_presentation_id','price','price_wholesale','price_promotion','promotion_valid_until','stock','min_stock','service_unit_label','tracks_expiry',...(raw.operation==='PURCHASE'?['cost']:[])]
+ const keys=['id','name','brand','size','barcode','image_url','kind','available_for_sale','category_id','base_unit_id','unit_metadata_version','quantity_decimals','unit_revision','default_sale_presentation_id','default_purchase_presentation_id','price','price_wholesale','price_promotion','promotion_valid_until','stock','min_stock','service_unit_label','tracks_expiry',...(raw.operation==='PURCHASE'?['cost','supplier_id']:[])]
  const rows=await db.product.findMany({where:{company_id:scope.companyId,deleted:false,OR:[{barcode:code},...(registered?[{id:registered.product_id}]:[])]},select:{...Object.fromEntries(keys.map(k=>[k,true])),category:{select:{id:true,name:true}}},take:3})
  if(rows.length>1)fail(409,'El código corresponde a varios productos. Revisa su asignación.')
  const product=rows[0];if(!product)fail(404,'No encontramos este código. Puedes buscar el producto manualmente.')
@@ -26,7 +26,8 @@ async function resolveScan(db,scope,raw){
   if(!p||raw.operation!=='LOOKUP'&&!(raw.operation==='PURCHASE'?p.purchase_enabled:p.sale_enabled))fail(409,'La presentación no está habilitada para esta operación')
  }
  const [dto]=await catalogItemsDTO(db,scope,[product])
- return {product:{...dto,tracks_expiry:product.tracks_expiry,...(raw.operation==='PURCHASE'?{cost:product.cost}: {})},presentationId,unitRevision:product.unit_revision??1}
+ const supplier=raw.operation==='PURCHASE'&&product.supplier_id?await db.supplier.findFirst({where:{id:product.supplier_id,company_id:scope.companyId,party_type:'SUPPLIER',deleted:false,estado:1},select:{id:true,name:true}}):null
+ return {product:{...dto,tracks_expiry:product.tracks_expiry,...(raw.operation==='PURCHASE'?{cost:product.cost,supplier,supplier_id:supplier?.id??null}: {})},presentationId,unitRevision:product.unit_revision??1}
 }
 async function scannerProfile(db,scope,input){
  if(!['products.view','sales.create','products.register_incoming','inventory_count.count'].some(p=>hasPerm(scope.user,p)))fail(403,'No tienes permiso para leer productos')

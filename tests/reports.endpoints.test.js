@@ -51,3 +51,25 @@ for (const empty of [true, false]) for (const [id, handler] of Object.entries(ha
     })
   })
 }
+
+for (const unitsEnabled of [true, false]) test(`inventory JSON loads each product base unit instead of rejecting products whose unit is fine (unidades ${unitsEnabled ? 'activas' : 'desactivadas'})`, async () => {
+  // Como Prisma: la relación solo llega si la consulta la incluye o la selecciona.
+  const product = { id: 'p', name: 'Arroz', stock: '2.5', cost: 3, kind: 'GOOD', category: { name: 'Granos' }, base_unit_id: 'kg-id', quantity_decimals: 3 }
+  const prisma = {
+    branch: { findMany: async () => [{ id: branchId, name: 'Centro' }] },
+    product: { findMany: async ({ include, select }) => [{ ...product, ...(include?.base_unit || select?.base_unit ? { base_unit: { id: 'kg-id', code: 'KG', label: 'kg' } } : {}) }] },
+    productStock: { findMany: async () => [{ product_id: 'p', branch_id: branchId, stock: '2.5', min_stock: 0, product: { cost: 3 } }] },
+    productStockLocation: { findMany: async () => [] },
+    systemSetting: { findUnique: async () => ({ key: 'inventory_units_enabled', value: String(unitsEnabled) }) },
+    $queryRaw: async () => [],
+  }
+  await withMocks({ [require.resolve('../src/models/prisma')]: { prisma },
+    [require.resolve('../src/utils/pdfBranding')]: { getBrandingForPdf: async () => ({ company_name: 'QA', currency_code: 'GTQ', timezone: 'America/Guatemala' }) },
+  }, require.resolve('../src/modules/reports/controller'), async controller => {
+    const res = jsonResponse()
+    await controller.inventoryReport({ companyId, branchId, query: { format: 'json' } }, res, e => { throw e })
+    const report = JSON.stringify(res.body)
+    if (unitsEnabled) assert.match(report, /"kg"/, 'the product unit label reaches the report')
+    else { assert.match(report, /Arroz/, 'every product is reported'); assert.doesNotMatch(report, /"kg"/, 'disabled units keep the legacy unit') }
+  })
+})

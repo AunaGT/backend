@@ -29,7 +29,8 @@ test('commercial lines keep box and unit prices separate while carrying a single
 test('POS rejects an old cached configured product before stock or history writes', async () => {
   const {tx}=commercialStore()
   Object.assign(tx,{branch:{findUnique:async()=>({id:'B'})},cashRegister:{findFirst:async()=>({id:'C'})},
-    cashRegisterSession:{findFirst:async()=>({id:'CS',opened_by_id:'U'})},$transaction:async run=>run(tx)})
+    cashRegisterSession:{findFirst:async()=>({id:'00000000-0000-4000-8000-000000000001',opened_by_id:'U'})},
+    $queryRaw:async()=>[{id:'00000000-0000-4000-8000-000000000001',status:'OPEN',opened_by_id:'U',register_active:true,register_kind:'PHYSICAL'}],$transaction:async run=>run(tx)})
   const bom=require.resolve('../src/services/bomStock')
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:tx,prismaTransaction:tx},[bom]:{...require(bom),
     getAvailabilityBatchWithKits:async()=>{throw Error('Stock boundary reached before revision validation')}}},require.resolve('../src/modules/sales/controller'),async controller=>{

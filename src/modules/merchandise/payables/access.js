@@ -22,10 +22,10 @@ function entryWhere(scope) {
 async function assertAccess(
   db,
   scope,
-  { write = false, exporting = false } = {},
+  { write = false, exporting = false, permission } = {},
 ) {
   if (
-    !has(scope, write ? "merchandise.mark_paid" : "merchandise.details") ||
+    !has(scope, permission || (write ? "merchandise.mark_paid" : "merchandise.details")) ||
     (exporting && !has(scope, "merchandise.reports"))
   )
     fail("No tienes permiso para esta operación", 403, "FORBIDDEN");

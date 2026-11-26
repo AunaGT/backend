@@ -16,7 +16,6 @@
 
 const { Prisma } = require('@prisma/client')
 const {physicalValue,returnPhysicalValue}=require('../units/frozenCost')
-const { isCashMethod } = require('../paymentMethods/behavior')
 const { splitIva, round2 } = require('./logic')
 const { createEntry, getDefaultAccounts, getTaxConfig, getCashClosureAccounts, getOptionalAccount, AccountingError } = require('./core')
 
@@ -33,7 +32,7 @@ const BATCH = 500
  * la base (NOT EXISTS contra el índice único de idempotencia), no en memoria.
  * `candidatos` debe seleccionar `id text` y `ord` para ordenar.
  */
-async function pendingIds(prisma, sourceType, companyId, candidatos) {
+async function pendingIds(prisma, sourceType, companyId, candidatos, { prioritize = false } = {}) {
   const rows = await prisma.$queryRaw`
     WITH c AS (${candidatos})
     SELECT c.id FROM c
@@ -43,24 +42,13 @@ async function pendingIds(prisma, sourceType, companyId, candidatos) {
         AND je.source_type = ${sourceType}::"JournalSourceType"
         AND je.source_id = c.id
     )
-    ORDER BY c.ord ASC
+    ORDER BY ${prioritize ? Prisma.sql`c.priority,` : Prisma.empty} c.ord ASC
     LIMIT ${BATCH}
   `
   return rows.map((r) => String(r.id))
 }
 
-/**
- * Cuenta de cargo según método de pago: crédito→Clientes, efectivo→Caja, resto→Bancos.
- *
- * El crédito se decide por la bandera `is_credit` y no por el nombre: un método
- * llamado «Crédito 30d» o con un typo caía en Bancos sin que nada lo avisara.
- * Los registros legados conservan su clasificación por nombre.
- */
-function cashOrBank(defaults, paymentMethod) {
-  if (paymentMethod?.is_credit) return defaults.receivables
-  if (isCashMethod(paymentMethod,name=>name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'').includes('efectivo'))) return defaults.cash
-  return defaults.bank
-}
+const { cashOrBank, bankAccountFor, frozenBankAccounts } = require('./bankTarget')
 
 function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequenoTaxOf }) {
   const refund = round2(ret.total_refund)
@@ -84,7 +72,7 @@ function buildReturnPosting(ret, { defaults, splitVat, ivaRate, costBase, pequen
       if (settlement.kind === 'CREDIT_OFFSET' || settlement.kind === 'CUSTOMER_CREDIT') {
         addCredit(defaults.receivables, settlement.amount)
       } else if (settlement.kind === 'REFUND') {
-        addCredit(cashOrBank(defaults, settlement.payment_method), settlement.amount)
+        addCredit(bankAccountFor(defaults, settlement.payment_method, settlement.frozenBankAccountId), settlement.amount)
       }
     }
   }
@@ -109,7 +97,7 @@ function buildSalePosting(sale,{defaults,splitVat,ivaRate,costBase,pequenoTaxOf}
   // El costo congelado en la venta; las ventas viejas (sin él) caen al costo
   // del producto, que es lo que se usaba antes de guardarlo por línea.
   const cost = costBase(sale.sale_items.filter(item=>(item.item_kind ?? item.product?.kind)!=='SERVICE').reduce((sum,item)=>sum.add(physicalValue(item.physical_snapshot)??(item.unit_metadata_version===2&&item.base_unit_cost!=null?new Prisma.Decimal(String(item.base_qty)).mul(String(item.base_unit_cost)):new Prisma.Decimal(String(item.qty)).mul(String(item.unit_cost ?? item.product?.cost ?? 0)))),new Prisma.Decimal(0)).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber())
-  const chargeAccount = sale.settlement_source==='ENGAGEMENT_RECEIPTS'?defaults.receivables:cashOrBank(defaults, sale.payment_method)
+  const chargeAccount = sale.settlement_source==='ENGAGEMENT_RECEIPTS'?defaults.receivables:bankAccountFor(defaults, sale.payment_method, sale.frozenBankAccountId)
   const lines = splitVat
     ? [
         { account_id: chargeAccount.id, debit: total, credit: 0 },
@@ -189,7 +177,9 @@ async function postPendingOperations(prisma, userId, companyId) {
     },
     orderBy: { date: 'asc' },
   })
+  const frozenSales = await frozenBankAccounts(prisma, 'SALE', sales.map(sale => sale.id))
   for (const sale of sales) {
+    sale.frozenBankAccountId = frozenSales.get(sale.id)
     const label = `Venta ${sale.reference || sale.id.slice(0, 8)}`
     const total = round2(sale.total)
     if (total <= 0) { track(label, 'total 0'); continue }
@@ -236,14 +226,16 @@ async function postPendingOperations(prisma, userId, companyId) {
       },
       settlements: {
         select: {
-          kind: true, amount: true,
+          id: true, kind: true, amount: true,
           payment_method: { select: { name: true, is_credit: true, settlement_kind:true } },
         },
       },
     },
     orderBy: { return_date: 'asc' },
   })
+  const frozenRefunds = await frozenBankAccounts(prisma, 'RETURN_SETTLEMENT', returns.flatMap(ret => (ret.settlements || []).map(item => item.id)))
   for (const ret of returns) {
+    for (const item of ret.settlements || []) item.frozenBankAccountId = frozenRefunds.get(item.id)
     const label = `Devolución venta ${ret.sale?.reference || ret.id.slice(0, 8)}`
     const refund = round2(ret.total_refund)
     if (refund <= 0) { track(label, 'monto 0'); continue }
@@ -365,6 +357,8 @@ async function postPendingOperations(prisma, userId, companyId) {
   // ---- Cobros de clientes ----
   // Cierra el circuito de la venta al crédito: esa ya debitaba Clientes, pero
   // nada lo acreditaba nunca, así que la cuenta solo crecía.
+  const returnedAliasFilter=await require('../../modules/cash-closure/disputes.queries').disputesAvailable(prisma)
+    ?Prisma.sql`AND NOT EXISTS(SELECT 1 FROM cash_refund_allocations a WHERE a.payment_id=cp.id AND a.action='TRANSFER')`:Prisma.empty
   const pendingCollections = await pendingIds(prisma, 'SALE_PAYMENT', companyId, Prisma.sql`
     SELECT cp.id::text AS id, cp.paid_at AS ord
     FROM customer_payments cp
@@ -372,6 +366,7 @@ async function postPendingOperations(prisma, userId, companyId) {
     LEFT JOIN returns r ON r.reference = cp.reference
     WHERE b.company_id = ${companyId}::uuid
       AND NOT (cp.kind = 'CREDIT_NOTE' AND r.id IS NOT NULL)
+      ${returnedAliasFilter}
       AND NOT EXISTS (SELECT 1 FROM payment_commitments pc WHERE pc.payment_id=cp.id)
   `)
   const collections = await prisma.customerPayment.findMany({
@@ -386,6 +381,7 @@ async function postPendingOperations(prisma, userId, companyId) {
   // Solo se resuelve si aparece un incobrable: es opcional, y exigirla dejaría
   // sin postear a toda empresa que nunca haya castigado una cuenta.
   let badDebtAccount
+  const frozenCollections = await frozenBankAccounts(prisma, 'CUSTOMER_PAYMENT', collections.map(col => col.id))
   for (const col of collections) {
     const customerName = col.customer?.name || 'cliente'
     const kind = col.kind || 'PAYMENT'
@@ -427,7 +423,7 @@ async function postPendingOperations(prisma, userId, companyId) {
       // caería en Clientes y el asiento sería Clientes contra Clientes.
       const chargeAccount = col.payment_method?.is_credit
         ? defaults.cash
-        : cashOrBank(defaults, col.payment_method)
+        : bankAccountFor(defaults, col.payment_method, frozenCollections.get(col.id))
       lines = [{ account_id: chargeAccount.id, debit: amount, credit: 0 }]
     }
     lines.push({
@@ -545,49 +541,41 @@ async function postPendingOperations(prisma, userId, companyId) {
   // cada tryPost, no una vez arriba como `defaults`: si una empresa no las
   // configuró, que se omitan solo estas líneas — no el resto de la corrida,
   // que ya pudo haber contabilizado ventas y compras antes de llegar aquí.
+  const eventSnapshotAvailable = await require('../../modules/cash-closure/eventStorage').ledgerAvailable(prisma)
+  const closureKind = eventSnapshotAvailable ? Prisma.sql`COALESCE((SELECT item->>'settlement_kind' FROM jsonb_array_elements(cc.calculation_snapshot->'payment_breakdowns') item WHERE (item->>'id')::integer=p.id),pm.settlement_kind::text)` : Prisma.sql`pm.settlement_kind::text`
   const pendingClosures = await pendingIds(prisma, 'CASH_CLOSURE', companyId, Prisma.sql`
-    SELECT cc.id::text AS id, cc.date AS ord
+    SELECT cc.id::text AS id, cc.date AS ord,
+      CASE WHEN COALESCE((
+        SELECT SUM(p.actual_amount-p.theoretical_amount)
+        FROM cash_closure_payments p JOIN payment_methods pm ON pm.id=p.payment_method_id
+        WHERE p.cash_closure_id=cc.id AND ${closureKind}='CASH'
+      ),0)<>0 AND NOT EXISTS (
+        SELECT 1 FROM cash_closure_payments p LEFT JOIN payment_methods pm ON pm.id=p.payment_method_id
+        WHERE p.cash_closure_id=cc.id AND (${closureKind} IS NULL OR ${closureKind} NOT IN ('CASH','BANK'))
+      ) THEN 0 ELSE 1 END AS priority
     FROM cash_closures cc
     JOIN branches b ON b.id = cc.branch_id
     WHERE b.company_id = ${companyId}::uuid AND cc.status = 'Aprobado'
-  `)
-  const closures = await prisma.cashClosure.findMany({
+  `, { prioritize: true })
+  if (await require('../../modules/cash-closure/corrections').available(prisma)) {
+    const deferred = await prisma.$queryRaw`SELECT DISTINCT closure_id FROM cash_closure_corrections WHERE company_id=${companyId}::uuid AND status='APPROVED' AND accounting_status='DEFERRED' LIMIT 500`
+    for (const row of deferred) if (!pendingClosures.includes(row.closure_id)) pendingClosures.push(row.closure_id)
+  }
+  const closureRows = await prisma.cashClosure.findMany({
     where: { id: { in: pendingClosures } },
-    select: { id: true, closure_number: true, branch_id: true, date: true, difference: true },
+    select: { id: true, closure_number: true, branch_id: true, date: true, payment_breakdowns: { select: { id: true, actual_amount: true, theoretical_amount: true, payment_method: { select: { settlement_kind: true } } } } },
     orderBy: { date: 'asc' },
   })
+  const closures = eventSnapshotAvailable ? await require('../../modules/cash-closure/snapshots').hydrateClosureSnapshots(prisma, closureRows) : closureRows
   for (const closure of closures) {
     const label = `Arqueo #${closure.closure_number}`
-    const diff = round2(Number(closure.difference))
-    if (diff === 0) { track(label, 'diferencia 0'); continue }
-    const monto = Math.abs(diff)
-    const reason = await tryPost(prisma, async (tx) => {
-      const acc = await getCashClosureAccounts(tx, companyId)
-      // Sobrante (actual > teórico): entra más efectivo del que dice el libro.
-      // Faltante: al revés. En ambos casos la contrapartida es la cuenta de
-      // diferencia de caja (ingreso si sobra, gasto si falta — el signo del
-      // monto en la cuenta lo distingue en el estado de resultados).
-      const lines = diff > 0
-        ? [
-            { account_id: acc.cash.id, debit: monto, credit: 0 },
-            { account_id: acc.cashOverShort.id, debit: 0, credit: monto },
-          ]
-        : [
-            { account_id: acc.cashOverShort.id, debit: monto, credit: 0 },
-            { account_id: acc.cash.id, debit: 0, credit: monto },
-          ]
-      return {
-        company_id: companyId,
-        branch_id: closure.branch_id,
-        date: closure.date,
-        description: `Diferencia de arqueo — ${label}`,
-        source_type: 'CASH_CLOSURE',
-        source_id: closure.id,
-        created_by: userId,
-        lines,
-      }
-    })
-    track(label, reason)
+    try {
+      const result = await prisma.$transaction(tx => require('./cashClosurePosting').postClosureChain(tx,{companyId,branchId:closure.branch_id,userId},closure.id,{legacyClosure:closure}),{timeout:30000,maxWait:10000})
+      track(label,result.postedCount ? null : 'diferencia 0')
+    } catch (error) {
+      if (error instanceof AccountingError || error.status === 409) track(label,error.message)
+      else throw error
+    }
   }
 
   // Una tanda llena significa que quedaron operaciones sin contabilizar: la
@@ -607,6 +595,7 @@ async function postSaleInTransaction(tx,scope,saleId){
   const sale=await tx.sale.findFirst({where:{id:saleId,branch_id:scope.branchId,branch:{company_id:scope.companyId},status:{name:'Completada'}},include:{sale_items:{include:{product:{select:{kind:true,cost:true}}}},payment_method:true,customerContact:{select:{name:true}}}})
   if(!sale)throw new AccountingError('Venta no encontrada en la sucursal activa')
   if(sale.total.eq(0))return null
+  sale.frozenBankAccountId=(await frozenBankAccounts(tx,'SALE',[sale.id])).get(sale.id)
   await require('./core').lockAccountingCompany(tx,scope.companyId)
   const previous=await tx.journalEntry.findFirst({where:{company_id:scope.companyId,source_type:'SALE',source_id:sale.id}})
   if(previous)return previous
@@ -620,6 +609,8 @@ async function postReturnInTransaction(tx,scope,returnId){
   const ret=await tx.return.findFirst({where:{id:returnId,sale:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},status:{name:'Completada'}},include:{sale:{include:{payment_method:true}},return_items:{include:{sale_item:true,product:{select:{cost:true,kind:true}}}},settlements:{include:{payment_method:true}}}})
   if(!ret)throw new AccountingError('Devolución no encontrada en la sucursal activa')
   if(ret.total_refund.eq(0))return null
+  const frozen=await frozenBankAccounts(tx,'RETURN_SETTLEMENT',(ret.settlements||[]).map(item=>item.id))
+  for(const item of ret.settlements||[])item.frozenBankAccountId=frozen.get(item.id)
   await require('./core').lockAccountingCompany(tx,scope.companyId)
   const previous=await tx.journalEntry.findFirst({where:{company_id:scope.companyId,source_type:'RETURN',source_id:returnId}})
   if(previous)return previous

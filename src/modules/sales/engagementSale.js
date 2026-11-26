@@ -12,6 +12,7 @@ const sourceItem=line=>({product_id:line.product_id,qty:line.qty,unit_price:line
   ...(isV2(line)?{unit_label:line.unit_label,quantity_decimals:line.quantity_decimals}:{})})
 function fail(code,message,status=409){throw Object.assign(new Error(message),{code,status})}
 function validateSnapshot(source){
+  require('../../services/eventPaymentTermsStorage').assertEventPaymentAgreement(source)
   const total=money(source.agreed_total)
   const sum=source.lines.reduce((sum,l)=>sum.add(money(l.line_total)),new Prisma.Decimal(0))
   if(!sum.eq(total))fail('SOURCE_REVIEW_REQUIRED','Las partidas no concilian con el total acordado; revisa la fuente comercial')
@@ -21,6 +22,7 @@ function validateSnapshot(source){
 async function ensureEngagementDraft(tx,scope,{source}){
   const total=validateSnapshot(source)
   if(source.company_id!==scope.companyId||source.branch_id!==scope.branchId)fail('NOT_FOUND','Contratación no encontrada',404)
+  await Packages.assertPackageCurrency(tx,scope.companyId,source.package_groups)
   const existing=await tx.sale.findFirst({where:{branch_id:scope.branchId,origin_engagement_id:source.id},include:{status:true}})
   if(existing){
     const state=commercialState(existing.status.name)
@@ -43,6 +45,7 @@ async function ensureEngagementDraft(tx,scope,{source}){
   const sale=await insertSaleRecord(tx,{items,userId:scope.userId,saleData:{
     branch_id:scope.branchId,origin_engagement_id:source.id,status_id:status.id,reference:await nextDocumentReference(tx,'V',branch),
     ...(source.package_groups?.length?{package_groups:Packages.copyPackageGroups(source.package_groups)}:{}),
+    ...require('../../services/eventPaymentTermsStorage').copyEventPaymentTerms(source),
     customer_contact_id:source.customer_id,customer:source.customer.name,customer_nit:snapshot.customerNit||null,
     is_final_consumer:snapshot.isFinalConsumer??true,sales_channel:snapshot.salesChannel||'POS',
     payment_method_id:null,payment_status:'PENDING',settlement_source:'ENGAGEMENT_RECEIPTS',
@@ -63,11 +66,13 @@ async function createSaleFromEngagement(tx,scope,{source,idempotencyKey,settleme
 async function confirmEngagementDraft(tx,scope,{source,draftSaleId,idempotencyKey,settlement}){
   if(settlement?.kind!=='EXISTING_RECEIPTS')fail('INVALID_SETTLEMENT','La venta necesita su liquidación autorizada')
   const total=validateSnapshot(source)
+  await Packages.assertPackageCurrency(tx,scope.companyId,source.package_groups)
   await tx.$queryRaw`SELECT id FROM sales WHERE id=${draftSaleId}::uuid AND branch_id=${scope.branchId}::uuid FOR UPDATE`
   const draft=await tx.sale.findFirst({where:{id:draftSaleId,branch_id:scope.branchId,origin_engagement_id:source.id,branch:{company_id:scope.companyId}},include:{status:true,sale_items:{orderBy:{id:'asc'}}}})
   if(!draft)fail('NOT_FOUND','Borrador no encontrado',404)
   if(draft.status.name!=='Borrador')fail('SOURCE_REVIEW_REQUIRED','Esta venta no admite confirmación desde este estado')
   if(!draft.total.eq(total)||draft.sale_items.length!==source.lines.length)fail('SOURCE_REVIEW_REQUIRED','El borrador no coincide con el alcance acordado')
+  if(JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(source.event_payment_terms))!==JSON.stringify(require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(draft.event_payment_terms)))fail('SOURCE_REVIEW_REQUIRED','Las condiciones del borrador no coinciden con la contratación')
   if((source.package_groups?.length||draft.package_groups?.length)&&Packages.packageSourceFingerprint(source.package_groups,source.lines)!==Packages.packageSourceFingerprint(draft.package_groups,draft.sale_items))fail('SOURCE_REVIEW_REQUIRED','El paquete del borrador no corresponde al alcance contratado')
   const original=[...source.lines].sort((a,b)=>a.sort_order-b.sort_order)
   for(const [i,l]of original.entries()){

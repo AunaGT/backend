@@ -1,0 +1,220 @@
+TAP version 13
+# Subtest: an overdue action needs an explicitly allowed exception, never a client paid flag
+ok 1 - an overdue action needs an explicitly allowed exception, never a client paid flag
+  ---
+  duration_ms: 49.602427
+  type: 'test'
+  ...
+# Subtest: exceptions cannot bypass missing deposits, incomplete scheduling or revoked permissions
+ok 2 - exceptions cannot bypass missing deposits, incomplete scheduling or revoked permissions
+  ---
+  duration_ms: 11.525785
+  type: 'test'
+  ...
+# Subtest: cancelling never returns funds and a different shared-class booking inherits no private debt
+ok 3 - cancelling never returns funds and a different shared-class booking inherits no private debt
+  ---
+  duration_ms: 2.52177
+  type: 'test'
+  ...
+# Subtest: exception payload is closed, bounded and supported only for service execution actions
+ok 4 - exception payload is closed, bounded and supported only for service execution actions
+  ---
+  duration_ms: 2.006758
+  type: 'test'
+  ...
+# Subtest: pending claims and unrecovered withdrawals share the refunded original coverage
+ok 5 - pending claims and unrecovered withdrawals share the refunded original coverage
+  ---
+  duration_ms: 3.818918
+  type: 'test'
+  ...
+# Subtest: a recovered closed case releases coverage; invalid and excessive money is rejected
+ok 6 - a recovered closed case releases coverage; invalid and excessive money is rejected
+  ---
+  duration_ms: 0.759043
+  type: 'test'
+  ...
+# Subtest: recovering a lost receipt retires only its free portion and never charges it twice
+ok 7 - recovering a lost receipt retires only its free portion and never charges it twice
+  ---
+  duration_ms: 0.774311
+  type: 'test'
+  ...
+# Subtest: provider recoveries prioritize customer lots proportionally with stable cent remainder
+ok 8 - provider recoveries prioritize customer lots proportionally with stable cent remainder
+  ---
+  duration_ms: 4.560197
+  type: 'test'
+  ...
+# Subtest: forgiven principal is a business loss and is not allocated another customer credit
+ok 9 - forgiven principal is a business loss and is not allocated another customer credit
+  ---
+  duration_ms: 0.488992
+  type: 'test'
+  ...
+# Subtest: a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+ok 10 - a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+  ---
+  duration_ms: 1.03826
+  type: 'test'
+  ...
+# Subtest: an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+ok 11 - an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+  ---
+  duration_ms: 0.410204
+  type: 'test'
+  ...
+# Subtest: attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+ok 12 - attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+  ---
+  duration_ms: 0.902223
+  type: 'test'
+  ...
+# Subtest: all credit consumers count applied, committed and refunded money only once
+ok 13 - all credit consumers count applied, committed and refunded money only once
+  ---
+  duration_ms: 12.196601
+  type: 'test'
+  ...
+# Subtest: new financial allocation rejects a receipt whose existing destinations exceed its amount
+ok 14 - new financial allocation rejects a receipt whose existing destinations exceed its amount
+  ---
+  duration_ms: 3.981245
+  type: 'test'
+  ...
+# Subtest: a sale refund cannot become free credit again after reducing its original receipt application
+ok 15 - a sale refund cannot become free credit again after reducing its original receipt application
+  ---
+  duration_ms: 0.5138
+  type: 'test'
+  ...
+# Subtest: solo una devolución aprobada puede construir su liquidación
+ok 16 - solo una devolución aprobada puede construir su liquidación
+  ---
+  duration_ms: 2.004674
+  type: 'test'
+  ...
+# Subtest: restaura únicamente lo recibido y exige ubicación para stock físico
+ok 17 - restaura únicamente lo recibido y exige ubicación para stock físico
+  ---
+  duration_ms: 1.394552
+  type: 'test'
+  ...
+# Subtest: desecho registra recepción sin inflar inventario
+ok 18 - desecho registra recepción sin inflar inventario
+  ---
+  duration_ms: 0.264499
+  type: 'test'
+  ...
+# Subtest: el neto guardado conserva el descuento y nunca reduce SaleItem.qty
+ok 19 - el neto guardado conserva el descuento y nunca reduce SaleItem.qty
+  ---
+  duration_ms: 0.219584
+  type: 'test'
+  ...
+# Subtest: en crédito primero baja la deuda y solo libera abonos que exceden el nuevo total
+ok 20 - en crédito primero baja la deuda y solo libera abonos que exceden el nuevo total
+  ---
+  duration_ms: 0.415254
+  type: 'test'
+  ...
+# Subtest: libera primero la aplicación más reciente sin crear pagos positivos
+ok 21 - libera primero la aplicación más reciente sin crear pagos positivos
+  ---
+  duration_ms: 0.479295
+  type: 'test'
+  ...
+# Subtest: aprobar conserva la solicitud original y no produce efectos físicos o financieros
+ok 22 - aprobar conserva la solicitud original y no produce efectos físicos o financieros
+  ---
+  duration_ms: 24.060645
+  type: 'test'
+  ...
+# Subtest: desasigna el excedente y deja la venta con estado coherente
+ok 23 - desasigna el excedente y deja la venta con estado coherente
+  ---
+  duration_ms: 0.963769
+  type: 'test'
+  ...
+# Subtest: new refund requires current availability and rolls back stock
+ok 24 - new refund requires current availability and rolls back stock
+  ---
+  duration_ms: 8.33847
+  type: 'test'
+  ...
+# Subtest: CREDIT_OFFSET ignores a cached unusable turn and never assigns it to non-money effects
+ok 25 - CREDIT_OFFSET ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 7.420637
+  type: 'test'
+  ...
+# Subtest: EXCHANGE_NONE ignores a cached unusable turn and never assigns it to non-money effects
+ok 26 - EXCHANGE_NONE ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 3.63439
+  type: 'test'
+  ...
+# Subtest: EXCHANGE_CREDIT ignores a cached unusable turn and never assigns it to non-money effects
+ok 27 - EXCHANGE_CREDIT ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 2.76556
+  type: 'test'
+  ...
+# Subtest: Aprobada se completa una sola vez con la misma clave
+ok 28 - Aprobada se completa una sola vez con la misma clave
+  ---
+  duration_ms: 2.855099
+  type: 'test'
+  ...
+# Subtest: un fallo al registrar la salida de caja revierte inventario y venta
+ok 29 - un fallo al registrar la salida de caja revierte inventario y venta
+  ---
+  duration_ms: 1.438365
+  type: 'test'
+  ...
+# Subtest: current return policy blocks completion before physical or financial effects
+ok 30 - current return policy blocks completion before physical or financial effects
+  ---
+  duration_ms: 5.856484
+  type: 'test'
+  ...
+# Subtest: approval rechecks the latest company policy after locking and before changing the request
+ok 31 - approval rechecks the latest company policy after locking and before changing the request
+  ---
+  duration_ms: 1.32449
+  type: 'test'
+  ...
+# Subtest: processing delay does not expire a timely request and completed retries ignore later policy changes
+ok 32 - processing delay does not expire a timely request and completed retries ignore later policy changes
+  ---
+  duration_ms: 1.415632
+  type: 'test'
+  ...
+# Subtest: completion never invents an exception authorization or missing request date
+ok 33 - completion never invents an exception authorization or missing request date
+  ---
+  duration_ms: 1.698025
+  type: 'test'
+  ...
+# Subtest: completion honors audited exceptions only while the current policy permits them
+ok 34 - completion honors audited exceptions only while the current policy permits them
+  ---
+  duration_ms: 1.422495
+  type: 'test'
+  ...
+# Subtest: approval and completion decode the stored Guatemala request clock before enforcing the window
+ok 35 - approval and completion decode the stored Guatemala request clock before enforcing the window
+  ---
+  duration_ms: 1.081471
+  type: 'test'
+  ...
+1..35
+# tests 35
+# suites 0
+# pass 35
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 269.701083

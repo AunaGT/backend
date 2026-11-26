@@ -10,7 +10,7 @@ test('direct product stock SET rejects company overflow under the lock and rolls
  const db={systemSetting:{findUnique:async()=>({key:'inventory_units_enabled',value:'false'})},product:{findFirst:async()=>({...product}),findUnique:async()=>({...product}),findMany:async()=>[{...product}],update:async({data})=>(product={...product,...data})},productStock:{findMany:async()=>{assert(locked);return[{product_id:'p',...branch}]},findUnique:async()=>({...branch}),update:async({data})=>(branch={...branch,...data})},$executeRaw:async sql=>{if(String(sql).includes('FOR UPDATE'))locked=true;return 1}}
  db.$transaction=async fn=>{const before={product:{...product},branch:{...branch}};try{return await fn(db)}catch(e){product=before.product;branch=before.branch;throw e}}
  await withMocks({[model]:{prisma:db,prismaTransaction:db}},require.resolve('../src/modules/inventory/products.controller'),async c=>{
-  await assert.rejects(c.update({companyId:'A',branchId:'B',params:{id:'p'},user:{sub:'U',permissions:['products.edit']},body:{name:'Changed',stock:2}},jsonResponse(),e=>{throw e}),e=>e.status===400)
+  await assert.rejects(c.update({companyId:'A',branchId:'B',params:{id:'p'},user:{sub:'U',permissions:['products.edit','stock_moves.adjust']},body:{name:'Changed',stock:2}},jsonResponse(),e=>{throw e}),e=>e.status===400)
   assert.equal(product.name,'Original');assert.equal(product.stock,'99999999');assert.equal(branch.stock,0)
  })
 })
@@ -73,7 +73,7 @@ test('ordinary product edit keeps measured stock and branch minimum exact',async
   const db={systemSetting:{findUnique:async()=>({key:'inventory_units_enabled',value:'true'})},product:{findFirst:async()=>({...product}),findUnique:async()=>({...product}),findMany:async()=>[{...product}],update:async({data})=>{const stock=data.stock?.increment;product={...product,...data,...(stock!==undefined?{stock:new Prisma.Decimal(product.stock).add(stock).toFixed()}:{})};return {...product}}},productStock:{findMany:async()=>[{product_id:"p",...branch}],findUnique:async()=>({...branch}),update:async({data})=>(branch={...branch,...data})},measureUnit:{findFirst:async()=>unit,findMany:async()=>[unit]},productPresentation:{findMany:async()=>[]},productBarcode:{findMany:async()=>[]},stockMovement:{createMany:async({data})=>{movement=data[0]}},$executeRaw:async()=>1,$queryRaw:async(sql,...args)=>{if(String(sql).includes('SELECT l.id'))return[{id:'LOC'}];const v=args.flatMap(x=>x?.values||[]);return[{product_id:'p',location_id:'LOC',qty:v[2],balance:'0.5'}]},status:{findFirst:async()=>null},alertType:{findMany:async()=>[]},alertPriority:{findMany:async()=>[]}}
   db.$transaction=async fn=>fn(branchRows(db))
   await withMocks({[model]:{prisma:db,prismaTransaction:db}},require.resolve('../src/modules/inventory/products.controller'),async c=>{
-    await c.update({companyId:'A',branchId:'B',params:{id:'p'},user:{sub:'U',permissions:['products.edit']},body:{stock:'0.5',min_stock:'0.25'}},jsonResponse(),e=>{throw e})
+    await c.update({companyId:'A',branchId:'B',params:{id:'p'},user:{sub:'U',permissions:['products.edit','stock_moves.adjust']},body:{stock:'0.5',min_stock:'0.25'}},jsonResponse(),e=>{throw e})
     assert.equal(String(branch.stock),'0.5');assert.equal(String(branch.min_stock),'0.25');assert.equal(product.stock,'0.5');assert.equal(String(movement.qty),'0.2')
   })
 })

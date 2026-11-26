@@ -50,6 +50,7 @@ async function lockedOrder(tx, req, {separateOnly=true}={}) {
   const order = await tx.commercialDocument.findUnique({ where: { id: rows[0].id }, include: { lines: {orderBy:{sort_order:'asc'}} } })
   if (separateOnly && order.fulfillment_mode !== 'SEPARATE') fail('Este pedido conserva el flujo anterior', 409)
   Packages.assertPackageAgreement(order,{requireComplete:true})
+  await Packages.assertPackageCurrency(tx,req.companyId,order.package_groups)
   return {...order,lines:netDocumentLines(order)}
 }
 
@@ -100,6 +101,17 @@ async function deliver(tx, req) {
 
 async function invoice(tx, req, requireCashSession, settlement=null) {
   const key = requestKey(req.body?.request_key)
+  await require('../sales/checkoutAttempts').lockCheckoutAttempt(tx, req.branchId, key)
+  const replay = await tx.sale.findFirst({ where: { branch_id: req.branchId, idempotency_key: key }, include: { orderLink: true } })
+  let method, session = null, sessionId = null
+  if (!replay) {
+    method = await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.payment_method_id,purpose:'SALE'})
+    if (!settlement && (!method.is_credit || Number(req.body.initial_payment?.amount) > 0)) {
+      const cash = require('../../services/paymentMethods/behavior').isCashMethod(method, name => /efectivo|cash/i.test(name))
+      session = await requireCashSession(tx, req.user, req.body.cash_register_id, req.branchId, req.companyId, { settlementKind: method.is_credit ? undefined : cash ? 'CASH' : method.settlement_kind ?? null })
+      sessionId = session?.id || null
+    }
+  }
   const order = await lockedOrder(tx, req)
   const engagement=await tx.appointmentEngagement.findFirst({where:{order_id:order.id,company_id:req.companyId},select:{id:true,commercial_snapshot:true}})
   const previouslyInvoiced=engagement?.commercial_snapshot?.orders?.some(source=>source.id===order.id&&source.documentSales?.length)
@@ -109,11 +121,11 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   }, include: { orderLink: true } })
   if (previous) {
     if (previous.orderLink?.document_id !== order.id) fail('Clave de intento utilizada por otra venta', 409)
+    if (previous.idempotency_hash) require('../sales/checkoutAttempts').assertCheckoutReplay(previous, req, require('../sales/checkoutAttempts').checkoutHash('ORDER_INVOICE', req.body, order.id))
     return { orderId: order.id, sale: previous }
   }
   if (!['CONFIRMED', 'PARTIALLY_FULFILLED', 'FULFILLED', 'EXPIRED'].includes(order.status)) fail('El pedido no admite facturación', 409)
   const lines = selectLines(order.lines, req.body.lines, true)
-  const method = await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.payment_method_id,purpose:'SALE'})
   if (!method) fail('Método de pago inválido')
   const round = value => Math.round(value * 100) / 100
   const originalLines = new Map(order.lines.map(line => [line.id, line]))
@@ -126,7 +138,6 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
   const initialAmount = settlement?0:initialPaymentAmount(req.body, total, method.is_credit)
   const now = new Date()
   let dueDate = settlement?.dueDate||null
-  let sessionId = null
   let received = null
   if(settlement){
     if(settlement.kind!=='EXISTING_RECEIPTS')fail('Liquidación interna inválida')
@@ -145,9 +156,7 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     await lockCustomer(tx, customer.id)
     const credit = await checkCredit(tx, customer, round(total - initialAmount), { branch_id: order.branch_id })
     if (!credit.ok) fail(credit.motivo || 'El cliente no dispone de crédito', 409)
-    if (initialAmount) sessionId = await requireCashSession(tx, req.user, req.body.cash_register_id, order.branch_id)
   } else {
-    sessionId = await requireCashSession(tx, req.user, req.body.cash_register_id, order.branch_id)
     received = req.body.amount_received == null ? total : Number(req.body.amount_received)
     if (!Number.isFinite(received) || received < total) fail('El monto recibido debe cubrir la venta; usa crédito para dejar saldo pendiente')
   }
@@ -211,9 +220,11 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     ...(settlement?{settlement_source:'ENGAGEMENT_RECEIPTS',payment_status:total===0?'PAID':'PENDING'}:{}),
     amount_received: received, change: received == null ? null : round(received - total),
     cash_register_session_id: sessionId, idempotency_key: key,
+    ...(session?.money_event_version === 1 ? { idempotency_hash: require('../sales/checkoutAttempts').checkoutHash('ORDER_INVOICE', req.body, order.id) } : {}),
     items: physicalUnits, subtotal: total, discount_total: 0,
     total, adjusted_total: total, total_returned: 0,
     ...(order.package_groups?.length?{package_groups:Packages.copyPackageGroups(order.package_groups)}:{}),
+    ...require('../../services/eventPaymentTermsStorage').copyEventPaymentTerms(order),
     ...(lines.some(({line})=>isV2(line))?{unit_metadata_version:2}:{}),
     sale_items: { create: lines.map((selection, index) => {const {line,line_id,qty}=selection,advanced=isV2(line),cost=costs.get(line_id);return { product_id: line.product_id, qty, price: advanced?selection.unit_price:line.unit_price, unit_cost:line.item_kind==='SERVICE' ? 0 : advanced?cost?.commercial??null:cost??null, net_total: netLineTotals[index],...lineSnapshot(line),
       ...Packages.packageLineFields(line),...(!advanced&&line.package_component_key?unitFields({...line,qty,base_qty:qty}):{}),
@@ -228,6 +239,7 @@ async function invoice(tx, req, requireCashSession, settlement=null) {
     await tx.orderDeliveryLine.update({ where: { id: allocation.id }, data: allocation.advanced?{base_invoiced:{increment:allocation.qty},qty_invoiced:D(allocation.item.base_invoiced||0).add(allocation.qty).mul(allocation.item.qty).div(allocation.item.base_qty).toDecimalPlaces(6).toFixed()}:{ qty_invoiced: { increment: allocation.qty } } })
   }
   await recordInitialPayment(tx, req, sale, initialAmount, sessionId)
+  if (session && !settlement && !method.is_credit) await require('../cash-closure/events').recordMoneyEvent(tx, { companyId: req.companyId, branchId: order.branch_id, userId: req.user.sub, isAdmin: require('../users/roles/policy').isSystemAdmin(req.user.role) }, { session, sourceType: 'SALE', sourceId: sale.id })
   // Inventory was consumed by deliveries; invoicing must never deduct it again.
   return { orderId: order.id, sale }
 }

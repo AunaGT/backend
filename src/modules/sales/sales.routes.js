@@ -14,8 +14,12 @@ const Sales = require('./controller')
 const { requirePromotionsForSale } = require('./middleware')
 
 const router = Router()
+router.use(require('../../middlewares/costVisibility').protectCostResponses)
 router.use('/:id/documents', require('./documents/routes'))
 const Manual=require('./manualSales.controller')
+router.get('/packages',Auth,hasPermission('sales.create'),Manual.packageList)
+router.post('/packages/preview',Auth,hasPermission('sales.create'),Manual.packagePreview)
+router.get('/packages/:packageId',Auth,hasPermission('sales.create'),Manual.packageDetail)
 router.post('/drafts',Auth,hasPermission('sales.create'),Manual.save)
 router.post('/drafts/preview',Auth,hasPermission('sales.create'),Manual.preview)
 router.get('/:id/draft',Auth,hasPermission('sales.create','sales.view_detail'),Manual.read)
@@ -114,7 +118,8 @@ router.get('/checkout-attempts/:key', Auth, hasPermission('sales.create'), Sales
  *       404:
  *         description: Venta no encontrada
  */
-router.get('/:id', Auth, hasPermission('sales.view', 'sales.view_detail', 'sales.view_invoice', 'returns.manage'), Sales.getById)
+// Creators may read their own sale; the controller enforces that ownership.
+router.get('/:id', Auth, hasPermission('sales.create', 'sales.view_detail', 'sales.view_invoice', 'returns.manage'), Sales.getById)
 
 /**
  * @openapi
@@ -176,7 +181,7 @@ router.post('/', Auth, hasPermission('sales.create'), requirePromotionsForSale, 
  *       400: { description: Petición inválida }
  *       404: { description: Venta no encontrada }
  */
-router.patch('/:id/status', Auth, hasPermission('sales.cancel', 'sales.create'), Sales.updateStatus)
+router.patch('/:id/status', Auth, hasPermission('sales.cancel'), Sales.updateStatus)
 
 router.post('/:id/external-invoices',Auth,hasPermission('sales.fiscal.register'),Sales.registerExternalInvoice)
 router.post('/:id/invoice-request',Auth,hasPermission('sales.fiscal.register'),Sales.requestFiscalInvoice)

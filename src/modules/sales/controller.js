@@ -10,6 +10,7 @@
 
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
+const { lockScopedSession, assertSessionOperation } = require('../../services/cashSessionBoundary')
 const { Prisma } = require('@prisma/client')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
@@ -124,6 +125,7 @@ function commercialDto(sale,user,branchId,fiscalEnabled){
   const commercial=saleCommercialView(sale,{fiscalEnabled}),selected=!!branchId&&branchId===sale.branch_id
   const manual=selected&&commercial.state==='DRAFT'&&!commercial.originEngagementId&&sale.settlement_source==='MANUAL_SALE'&&(sale.created_by===user.sub||hasPerm(user,'sales.view_detail'))
   return {commercial,capabilities:{
+    viewDocument:selected&&(hasPerm(user,'sales.view_invoice')||(hasPerm(user,'sales.create')&&sale.created_by===user.sub)),
     confirm:selected&&commercial.state==='DRAFT'&&!!commercial.originEngagementId&&['appointments.view','appointments.issue_sale','sales.create','receivables.view'].every(p=>hasPerm(user,p)),
     requestInvoice:selected&&commercial.state==='CONFIRMED'&&commercial.fiscalState==='UNRECORDED'&&fiscalEnabled===true&&hasPerm(user,'sales.fiscal.register'),
     collect:selected&&commercial.state==='CONFIRMED'&&sale.payment_status!=='PAID'&&hasPerm(user,'receivables.manage'),
@@ -411,7 +413,17 @@ exports.getById = async (req, res, next) => {
       include: SALE_DETAIL_INCLUDE
     })
 
-    if (!sale) {
+    const canReadAny = ['sales.view_detail', 'sales.view_invoice', 'returns.manage'].some(code => hasPerm(req.user, code))
+    const canReadOwn = hasPerm(req.user, 'sales.create') && sale?.created_by === req.user?.sub && sale?.branch_id === req.branchId && !!req.branchId
+    let canConfirmAgenda = false
+    if (!canReadAny && !canReadOwn && sale?.origin_engagement_id && sale.branch_id === req.branchId && req.branchId && ['appointments.view','appointments.issue_sale','sales.create','receivables.view'].every(code=>hasPerm(req.user,code))) {
+      const {requestScope,assertAppointmentsEnabled}=require('../appointments/access')
+      const scope=requestScope(req)
+      await assertAppointmentsEnabled(prisma,scope)
+      // The financial action must not widen the user's own/team Agenda visibility.
+      canConfirmAgenda=!!await prisma.appointmentEngagement.findFirst({where:{id:sale.origin_engagement_id,...require('../appointments/commercialQueries').engagementWhere(scope)},select:{id:true}})
+    }
+    if (!sale || (!canReadAny && !canReadOwn && !canConfirmAgenda)) {
       return res.status(404).json({ message: 'Venta no encontrada' })
     }
 
@@ -441,7 +453,8 @@ exports.create = async (req, res, next) => {
       return res.status(401).json({ message: 'Usuario no autenticado' })
     }
     const {
-      items,
+      items: freeItems,
+      packages: packageSelections = [],
       admin_authorized_products = [],
       promotion_codes = [],
       customer_contact_id: customerContactIdRaw,
@@ -449,7 +462,11 @@ exports.create = async (req, res, next) => {
       idempotency_key: idempotencyKeyRaw,
       ...saleData
     } = req.body
-    if (!Array.isArray(items) || items.length === 0) {
+    const Packages=require('../../services/commercialPackages')
+    const selectedPackages=require('../inventory/packages/selection').parsePackageSelections(packageSelections)
+    if(['package_groups','packageGroups'].some(key=>Object.hasOwn(req.body,key)))throw Object.assign(new Error('Los acuerdos de paquetes se calculan en el servidor'),{status:400})
+    Packages.assertFreePackageItems(freeItems)
+    if (!Array.isArray(freeItems) || (freeItems.length === 0&&!selectedPackages.length)) {
       return res.status(400).json({ message: 'items es requerido' })
     }
 
@@ -490,7 +507,8 @@ exports.create = async (req, res, next) => {
         if(previous)return assertCheckoutReplay(previous,req,attemptHash)
       }
       let cashSessionIdForSale = null
-      const isAdmin = String(user.role?.name || user.role_name || '').toLowerCase() === 'admin'
+      let cashSession = null
+      const isAdmin = require('../users/roles/policy').isSystemAdmin(user.role)
       const branch = await tx.branch.findUnique({
         where: { id: branchId },
         select: { id: true, code: true, seq: true },
@@ -508,16 +526,9 @@ exports.create = async (req, res, next) => {
         select: { id: true, opened_by_id: true, openedBy: { select: { name: true } } },
       })
       if (openSess) {
-        // El turno abierto en la caja resuelta (predeterminada o asignada) no es
-        // automáticamente "mío": si lo abrió otra persona, un no-admin no puede
-        // vender con él encima — antes se colaba porque solo se miraba la caja,
-        // nunca de quién era el turno.
-        if (!isAdmin && String(openSess.opened_by_id) !== String(user.sub)) {
-          const err = new Error('CASH_SESSION_OTHER_USER')
-          err.status = 403
-          err.openedByName = openSess.openedBy?.name || 'otro usuario'
-          throw err
-        }
+        cashSession = await lockScopedSession(tx, { companyId: req.companyId, branchId, userId: user.sub }, openSess.id)
+        if (cashSession.money_event_version === 1 && !idempotencyKey) throw Object.assign(new Error('Actualiza la pantalla para obtener una clave segura antes de cobrar.'), { status: 428, code: 'CHECKOUT_KEY_REQUIRED' })
+        assertSessionOperation(cashSession, { userId: user.sub, isAdmin })
         cashSessionIdForSale = openSess.id
       } else if (!isAdmin) {
         const err = new Error('CASH_SESSION_REQUIRED')
@@ -525,9 +536,13 @@ exports.create = async (req, res, next) => {
         throw err
       }
 
+      const saleScope={companyId:req.companyId,branchId,userId:user.sub,actorId:user.sub,permissions:user.permissions||[],isAdmin}
+      const packaged=selectedPackages.length?await require('./packageSales').resolveSalePackages(tx,saleScope,selectedPackages,{freeProductIds:freeItems.map(l=>l.product_id)}):{groups:[],lines:[]}
+      const items=[...freeItems,...packaged.lines]
+      if(packaged.groups.length&&items.length>100)throw Object.assign(new Error('La venta admite hasta 100 partidas reales entre artículos y paquetes'),{status:400})
       return require('../../services/checkoutContext').withCheckoutContext(tx,{companyId:req.companyId,branchId},items,async()=>{
-      const advanced=await Units.unitsEnabled(tx,req.companyId)
-      const advancedLines=advanced?await resolveCommercialLines(tx,{companyId:req.companyId,branchId,actorId:user.sub,permissions:user.permissions||[],isAdmin},items,
+      const advanced=packaged.groups.length>0||await Units.unitsEnabled(tx,req.companyId)
+      const advancedLines=packaged.groups.length?[...(freeItems.length?await resolveCommercialLines(tx,saleScope,freeItems,{tier:await resolvePriceTierForContext(tx,{companyId:req.companyId,customerContactId,salesChannel})}):[]),...packaged.lines]:advanced?await resolveCommercialLines(tx,saleScope,items,
         {tier:await resolvePriceTierForContext(tx,{companyId:req.companyId,customerContactId,salesChannel})}):null
       // 1) Validación de stock: no permitir solicitar más que el stock disponible por producto
       // EXCEPTO para productos autorizados por administrador
@@ -638,7 +653,7 @@ exports.create = async (req, res, next) => {
         const unit = resolveUnitPriceFromProduct(p, priceTier, priceNow)
         return { ...it, qty:commercialQuantity(it.qty,p).toString(),price: unit,...lineSnapshot(p) }
       })
-      const subtotal = resolvedItems.reduce((acc,it)=>acc.add(new Prisma.Decimal(String(it.price)).mul(it.qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)),new Prisma.Decimal(0)).toNumber()
+      const subtotal = resolvedItems.reduce((acc,it)=>acc.add(packaged.groups.length?it.line_total:new Prisma.Decimal(String(it.price)).mul(it.qty).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP)),new Prisma.Decimal(0)).toNumber()
 
       // 2) Procesar códigos de promoción
       let discountTotal = 0
@@ -673,7 +688,7 @@ exports.create = async (req, res, next) => {
         const { applyMultiplePromotions } = require('../../services/promotionCalculator')
         const now = new Date()
 
-        let itemsWithCategory = resolvedItems.map((it) => ({
+        let itemsWithCategory = resolvedItems.filter(it=>!it.package_component_key).map((it) => ({
           ...it,
           category_id: prodMap.get(String(it.product_id))?.category_id,
         }))
@@ -807,6 +822,7 @@ exports.create = async (req, res, next) => {
 
       // Calcular total final
       const total = Prisma.Decimal.max(0,new Prisma.Decimal(String(subtotal)).sub(String(discountTotal))).toDecimalPlaces(2,Prisma.Decimal.ROUND_HALF_UP).toNumber()
+      const packageNetTotals=packaged.groups.length?require('./packageSales').salePackageNetLines(resolvedItems,total):null
 
       // Nueva venta se registra directamente como Completada (sin estados Pagado/Pendiente)
       const completadaStatus = await tx.saleStatus.findFirst({ where: { name: 'Completada' } })
@@ -827,6 +843,9 @@ exports.create = async (req, res, next) => {
         err.status = 400
         throw err
       }
+      const cash = require('../../services/paymentMethods/behavior').isCashMethod(paymentMethod, name => /efectivo|cash/i.test(name))
+      if (cashSession) assertSessionOperation(cashSession, { userId: user.sub, isAdmin }, { settlementKind: paymentMethod.is_credit ? 'CREDIT' : cash ? 'CASH' : paymentMethod.settlement_kind ?? null })
+      if (cash && !cashSessionIdForSale) throw Object.assign(new Error('Abre tu turno de caja antes de recibir efectivo'), { status: 409, code: 'CASH_SESSION_REQUIRED' })
       if (paymentMethod.is_credit) {
         const creditSetting = await tx.systemSetting.findUnique({
           where: {
@@ -891,15 +910,18 @@ exports.create = async (req, res, next) => {
       const sale = await createSaleRecordAndStock(tx, {
         userId: user.sub,
         companyId:req.companyId,
-        items: resolvedItems.map((item) => ({
+        items: resolvedItems.map((item,index) => ({
           product_id: item.product_id,
           qty: item.qty,
           unit_price: advanced?item.price:Number(item.price),
           unit_cost: advanced?item.unit_cost:item.item_kind==='SERVICE' ? 0 : prodMap.get(String(item.product_id))?.cost ?? null,
           ...unitFields(item),
+          ...Packages.packageLineFields(item),
+          ...(packageNetTotals?{line_total:packageNetTotals[index]}:{}),
           item_name:item.item_name,item_kind:item.item_kind,unit_label:item.unit_label,quantity_decimals:item.quantity_decimals,
         })),
         saleData: {
+          ...(packaged.groups.length?{package_groups:Packages.copyPackageGroups(packaged.groups)}:{}),
           ...(resolvedItems.some(isV2)?{unit_metadata_version:2}:{}),
           branch_id: branchId,
           customer: saleData.customer,
@@ -929,6 +951,7 @@ exports.create = async (req, res, next) => {
       })
 
       await recordInitialPayment(tx, req, sale, initialAmount, cashSessionIdForSale)
+      if (cashSession && !paymentMethod.is_credit) await require('../cash-closure/events').recordMoneyEvent(tx, { companyId: req.companyId, branchId, userId: user.sub, isAdmin }, { session: cashSession, sourceType: 'SALE', sourceId: sale.id })
       if(!paymentMethod.is_credit&&paymentMethod.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,require('../config/hardware/drawer/events').requestHardwareScope(req),{origin:'POS_SALE',sourceId:sale.id})
       // 3) Guardar promociones con descuento efectivo e incrementar solo esos códigos
       if (promotionRowsToRecord.length > 0) {
@@ -1037,6 +1060,8 @@ exports.requestFiscalInvoice=async(req,res,next)=>{
 
 exports.updateStatus = async (req, res, next) => {
   try {
+    if (!hasPerm(req.user, 'sales.cancel')) return res.status(403).json({ message: 'Necesitas permiso para anular o restablecer ventas' })
+    const branchId = requireBranch(req)
     const { id } = req.params
     const { status_name, status_id } = req.body || {}
 
@@ -1059,10 +1084,15 @@ exports.updateStatus = async (req, res, next) => {
     // Usar limitador de concurrencia para evitar sobrecarga
     const result = await salesOperationLimiter.run(async () => {
       return await prismaTransaction.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT s.id FROM sales s JOIN branches b ON b.id=s.branch_id WHERE (s.id::text=${String(id)} OR s.reference=${String(id)}) AND b.company_id=${req.companyId}::uuid FOR UPDATE OF s`
+        const initial = await tx.sale.findFirst({ where: { ...where, branch_id: branchId, branch: { company_id: req.companyId } }, select: { cash_register_session_id: true } })
+        if (initial?.cash_register_session_id) {
+          const session = await lockScopedSession(tx, { companyId: req.companyId, branchId, userId: req.user?.sub }, initial.cash_register_session_id)
+          assertSessionOperation(session, { userId: req.user?.sub, isAdmin: require('../users/roles/policy').isSystemAdmin(req.user?.role) })
+        }
+        await tx.$queryRaw`SELECT s.id FROM sales s JOIN branches b ON b.id=s.branch_id WHERE (s.id::text=${String(id)} OR s.reference=${String(id)}) AND b.company_id=${req.companyId}::uuid AND s.branch_id=${branchId}::uuid FOR UPDATE OF s`
         // Cargar venta actual con su status e items (por id o por reference)
         const current = await tx.sale.findFirst({
-          where: { ...where, branch: { company_id: req.companyId } },
+          where: { ...where, branch_id: branchId, branch: { company_id: req.companyId } },
           // Las devoluciones ya devolvieron su parte del stock: sin ellas a la
           // vista, cancelar devolvía la venta completa y duplicaba lo devuelto.
           include: {
@@ -1073,7 +1103,7 @@ exports.updateStatus = async (req, res, next) => {
             orderLink: { select: { document: { select: { fulfillment_mode: true,doc_type:true } } } },
           },
         })
-        if (!current) throw new Error('Venta no encontrada')
+        if (!current || current.branch_id !== branchId) throw Object.assign(new Error('Venta no encontrada en la sucursal activa'), { status: 404 })
         if (current.orderLink?.document?.doc_type !== 'QUOTE' && current.orderLink?.document?.fulfillment_mode === 'SEPARATE' && current.status_id !== Number(targetStatusId)) {
           throw Object.assign(new Error('Esta venta corresponde a entregas independientes. Registra una devolución para corregir productos entregados.'), { status: 409 })
         }

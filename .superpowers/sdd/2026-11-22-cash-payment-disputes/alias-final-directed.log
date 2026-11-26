@@ -1,0 +1,280 @@
+TAP version 13
+# Subtest: an overdue action needs an explicitly allowed exception, never a client paid flag
+ok 1 - an overdue action needs an explicitly allowed exception, never a client paid flag
+  ---
+  duration_ms: 41.267501
+  type: 'test'
+  ...
+# Subtest: exceptions cannot bypass missing deposits, incomplete scheduling or revoked permissions
+ok 2 - exceptions cannot bypass missing deposits, incomplete scheduling or revoked permissions
+  ---
+  duration_ms: 5.558667
+  type: 'test'
+  ...
+# Subtest: cancelling never returns funds and a different shared-class booking inherits no private debt
+ok 3 - cancelling never returns funds and a different shared-class booking inherits no private debt
+  ---
+  duration_ms: 1.906488
+  type: 'test'
+  ...
+# Subtest: exception payload is closed, bounded and supported only for service execution actions
+ok 4 - exception payload is closed, bounded and supported only for service execution actions
+  ---
+  duration_ms: 1.091816
+  type: 'test'
+  ...
+# Subtest: dispute recording, bank movements and customer debt approval are separate authorities
+ok 5 - dispute recording, bank movements and customer debt approval are separate authorities
+  ---
+  duration_ms: 2.427448
+  type: 'test'
+  ...
+# Subtest: consolidated dispute consultation does not permit commands or fake administrator bypass
+ok 6 - consolidated dispute consultation does not permit commands or fake administrator bypass
+  ---
+  duration_ms: 1.030678
+  type: 'test'
+  ...
+# Subtest: canonical admin still has an explicit policy capability, not an implicit self-review permission
+ok 7 - canonical admin still has an explicit policy capability, not an implicit self-review permission
+  ---
+  duration_ms: 0.253466
+  type: 'test'
+  ...
+# Subtest: scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+ok 8 - scope canonicalizes equivalent UUIDs before query keys and financial lock selection
+  ---
+  duration_ms: 0.221254
+  type: 'test'
+  ...
+# Subtest: targeted dispute registration is idempotent and grants no new permissions to company roles
+ok 9 - targeted dispute registration is idempotent and grants no new permissions to company roles
+  ---
+  duration_ms: 4.164131
+  type: 'test'
+  ...
+# Subtest: same committed attempt returns its exact result but different payload is a conflict
+ok 10 - same committed attempt returns its exact result but different payload is a conflict
+  ---
+  duration_ms: 5.990806
+  type: 'test'
+  ...
+# Subtest: commands require concrete scope and UUID before any transaction query
+ok 11 - commands require concrete scope and UUID before any transaction query
+  ---
+  duration_ms: 0.52134
+  type: 'test'
+  ...
+# Subtest: a finished attempt stores and returns one canonical result without rewriting a previous receipt
+ok 12 - a finished attempt stores and returns one canonical result without rewriting a previous receipt
+  ---
+  duration_ms: 0.64092
+  type: 'test'
+  ...
+# Subtest: shared resource locks sort and deduplicate clients before origins
+ok 13 - shared resource locks sort and deduplicate clients before origins
+  ---
+  duration_ms: 0.668853
+  type: 'test'
+  ...
+# Subtest: UUID case cannot split locks or attempts for the same database identities
+ok 14 - UUID case cannot split locks or attempts for the same database identities
+  ---
+  duration_ms: 0.715113
+  type: 'test'
+  ...
+# Subtest: pending claims and unrecovered withdrawals share the refunded original coverage
+ok 15 - pending claims and unrecovered withdrawals share the refunded original coverage
+  ---
+  duration_ms: 2.925033
+  type: 'test'
+  ...
+# Subtest: a recovered closed case releases coverage; invalid and excessive money is rejected
+ok 16 - a recovered closed case releases coverage; invalid and excessive money is rejected
+  ---
+  duration_ms: 1.166178
+  type: 'test'
+  ...
+# Subtest: recovering a lost receipt retires only its free portion and never charges it twice
+ok 17 - recovering a lost receipt retires only its free portion and never charges it twice
+  ---
+  duration_ms: 0.732426
+  type: 'test'
+  ...
+# Subtest: provider recoveries prioritize customer lots proportionally with stable cent remainder
+ok 18 - provider recoveries prioritize customer lots proportionally with stable cent remainder
+  ---
+  duration_ms: 5.521756
+  type: 'test'
+  ...
+# Subtest: forgiven principal is a business loss and is not allocated another customer credit
+ok 19 - forgiven principal is a business loss and is not allocated another customer credit
+  ---
+  duration_ms: 0.465614
+  type: 'test'
+  ...
+# Subtest: a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+ok 20 - a partial-win recovery clears the undisposed bank balance before reducing a lost customer charge
+  ---
+  duration_ms: 1.184363
+  type: 'test'
+  ...
+# Subtest: an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+ok 21 - an authorized merchant-funded refund preserves coverage without refunding bank principal twice
+  ---
+  duration_ms: 0.511952
+  type: 'test'
+  ...
+# Subtest: attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+ok 22 - attempt hashing canonicalizes object fields but preserves meaningful arrays and money strings
+  ---
+  duration_ms: 1.121612
+  type: 'test'
+  ...
+# Subtest: all credit consumers count applied, committed and refunded money only once
+ok 23 - all credit consumers count applied, committed and refunded money only once
+  ---
+  duration_ms: 5.428166
+  type: 'test'
+  ...
+# Subtest: new financial allocation rejects a receipt whose existing destinations exceed its amount
+ok 24 - new financial allocation rejects a receipt whose existing destinations exceed its amount
+  ---
+  duration_ms: 0.869037
+  type: 'test'
+  ...
+# Subtest: a sale refund cannot become free credit again after reducing its original receipt application
+ok 25 - a sale refund cannot become free credit again after reducing its original receipt application
+  ---
+  duration_ms: 0.307139
+  type: 'test'
+  ...
+# Subtest: solo una devolución aprobada puede construir su liquidación
+ok 26 - solo una devolución aprobada puede construir su liquidación
+  ---
+  duration_ms: 1.533102
+  type: 'test'
+  ...
+# Subtest: restaura únicamente lo recibido y exige ubicación para stock físico
+ok 27 - restaura únicamente lo recibido y exige ubicación para stock físico
+  ---
+  duration_ms: 0.939443
+  type: 'test'
+  ...
+# Subtest: desecho registra recepción sin inflar inventario
+ok 28 - desecho registra recepción sin inflar inventario
+  ---
+  duration_ms: 0.179113
+  type: 'test'
+  ...
+# Subtest: el neto guardado conserva el descuento y nunca reduce SaleItem.qty
+ok 29 - el neto guardado conserva el descuento y nunca reduce SaleItem.qty
+  ---
+  duration_ms: 0.154296
+  type: 'test'
+  ...
+# Subtest: en crédito primero baja la deuda y solo libera abonos que exceden el nuevo total
+ok 30 - en crédito primero baja la deuda y solo libera abonos que exceden el nuevo total
+  ---
+  duration_ms: 0.295307
+  type: 'test'
+  ...
+# Subtest: libera primero la aplicación más reciente sin crear pagos positivos
+ok 31 - libera primero la aplicación más reciente sin crear pagos positivos
+  ---
+  duration_ms: 0.339842
+  type: 'test'
+  ...
+# Subtest: aprobar conserva la solicitud original y no produce efectos físicos o financieros
+ok 32 - aprobar conserva la solicitud original y no produce efectos físicos o financieros
+  ---
+  duration_ms: 14.26826
+  type: 'test'
+  ...
+# Subtest: desasigna el excedente y deja la venta con estado coherente
+ok 33 - desasigna el excedente y deja la venta con estado coherente
+  ---
+  duration_ms: 0.685926
+  type: 'test'
+  ...
+# Subtest: new refund requires current availability and rolls back stock
+ok 34 - new refund requires current availability and rolls back stock
+  ---
+  duration_ms: 5.733953
+  type: 'test'
+  ...
+# Subtest: CREDIT_OFFSET ignores a cached unusable turn and never assigns it to non-money effects
+ok 35 - CREDIT_OFFSET ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 5.52378
+  type: 'test'
+  ...
+# Subtest: EXCHANGE_NONE ignores a cached unusable turn and never assigns it to non-money effects
+ok 36 - EXCHANGE_NONE ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 2.812658
+  type: 'test'
+  ...
+# Subtest: EXCHANGE_CREDIT ignores a cached unusable turn and never assigns it to non-money effects
+ok 37 - EXCHANGE_CREDIT ignores a cached unusable turn and never assigns it to non-money effects
+  ---
+  duration_ms: 1.681997
+  type: 'test'
+  ...
+# Subtest: Aprobada se completa una sola vez con la misma clave
+ok 38 - Aprobada se completa una sola vez con la misma clave
+  ---
+  duration_ms: 1.731984
+  type: 'test'
+  ...
+# Subtest: un fallo al registrar la salida de caja revierte inventario y venta
+ok 39 - un fallo al registrar la salida de caja revierte inventario y venta
+  ---
+  duration_ms: 1.556848
+  type: 'test'
+  ...
+# Subtest: current return policy blocks completion before physical or financial effects
+ok 40 - current return policy blocks completion before physical or financial effects
+  ---
+  duration_ms: 0.689313
+  type: 'test'
+  ...
+# Subtest: approval rechecks the latest company policy after locking and before changing the request
+ok 41 - approval rechecks the latest company policy after locking and before changing the request
+  ---
+  duration_ms: 0.634607
+  type: 'test'
+  ...
+# Subtest: processing delay does not expire a timely request and completed retries ignore later policy changes
+ok 42 - processing delay does not expire a timely request and completed retries ignore later policy changes
+  ---
+  duration_ms: 0.480112
+  type: 'test'
+  ...
+# Subtest: completion never invents an exception authorization or missing request date
+ok 43 - completion never invents an exception authorization or missing request date
+  ---
+  duration_ms: 0.850513
+  type: 'test'
+  ...
+# Subtest: completion honors audited exceptions only while the current policy permits them
+ok 44 - completion honors audited exceptions only while the current policy permits them
+  ---
+  duration_ms: 0.777042
+  type: 'test'
+  ...
+# Subtest: approval and completion decode the stored Guatemala request clock before enforcing the window
+ok 45 - approval and completion decode the stored Guatemala request clock before enforcing the window
+  ---
+  duration_ms: 0.658704
+  type: 'test'
+  ...
+1..45
+# tests 45
+# suites 0
+# pass 45
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 219.500171

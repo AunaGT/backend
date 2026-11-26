@@ -2,7 +2,7 @@ const { round2 } = require('../../services/accounting/logic')
 const { assertReturnTransition, normalizeReturnPolicy, evaluateReturnEligibility, returnRequestInstant, RETURN_RESOLUTIONS } = require('./domain')
 const { ensureStockAlertsBatch } = require('../../services/stockAlerts')
 const { expandLinesToStockMap, restoreStockMap } = require('../../services/bomStock')
-const { paidOf, releaseSaleOverpayment, syncSaleStatus } = require('../receivables/domain/receivables')
+const { paidOf, releaseSaleOverpayment, releaseSaleOverpaymentWithPlan, syncSaleStatus } = require('../receivables/domain/receivables')
 const { createReplacementSale, exchangeSettlement, resolvePricedSaleItems } = require('../sales/application')
 const { getReturnPolicy } = require('../../services/returnPolicy')
 const {lineSnapshot}=require('../../services/catalogItemRules')
@@ -162,6 +162,7 @@ function assertCurrentReturnPolicy(record, policy) {
 }
 
 async function approveReturn(tx, { id, scope, userId, resolution, lines, companyId, replacements,permissions=[],isAdmin=false }) {
+  if (!isAdmin && !permissions.includes('returns.approve')) throw invalid('Necesitas permiso para aprobar devoluciones', 403)
   await tx.$queryRaw`SELECT id FROM returns WHERE id = ${id}::uuid FOR UPDATE`
   const current = await tx.return.findFirst({
     where: { id, sale: { ...scope } },
@@ -289,46 +290,62 @@ async function validateDirectSettlement(tx, current, resolution, settlement, amo
   const cashSessionId = String(settlement.cash_register_session_id || '').trim() || null
   if (isCash && !cashSessionId) throw invalid('El reintegro en efectivo requiere una sesión de caja abierta')
   if (cashSessionId) {
-    if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS')await tx.$queryRaw`SELECT id FROM cash_register_sessions WHERE id=${cashSessionId}::uuid FOR UPDATE`
-    const session = await tx.cashRegisterSession.findFirst({
-      where: { id: cashSessionId, status: 'OPEN', cashRegister: { branch_id: current.sale.branch_id } },
-      select: { id: true,opened_by_id:true },
-    })
-    if (!session) throw invalid('La sesión de caja no está abierta en la sucursal de la venta', 409)
-    if(current.sale.settlement_source==='ENGAGEMENT_RECEIPTS'&&!actor.isAdmin&&session.opened_by_id!==actor.userId)throw invalid('El reintegro en efectivo requiere tu propio turno autorizado',403)
+    const boundary = require('../../services/cashSessionBoundary')
+    const { session, error } = actor.cashSessionBoundary
+    if (error) throw error
+    if (!session || session.id !== cashSessionId) throw invalid('Selecciona un turno válido para registrar el dinero', 409)
+    boundary.assertSessionOperation(session, actor, { settlementKind: method.settlement_kind ?? (isCash ? 'CASH' : null) })
   }
   return { paymentMethodId, cashSessionId, externalReference: externalReference?.slice(0, 255) || null,settlementKind:method.settlement_kind }
 }
 
 async function completeApprovedReturn(tx, { id, scope, userId, companyId, payload,isAdmin=false,permissions=[] }, deps = {}) {
+  if (!isAdmin && !permissions.includes('returns.complete')) throw invalid('Necesitas permiso para liquidar devoluciones', 403)
   const key = String(payload?.idempotency_key || '').trim()
   if (!key || key.length > 64) throw invalid('La clave de idempotencia es requerida y debe tener hasta 64 caracteres')
-  const beforeLock=await tx.return.findFirst({where:{id,sale:{...scope}},select:{sale:{select:{customer_contact_id:true}}}})
-  if(!beforeLock)throw invalid('Devolución no encontrada',404)
-  if(beforeLock.sale.customer_contact_id)await require('../receivables').lockCustomer(tx,beforeLock.sale.customer_contact_id)
-  await tx.$queryRaw`SELECT r.id FROM sales s JOIN returns r ON r.sale_id = s.id WHERE r.id = ${id}::uuid FOR UPDATE OF s, r`
-  const current = await tx.return.findFirst({
+  const readCurrent = () => tx.return.findFirst({
     where: { id, sale: { ...scope } },
-    include: {
-      status: true,
-      return_items: true,
-      replacement_items: true,
-      sale: {
-        include: {
-          status: true,
-          payment_method: true,
-          paymentEntries: { select: { id: true, amount: true, created_at: true } },
-          sale_items: true,
-        },
-      },
-    },
+    include: { status: true, return_items: true, replacement_items: true,
+      sale: { include: { status: true, payment_method: true, paymentEntries: { select: { id: true, amount: true, created_at: true } }, sale_items: true } } },
   })
+  const replay = async () => {
+    const existing = await tx.returnSettlement.findFirst({ where: { return_id: id, idempotency_key: key } })
+    return existing ? { ...await readCurrent(), _idempotent: true, _settlement: existing } : null
+  }
+  const beforeLock=await tx.return.findFirst({where:{id,sale:{...scope}},select:{approved_resolution:true,sale:{select:{id:true,customer_contact_id:true,branch_id:true}}}})
+  if(!beforeLock)throw invalid('Devolución no encontrada',404)
+  const previous = await replay()
+  if (previous) return previous
+  const requestedSession = payload?.settlement?.cash_register_session_id
+  const cashSessionBoundary = { session: null, error: null }
+  if (requestedSession && beforeLock.approved_resolution !== 'CUSTOMER_CREDIT') {
+    const boundary = require('../../services/cashSessionBoundary')
+    try {
+      cashSessionBoundary.session = await boundary.lockScopedSession(tx, { companyId, branchId: beforeLock.sale.branch_id, userId }, requestedSession)
+    } catch (error) {
+      if (!['CASH_ID_INVALID', 'CASH_SESSION_NOT_FOUND'].includes(error.code)) throw error
+      cashSessionBoundary.error = error
+    }
+    const concurrentReplay = await replay()
+    if (concurrentReplay) return concurrentReplay
+  }
+  // A cached turn is irrelevant to credit offsets/equal exchanges; validate only actual money below.
+  const settlementActor = { userId, isAdmin, companyId, cashSessionBoundary }
+  if(beforeLock.sale.customer_contact_id)await require('../receivables').lockCustomer(tx,beforeLock.sale.customer_contact_id)
+  const disputeScope={companyId,branchId:beforeLock.sale.branch_id,userId}
+  await require('../cash-closure/disputes.refunds').prepareSaleRefundMutation(tx,disputeScope,beforeLock.sale.id)
+  await tx.$queryRaw`SELECT r.id FROM sales s JOIN returns r ON r.sale_id = s.id WHERE r.id = ${id}::uuid FOR UPDATE OF s, r`
+  const current = await readCurrent()
   if (!current) throw invalid('Devolución no encontrada', 404)
 
   const existing = await tx.returnSettlement.findFirst({
     where: { return_id: id, idempotency_key: key },
   })
   if (existing) return { ...current, _idempotent: true, _settlement: existing }
+  // Approval can change while we wait. Never switch to a money path after taking document locks.
+  if (current.approved_resolution !== beforeLock.approved_resolution) {
+    throw invalid('La resolución ha cambiado. Revisa la devolución y vuelve a confirmar.', 409)
+  }
   if (current.legacy_stock_moved === true && current.legacy_stock_reconciled !== true) {
     throw invalid('Esta devolución histórica requiere conciliar el movimiento de inventario antes de completarse', 409)
   }
@@ -356,7 +373,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
   let direct = !isExchange && plan.resolution === 'CUSTOMER_CREDIT'
     ? { paymentMethodId: null, cashSessionId: null, externalReference: null }
     : !isExchange
-      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable,{userId,isAdmin,companyId})
+      ? await validateDirectSettlement(tx, current, plan.resolution, plan.settlement, receivable.refundable,settlementActor)
       : { paymentMethodId: null, cashSessionId: null, externalReference: null }
 
   const restoreStock = deps.restoreStock || restoreDispositionStock
@@ -386,8 +403,9 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
     where: { id: current.sale.id },
     data: plan.saleAdjustment,
   })
+  let releasedReceipts=[]
   if (!isExchange && isCreditSale && receivable.releaseApplications > 0 && !linkedReceipts) {
-    await releaseSaleOverpayment(tx, current.sale.id, receivable.releaseApplications)
+    releasedReceipts=(await releaseSaleOverpaymentWithPlan(tx, current.sale.id, receivable.releaseApplications)).allocations
   } else if (!isExchange && isCreditSale) {
     await syncSaleStatus(tx, current.sale.id)
   }
@@ -422,7 +440,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       companyId,
       userId,
       pricing: policy.exchangePricing,
-      cashRegisterSessionId: payload.settlement?.cash_register_session_id || null,
+      cashRegisterSessionId: null,
       permissions,isAdmin,
     }, deps.replacementDeps)
     const difference = replacement.difference
@@ -440,7 +458,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
         : channel === 'TRANSFER'
           ? 'REFUND_TRANSFER'
           : 'REFUND_ORIGINAL'
-      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount,{userId,isAdmin,companyId})
+      direct = await validateDirectSettlement(tx, current, settlementResolution, plan.settlement, difference.amount,settlementActor)
       if (difference.direction === 'COLLECTION') {
         await tx.sale.update({
           where: { id: replacement.sale.id },
@@ -469,7 +487,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       customerCredit = difference.amount
     }
   } else if (plan.resolution === 'CUSTOMER_CREDIT' && receivable.refundable > 0 && !isCreditSale) {
-    await tx.customerPayment.create({
+    const returnedCredit=await tx.customerPayment.create({
       data: {
         branch_id: current.sale.branch_id,
         customer_id: current.sale.customer_contact_id,
@@ -480,6 +498,7 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
         registered_by: userId,
       },
     })
+    direct.returnedCreditId=returnedCredit.id
     settlementKind = 'CUSTOMER_CREDIT'
     settlementAmount = receivable.refundable
     customerCredit = receivable.refundable
@@ -505,6 +524,10 @@ async function completeApprovedReturn(tx, { id, scope, userId, companyId, payloa
       idempotency_key: key,
     },
   })
+  if(direct.returnedCreditId)await require('../cash-closure/disputes.refunds').recordReturnedSaleCredit(tx,disputeScope,settlement.id,direct.returnedCreditId)
+  if(settlementKind==='REFUND')await require('../cash-closure/disputes.refunds').assertSaleRefundCoverage(tx,disputeScope,current.sale.id)
+  if(releasedReceipts.length)await require('../cash-closure/disputes.refunds').recordReturnAllocations(tx,disputeScope,settlement.id,releasedReceipts)
+  if (direct.cashSessionId && ['REFUND', 'COLLECTION'].includes(settlementKind)) await require('../cash-closure/events').recordMoneyEvent(tx, { companyId, branchId: current.sale.branch_id, userId, isAdmin }, { session: cashSessionBoundary.session, sourceType: 'RETURN_SETTLEMENT', sourceId: settlement.id })
   if(settlementKind==='REFUND'&&direct.settlementKind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,{companyId,branchId:current.sale.branch_id,actorId:userId,isAdmin,permissions},{origin:'CASH_RETURN',sourceId:settlement.id})
   if(linkedReceipts&&!isExchange&&receivable.releaseApplications>0)await releaseSaleOverpayment(tx,current.sale.id,receivable.releaseApplications,{returnSettlementId:settlement.id,userId,reason:current.reason||'Corrección de venta'})
   if (!isExchange && receivable.refundable > 0 && receivable.creditOffset > 0) {

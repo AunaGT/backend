@@ -108,9 +108,9 @@ test('real isolated services: tenant guard, historic snapshots and concurrent de
     const secondRefund=await db.return.findUnique({where:{id:remainder.id},include:{return_items:true}})
     const {approveReturn,completeReturn}=require('../src/modules/returns/application')
     const scope={branch_id:branch.id}
-    await db.$transaction(tx=>approveReturn(tx,{id:refund.id,scope,userId:user.id,companyId:company.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:refund.return_items[0].id}],policy:{enabledResolutions:['REFUND_ORIGINAL']}}),{timeout:30000})
-    await db.$transaction(tx=>approveReturn(tx,{id:secondRefund.id,scope,userId:user.id,companyId:company.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:secondRefund.return_items[0].id}],policy:{enabledResolutions:['REFUND_ORIGINAL']}}),{timeout:30000})
-    const settlement={id:refund.id,scope,userId:user.id,companyId:company.id,payload:{idempotency_key:randomUUID(),lines:[{return_item_id:refund.return_items[0].id}],settlement:{payment_method_id:method.id,cash_register_session_id:session.id}}}
+    await db.$transaction(tx=>approveReturn(tx,{permissions:['returns.approve'],id:refund.id,scope,userId:user.id,companyId:company.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:refund.return_items[0].id}],policy:{enabledResolutions:['REFUND_ORIGINAL']}}),{timeout:30000})
+    await db.$transaction(tx=>approveReturn(tx,{permissions:['returns.approve'],id:secondRefund.id,scope,userId:user.id,companyId:company.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:secondRefund.return_items[0].id}],policy:{enabledResolutions:['REFUND_ORIGINAL']}}),{timeout:30000})
+    const settlement={permissions:['returns.complete'],id:refund.id,scope,userId:user.id,companyId:company.id,payload:{idempotency_key:randomUUID(),lines:[{return_item_id:refund.return_items[0].id}],settlement:{payment_method_id:method.id,cash_register_session_id:session.id}}}
     await Promise.all([completeReturn(db,settlement),completeReturn(other,{...settlement,id:secondRefund.id,payload:{...settlement.payload,idempotency_key:randomUUID(),lines:[{return_item_id:secondRefund.return_items[0].id}]}})])
     assert.equal((await completeReturn(db,settlement))._idempotent,true)
     assert.equal((await db.sale.findUnique({where:{id:sale.id}})).adjusted_total.toString(),'0')

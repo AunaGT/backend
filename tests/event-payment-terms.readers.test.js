@@ -12,7 +12,7 @@ for(const kind of ['orders','sales'])test(`${kind} saved detail projects the ser
  }
  await withMocks(mocks,path.resolve(__dirname,`../src/modules/${kind}/controller`),async controller=>{
   const res=jsonResponse();let error
-  await controller.getById({params:{id:row.id},companyId:id(3),branchId:row.branch_id,user:{sub:id(4),permissions:['sales.view']}},res,e=>{error=e})
+  await controller.getById({params:{id:row.id},companyId:id(3),branchId:row.branch_id,user:{sub:id(4),permissions:['sales.view_detail']}},res,e=>{error=e})
   assert.equal(error,undefined);assert.equal(res.body.eventPaymentTerms.dueAt,'2026-03-08T07:30:00.000Z');assert.equal(res.body.eventPaymentTerms.depositRequired,'25.00')
   assert.equal(res.body.eventPaymentTerms.paid,undefined)
  })

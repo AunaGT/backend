@@ -1,10 +1,15 @@
 const {Prisma}=require('@prisma/client')
 const {isCashMethod}=require('../../services/paymentMethods/behavior')
 const {createHash}=require('node:crypto')
-const {money,allocationForReceipt,allocationSelect}=require('./domain/paymentAllocations')
+const {money,allocationForReceipt,allocationSelect,hydrateReceiptAllocations}=require('./domain/paymentAllocations')
 const {lockCustomer,syncSaleStatus,ReceivableError}=require('./domain/receivables')
 const {resolveEffectiveModules}=require('../platform/registry')
 function fail(code,message,status=400){throw Object.assign(new ReceivableError(message,status),{code})}
+async function validateReceiptAllocation(tx,paymentId){
+  const payment=await tx.customerPayment.findUnique({where:{id:paymentId},select:{id:true,amount:true,...allocationSelect}})
+  const [hydrated]=await hydrateReceiptAllocations(tx,[payment])
+  return allocationForReceipt(hydrated)
+}
 async function engagementCurrencyReason(db,scope,engagement){
   const currency=await db.systemSetting.findUnique({where:{company_id_key:{company_id:scope.companyId,key:'currency_code'}}})
   const current=currency?.value||'GTQ'
@@ -39,24 +44,24 @@ async function createScopedReceipt(tx,scope,engagement,input){
   const balance=await engagementMoney(tx,engagement)
   if(amount.gt(balance.remaining))fail('PAYMENT_EXCEEDS_BALANCE','El pago supera el saldo pendiente de esta contratación',409)
   if(await tx.customerPaymentRefund.count({where:{engagement_id:engagement.id,status:'REQUESTED'}}))fail('REFUND_PENDING','Resuelve la devolución pendiente antes de recibir otro pago',409)
-  const method=await validateScopedMethod(tx,scope,input)
+  const {method,session}=await validateScopedMethod(tx,scope,input)
   const receipt=await tx.customerPayment.create({data:{branch_id:engagement.branch_id,customer_id:engagement.customer_id,amount,paid_at:new Date(input.paidAt),payment_method_id:method.id,
     cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||null,notes:input.notes||null,registered_by:scope.userId}})
+  if(session)await require('../cash-closure/events').recordMoneyEvent(tx,scope,{session,sourceType:'CUSTOMER_PAYMENT',sourceId:receipt.id})
   if(method.settlement_kind==='CASH')await require('../config/hardware/drawer/events').enqueueDrawerIntent(tx,{...scope,actorId:scope.userId},{origin:'AGENDA_RECEIPT',sourceId:receipt.id})
   return receipt
 }
 async function validateScopedMethod(tx,scope,input,purpose='RECEIPT'){
   const method=await require('../../services/paymentMethods/access').resolvePaymentMethod(tx,{companyId:scope.companyId,methodId:input.paymentMethodId,purpose})
   const cash=isCashMethod(method,name=>/efectivo|cash/.test(name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'')))
+  let session=null
   if(cash&&!input.cashRegisterSessionId)fail('CASH_SESSION_REQUIRED','Abre un turno de caja antes de recibir efectivo')
   if(input.cashRegisterSessionId){
-    await tx.$queryRaw`SELECT id FROM cash_register_sessions WHERE id=${input.cashRegisterSessionId}::uuid FOR UPDATE`
-    const session=await tx.cashRegisterSession.findFirst({where:{id:input.cashRegisterSessionId,cashRegister:{branch_id:scope.branchId,active:true}},select:{id:true,status:true,opened_by_id:true,opened_at:true}})
-    if(!session||session.status!=='OPEN')fail('CASH_SESSION_CLOSED','El turno no está abierto en esta sucursal',409)
-    if(!scope.isAdmin&&session.opened_by_id!==scope.userId)fail('FORBIDDEN','Solo puedes recibir efectivo en tu propio turno',403)
-    if(new Date(input.paidAt)<session.opened_at)fail('INVALID_PAYMENT_DATE','El pago no puede ser anterior a la apertura del turno')
+    const boundary=require('../../services/cashSessionBoundary')
+    session=await boundary.lockScopedSession(tx,scope,input.cashRegisterSessionId)
+    boundary.assertSessionOperation(session,scope,{settlementKind:method.settlement_kind??(cash?'CASH':null),paidAt:input.paidAt})
   }
-  return method
+  return {method,session}
 }
 async function commitReceiptToEngagement(tx,scope,engagement,receipt,input){
   const commitment=await tx.paymentCommitment.create({data:{company_id:scope.companyId,branch_id:engagement.branch_id,customer_id:engagement.customer_id,engagement_id:engagement.id,payment_id:receipt.id,amount:receipt.amount}})
@@ -78,11 +83,15 @@ async function applyReceiptToEngagementSale(tx,scope,engagement,receipt,commitme
   return entry
 }
 async function receiveEngagementPayment(tx,scope,engagement,input){
+  if(input.cashRegisterSessionId){
+    const boundary=require('../../services/cashSessionBoundary')
+    boundary.assertSessionOperation(await boundary.lockScopedSession(tx,scope,input.cashRegisterSessionId),scope)
+  }
   await lockCustomer(tx,engagement.customer_id)
   const receipt=await createScopedReceipt(tx,scope,engagement,input)
   const {commitment}=await commitReceiptToEngagement(tx,scope,engagement,receipt,input)
   if(engagement.sale_id)await applyReceiptToEngagementSale(tx,scope,engagement,receipt,commitment,input)
-  allocationForReceipt(await tx.customerPayment.findUnique({where:{id:receipt.id},select:{amount:true,...allocationSelect}}))
+  await validateReceiptAllocation(tx,receipt.id)
   return receipt
 }
 async function applyEngagementCommitments(tx,scope,engagement,sale){
@@ -110,21 +119,28 @@ async function confirmScopedRefund(tx,scope,engagement,input){
   const refund=await tx.customerPaymentRefund.findFirst({where:{id:input.refundId,company_id:scope.companyId,branch_id:engagement.branch_id,customer_id:engagement.customer_id,engagement_id:engagement.id,payment_id:input.receiptId}})
   if(!refund||refund.status!=='REQUESTED'||!refund.amount.eq(input.amount))fail('REFUND_NOT_PENDING','Selecciona la solicitud pendiente y su importe original',409)
   const c=await reservedReceipt(tx,scope,engagement,input),now=new Date()
-  const method=await validateScopedMethod(tx,scope,{...input,paidAt:now.toISOString()},'REFUND')
+  const {method,session}=await validateScopedMethod(tx,scope,{...input,paidAt:now.toISOString()},'REFUND')
   if(!isCashMethod(method,name=>/efectivo|cash/i.test(name))&&!input.reference)fail('REFUND_REFERENCE_REQUIRED','Registra la referencia real del reintegro')
   const effective=await tx.customerPaymentRefund.update({where:{id:refund.id},data:{status:'CONFIRMED',confirmed_at:now,confirmed_key:input.idempotencyKey,payment_method_id:method.id,cash_register_session_id:input.cashRegisterSessionId||null,reference:input.reference||'',registered_by:scope.userId}})
+  if(session)await require('../cash-closure/events').recordMoneyEvent(tx,scope,{session,sourceType:'CUSTOMER_PAYMENT_REFUND',sourceId:effective.id})
   await decreaseCommitment(tx,c,refund.amount,'REFUNDED')
   await tx.paymentAllocationEvent.create({data:allocationData(scope,engagement,c.payment,c,input,'REFUNDED',refund.amount)})
+  await require('../cash-closure/disputes.refunds').recordConfirmedReceiptRefund(tx,scope,effective)
   await postMovement(tx,scope,{kind:'REFUND',id:effective.id})
   return effective
 }
 async function resolveReservedFunds(tx,scope,engagement,input){
+  if(input.action==='CONFIRM_REFUND'&&input.cashRegisterSessionId){
+    const boundary=require('../../services/cashSessionBoundary')
+    boundary.assertSessionOperation(await boundary.lockScopedSession(tx,scope,input.cashRegisterSessionId),scope)
+  }
   if(input.action==='RELEASE'){
     const currencyReason=await engagementCurrencyReason(tx,scope,engagement)
     if(currencyReason)fail('CURRENCY_MISMATCH',currencyReason,409)
   }
   await lockCustomer(tx,engagement.customer_id)
   if(engagement.sale_id)fail('USE_SALE_RETURN','Usa Devoluciones para el dinero de una venta emitida',409)
+  const disputeResources=await require('../cash-closure/disputes.receipts').prepareDisputedReceiptMutation(tx,scope,[input.receiptId])
   if(input.action==='CONFIRM_REFUND')await confirmScopedRefund(tx,scope,engagement,input)
   else if(input.action==='CANCEL_REFUND'){
     const refund=await tx.customerPaymentRefund.findFirst({where:{id:input.refundId,company_id:scope.companyId,engagement_id:engagement.id,payment_id:input.receiptId,status:'REQUESTED'}})
@@ -140,7 +156,8 @@ async function resolveReservedFunds(tx,scope,engagement,input){
       await postMovement(tx,scope,{kind:'APPLY',id:event.id})
     }else fail('INVALID_INPUT','Resolución inválida')
   }
-  allocationForReceipt(await tx.customerPayment.findUnique({where:{id:input.receiptId},select:{amount:true,...allocationSelect}}))
+  if(disputeResources)await require('../cash-closure/disputes.receipts').refreshReceiptRestrictions(tx,scope,[input.receiptId])
+  await validateReceiptAllocation(tx,input.receiptId)
 }
 async function releaseEngagementSaleOverpayment(tx,e,saleId,rawAmount,resolution){
   await lockCustomer(tx,e.customer_id)
@@ -158,12 +175,14 @@ async function releaseEngagementSaleOverpayment(tx,e,saleId,rawAmount,resolution
     remaining=remaining.sub(take)
   }
   if(remaining.gt(0))fail('PAYMENT_ALLOCATION_CONFLICT','El reintegro excede las aplicaciones vigentes',409)
+  const refundScope={companyId:e.company_id,branchId:e.branch_id,userId:resolution.userId}
   const key=`sale-return:${settlement.id}`,hash=createHash('sha256').update(JSON.stringify({saleId,amount:String(rawAmount),settlementId:settlement.id})).digest('hex')
   for(const [paymentId,amount] of released){
     const commitment=await tx.paymentCommitment.findFirst({where:{engagement_id:e.id,payment_id:paymentId}})
     await tx.paymentAllocationEvent.create({data:{company_id:e.company_id,branch_id:e.branch_id,customer_id:e.customer_id,engagement_id:e.id,payment_id:paymentId,commitment_id:commitment?.id||null,return_settlement_id:settlement.id,action:settlement.kind==='REFUND'?'SALE_REFUNDED':'SALE_RELEASED',amount,actor_id:resolution.userId,reason:resolution.reason||'Corrección de venta',request_key:key,input_hash:hash}})
-    allocationForReceipt(await tx.customerPayment.findUnique({where:{id:paymentId},select:{amount:true,...allocationSelect}}))
   }
+  await require('../cash-closure/disputes.refunds').recordReturnAllocations(tx,refundScope,settlement.id,[...released].map(([paymentId,amount])=>({paymentId,amount:amount.toFixed(2)})))
+  for(const paymentId of released.keys())await validateReceiptAllocation(tx,paymentId)
   await syncSaleStatus(tx,saleId)
   await tx.appointmentEngagement.update({where:{id:e.id},data:{version:{increment:1}}})
   await tx.appointmentEngagementHistory.create({data:{company_id:e.company_id,branch_id:e.branch_id,customer_id:e.customer_id,engagement_id:e.id,actor_id:resolution.userId,action:'SALE_RETURN',reason:resolution.reason||'Corrección de venta',request_key:key,input_hash:hash,after:{returnSettlementId:settlement.id,amount:String(rawAmount),resolution:settlement.kind}}})

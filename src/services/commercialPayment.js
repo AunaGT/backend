@@ -1,7 +1,6 @@
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../utils/getTimezone')
 const { applyPayment } = require('../modules/receivables')
-const { resolvePaymentMethod } = require('./paymentMethods/access')
 
 function fail(message) { throw Object.assign(new Error(message), { status: 400 }) }
 
@@ -43,13 +42,13 @@ function initialPaymentAmount(body, total, isCredit) {
 async function recordInitialPayment(tx, req, sale, amount, sessionId) {
   if (!amount) return null
   if (!sessionId) fail('Abre un turno de caja antes de recibir el abono inicial')
-  const method = await resolvePaymentMethod(tx,{companyId:req.companyId,methodId:req.body.initial_payment.payment_method_id,purpose:'RECEIPT'})
   const result=await applyPayment(tx, {
+    companyId: req.companyId, isAdmin: require('../modules/users/roles/policy').isSystemAdmin(req.user?.role),
     customerId: sale.customer_contact_id, branchId: sale.branch_id, amount,
-    paidAt: sale.date, paymentMethodId: method.id, cashRegisterSessionId: sessionId,
+    paidAt: sale.date, paymentMethodId: req.body.initial_payment.payment_method_id, cashRegisterSessionId: sessionId,
     reference: sale.reference, notes: 'Abono inicial al registrar la venta', userId: req.user.sub,
     manualApplications: [{ sale_id: sale.id, amount }],
-    hardware:method.settlement_kind==='CASH'?{origin:'INITIAL_CREDIT_RECEIPT',scope:require('../modules/config/hardware/drawer/events').requestHardwareScope({...req,branchId:sale.branch_id})}:undefined,
+    hardware:{origin:'INITIAL_CREDIT_RECEIPT',scope:require('../modules/config/hardware/drawer/events').requestHardwareScope({...req,branchId:sale.branch_id})},
   })
   sale.payment_status = 'PARTIAL'
   return {paymentId:result.paymentId}

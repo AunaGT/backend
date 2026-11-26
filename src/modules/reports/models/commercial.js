@@ -1,9 +1,9 @@
 const { createReport, column: c, section: s, metric: m, chart } = require('../reportModel')
 const salesColumns = label => [c(label[0], label[1]), c('ventas', 'Tickets', 'integer'), c('revenue', 'Ingreso neto', 'money')]
-function buildSalesReport(data, meta) {
+function buildSalesReport(data, meta, includeFinancial = true) {
   return createReport(meta, { id: 'sales', title: 'Reporte de ventas',
     summary: [m('gross', 'Ventas brutas', data.totalRevenueGross, 'money'), m('returns', 'Devoluciones', data.totalReturned, 'money'),
-      m('net', 'Ventas netas', data.totalRevenue, 'money'), m('cost', 'Costo de mercancía vendida', data.totalCost, 'money'), m('profit', 'Margen bruto', data.totalProfit, 'money'),
+      m('net', 'Ventas netas', data.totalRevenue, 'money'), ...(includeFinancial ? [m('cost', 'Costo de mercancía vendida', data.totalCost, 'money'), m('profit', 'Margen bruto', data.totalProfit, 'money')] : []),
       ...(data.unitsComparable!==false?[m('units','Unidades físicas vendidas',data.unidadesTotales)]:[]), m('tickets', 'Tickets', data.tickets), m('average', 'Ticket promedio', data.ticketPromedio, 'money')],
     sections: [s('by-branch', 'Ventas por sucursal', salesColumns(['branch', 'Sucursal']), data.salesByBranch),
       s('top-products', 'Top 10 partidas por ingreso bruto', [c('name', 'Bien o servicio'), c('unit','Unidad'),c('ventas', 'Cantidad', 'decimal',data.quantityDecimals??6), c('revenue', 'Ingreso bruto', 'money')], data.topProducts),

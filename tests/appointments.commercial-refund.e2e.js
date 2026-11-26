@@ -103,7 +103,7 @@ for(const accountingEnabled of [false,true])test(`a real service return corrects
     assert.equal(res.statusCode,201);created=res.body
   })
   const ret=await db.return.findUnique({where:{id:created.id},include:{return_items:true}}),returnLine=ret.return_items[0]
-  const params={id:ret.id,scope:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},companyId:scope.companyId,userId:scope.userId}
+  const params={permissions:['returns.approve','returns.complete'],id:ret.id,scope:{branch_id:scope.branchId,branch:{company_id:scope.companyId}},companyId:scope.companyId,userId:scope.userId}
   const application=require('../src/modules/returns/application')
   const resolution=accountingEnabled?'REFUND_ORIGINAL':'REFUND_TRANSFER'
   await db.$transaction(tx=>application.approveReturn(tx,{...params,resolution,lines:[{return_item_id:returnLine.id}],policy:{enabledResolutions:[resolution]}}))

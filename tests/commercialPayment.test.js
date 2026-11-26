@@ -28,6 +28,7 @@ test('abono parcial se aplica a esta venta, no a una deuda anterior, y sincroniz
   let paymentData
   let status
   const tx = {
+    $queryRaw: async () => [{ id: '00000000-0000-4000-8000-000000000001', status: 'OPEN', opened_by_id: 'cashier-a', register_active: true, register_kind: 'PHYSICAL' }],
     companyPaymentMethod:{findFirst:async({where})=>where.company_id==='company-a'?{enabled:true,payment_method:{id:2,is_credit:false}}:null},
     $executeRaw: async () => 1,
     paymentMethod: { findUnique: async () => ({ id: 2, is_credit: false }) },
@@ -40,10 +41,10 @@ test('abono parcial se aplica a esta venta, no a una deuda anterior, y sincroniz
   }
   const req = { companyId:'company-a',user: { sub: 'cashier-a' }, body: { initial_payment: { amount: 25, payment_method_id: 2 } } }
   assert.equal(initialPaymentAmount(req.body, 100, true), 25)
-  const receipt=await recordInitialPayment(tx, req, sale, 25, 'session-a')
+  const receipt=await recordInitialPayment(tx, req, sale, 25, '00000000-0000-4000-8000-000000000001')
   assert.deepEqual(receipt,{paymentId:'payment-a'})
   assert.deepEqual(paymentData.applications.create, [{ sale_id: 'new-sale', amount: 25 }])
-  assert.equal(paymentData.cash_register_session_id, 'session-a')
+  assert.equal(paymentData.cash_register_session_id, '00000000-0000-4000-8000-000000000001')
   assert.equal(status, 'PARTIAL')
   for (const amount of [-1, 0, 100, 101, 'abc', 25.001, true, []]) assert.throws(() => initialPaymentAmount({ initial_payment: { amount } }, 100, true))
   assert.throws(() => initialPaymentAmount(req.body, 100, false))

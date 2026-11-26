@@ -13,6 +13,8 @@ function makePayablesFixture({ entries = [{ total: "100.00" }] } = {}) {
       permissions: [
         "merchandise.details",
         "merchandise.mark_paid",
+        "merchandise.cancel_payment",
+        "merchandise.correct_payment",
         "merchandise.reports",
       ],
     };

@@ -49,6 +49,7 @@ function parseSupplierPayment(raw, { allowMissingMethod = false } = {}) {
     "reference",
     "notes",
     "applications",
+    "cashRegisterSessionId",
   ]);
   const paid =
     typeof raw.paidAt === "string" && /(Z|[+-]\d{2}:\d{2})$/.test(raw.paidAt)
@@ -79,6 +80,7 @@ function parseSupplierPayment(raw, { allowMissingMethod = false } = {}) {
       };
     });
   return {
+    ...(raw.cashRegisterSessionId == null ? {} : { cashRegisterSessionId: uuid(raw.cashRegisterSessionId) }),
     requestKey: uuid(raw.requestKey),
     supplierId: uuid(raw.supplierId),
     amount: amount(raw.amount),

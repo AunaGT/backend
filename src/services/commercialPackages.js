@@ -70,12 +70,12 @@ function readGroups(raw){
     return raw
   }catch{review()}
 }
-async function buildPackageGroups(tx,scope,raw,{existingGroups=null,allowIncomplete=false}={}){
+async function buildPackageGroups(tx,scope,raw,{existingGroups=null,allowIncomplete=false,readPermission='products.view'}={}){
   const selections=parsePackageSelections(raw),previous=readGroups(existingGroups),groups=[],lines=[],issues=[]
   for(const selection of selections){
     const old=previous.find(group=>group.groupId===selection.groupId)
     const unchanged=old&&sameSelection(old.selection,selection)
-    const record=await loadPackageVersion(tx,scope,selection.packageId,selection.version,{forNewSelection:!unchanged})
+    const record=await loadPackageVersion(tx,scope,selection.packageId,selection.version,{forNewSelection:!unchanged,readPermission})
     if(unchanged){
       // Recheck availability and units, but preserve the accepted names and amounts.
       await validateReferences(tx,scope,record.definition,{lock:true})
@@ -149,6 +149,12 @@ function assertPackageAgreement(document,{requireComplete=true,kind='DOCUMENT',a
   const gross=lines.reduce((sum,line)=>sum.add(line.line_total),D(0))
   if(document.subtotal!=null&&!D(document.subtotal).eq(gross)||document.discount_total!=null&&!D(document.discount_total).eq(gross.sub(D(document.total))))review()
 }
+async function assertPackageCurrency(tx,companyId,raw){
+  const groups=readGroups(raw)
+  if(!groups.length)return
+  const setting=await tx.systemSetting.findUnique({where:{company_id_key:{company_id:companyId,key:'currency_code'}}})
+  if(groups.some(group=>group.currency!==(setting?.value||'GTQ')))fail('CURRENCY_MISMATCH','La moneda del acuerdo no coincide con la empresa. Revisa su configuración antes de continuar; los importes históricos no se convierten')
+}
 function assertSaleAgreement(groups,lines,total,{allowPartial}){
   const expected=new Map(groups.flatMap(group=>group.components.map(c=>[c.key,c]))),seen=new Set()
   for(const line of lines){
@@ -192,4 +198,4 @@ function publicPackageGroups(raw){
       unitLabel:c.unitLabel,quantityDecimals:c.quantityDecimals,unitPrice:c.unitPrice,
       lineTotal:c.lineTotal,netLineTotal:c.netLineTotal,serviceConditions:c.serviceConditions?require('../modules/appointments/domain/publicServiceConditions').publicServiceConditions(c.serviceConditions):null}))}))
 }
-module.exports={buildPackageGroups,finalizePackageAmounts,assertPackageAgreement,assertFreePackageItems,packageLineFields,publicPackageGroups,copyPackageGroups,packageSourceFingerprint}
+module.exports={buildPackageGroups,finalizePackageAmounts,assertPackageAgreement,assertPackageCurrency,assertFreePackageItems,packageLineFields,publicPackageGroups,copyPackageGroups,packageSourceFingerprint}

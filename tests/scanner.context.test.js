@@ -3,7 +3,7 @@ const {withMocks}=require('./helpers/reportHarness.cjs')
 const target=require('node:path').resolve(__dirname,'../src/modules/inventory/scanner.js')
 function fixture(){const companyId=randomUUID(),branchId=randomUUID(),id=randomUUID();return{scope:{companyId,branchId,user:{sub:randomUUID(),permissions:['sales.create']}},product:{id,company_id:companyId,name:'Agua',barcode:'001234',kind:'STANDARD',deleted:false,available_for_sale:true,price:'5',cost:'2',tracks_expiry:false,unit_revision:3},calls:[]}}
 async function run(fn){const h=fixture();h.db={branch:{findFirst:async({where})=>where.id===h.scope.branchId&&where.company_id===h.scope.companyId?{id:where.id}:null},productBarcode:{findFirst:async()=>h.code||null},productPresentation:{findFirst:async()=>h.presentation||null},product:{findMany:async args=>{h.calls.push(args);return h.rows||[h.product]}},productStock:{findMany:async()=>[{product_id:h.product.id,stock:'12',min_stock:'1'}]}}
- await withMocks({[require.resolve('../src/modules/inventory/posCatalog')]:{catalogItemsDTO:async(db,scope,rows)=>rows.map(({cost,company_id,deleted,...p})=>p)}},target,api=>fn(api,h))}
+ await withMocks({[require.resolve('../src/modules/inventory/posCatalog')]:{catalogItemsDTO:async(db,scope,rows)=>rows.map(({cost,company_id,deleted,supplier_id,supplier,...p})=>p)}},target,api=>fn(api,h))}
 test('scan resolves exact code with leading zeros, no catalogue pagination and no cost for cashier',()=>run(async(api,h)=>{
  const out=await api.resolveScan(h.db,h.scope,{code:'001234',operation:'SALE'});assert.equal(out.product.id,h.product.id);assert.equal(out.product.cost,undefined);assert.equal(out.presentationId,null);assert.equal(h.calls.length,1);assert.equal(h.calls[0].where.company_id,h.scope.companyId);assert.equal(h.calls[0].take,3);assert.deepEqual(h.calls[0].where.OR,[{barcode:'001234'}])
 }))
@@ -20,4 +20,25 @@ test('purchase presentation does not need sale enabled and purchase cost is perm
 }))
 test('ambiguous legacy code is never resolved by choosing the first row',()=>run(async(api,h)=>{
  h.rows=[h.product,{...h.product,id:randomUUID()}];await assert.rejects(api.resolveScan(h.db,h.scope,{code:'001234',operation:'SALE'}),{status:409})
+}))
+test('purchase scan returns only a valid same-company supplier suggestion; lookup and sale do not expose it',()=>run(async(api,h)=>{
+ const supplierId=randomUUID(),reads=[];h.product.supplier_id=supplierId
+ h.db.supplier={findFirst:async args=>{reads.push(args);return{id:supplierId,name:'Proveedor habitual'}}}
+ h.scope.user.permissions=['products.register_incoming','products.view','sales.create']
+ const purchase=await api.resolveScan(h.db,h.scope,{code:'001234',operation:'PURCHASE'})
+ assert.deepEqual(purchase.product.supplier,{id:supplierId,name:'Proveedor habitual'});assert.equal(purchase.product.supplier_id,supplierId)
+ assert.deepEqual(reads[0].where,{id:supplierId,company_id:h.scope.companyId,party_type:'SUPPLIER',deleted:false,estado:1})
+ assert.deepEqual(reads[0].select,{id:true,name:true})
+ for(const operation of ['LOOKUP','SALE']){
+  const out=await api.resolveScan(h.db,h.scope,{code:'001234',operation})
+  assert.equal(out.product.supplier,undefined);assert.equal(out.product.supplier_id,undefined)
+  assert.equal(h.calls.at(-1).select.supplier_id,undefined)
+ }
+ assert.equal(reads.length,1)
+}))
+test('unavailable supplier does not prevent preparing a product or leak its old supplier ID',()=>run(async(api,h)=>{
+ h.scope.user.permissions=['products.register_incoming'];h.product.supplier_id=randomUUID()
+ h.db.supplier={findFirst:async()=>null}
+ const out=await api.resolveScan(h.db,h.scope,{code:'001234',operation:'PURCHASE'})
+ assert.equal(out.product.supplier,null);assert.equal(out.product.supplier_id,null);assert.equal(out.product.id,h.product.id)
 }))

@@ -7,6 +7,7 @@
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { Prisma } = require('@prisma/client')
 const { documentPaymentTerms } = require('../../services/commercialPayment')
+const {lockCommercialDocument,assertDocumentUnchanged}=require('../../services/commercialDocumentConcurrency')
 const crypto = require('crypto')
 const { DateTime } = require('luxon')
 const { getTimezone } = require('../../utils/getTimezone')
@@ -35,6 +36,8 @@ const Units=require('../inventory/units')
 const {publicUnitLine}=require('../../services/units/publicLine')
 const {resolveCommercialLines}=require('../../services/units/saleLines')
 const {unitFields,isV2}=require('../../services/units/commercial')
+const Packages=require('../../services/commercialPackages')
+const EventTerms=require('../../services/eventPaymentTermsStorage')
 const {
   assertLinesAvailable,
   reserveForDocument,
@@ -188,8 +191,13 @@ exports.getPublicByToken = async (req, res, next) => {
       where: { key: { in: ['company_name', 'company_logo_url', 'currency_code', 'locale', 'timezone'] }, company_id: quote.branch.company_id },
     })
     const companyMap = Object.fromEntries(companyRows.map((r) => [r.key, r.value]))
+    const portal=await require('../../services/customerPagesPublic').resolvePublicPortal(prisma,{companyId:quote.branch.company_id,documentType:'QUOTE'})
+    res.set?.({'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer'})
 
     res.json({
+      ...(portal?{portal}:{}),
+      ...(quote.package_groups?.length?{packageGroups:Packages.publicPackageGroups(quote.package_groups)}:{}),
+      ...(quote.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').publicEventPaymentTerms(quote.event_payment_terms)}:{}),
       ...(quote.lines.some(l=>l.unit_metadata_version===2)?{unit_metadata_version:2}:{}),
       reference: quote.reference,
       status: quote.status,
@@ -204,12 +212,13 @@ exports.getPublicByToken = async (req, res, next) => {
       notes: quote.notes,
       created_at: quote.created_at,
       discount_total: quote.discount_total,
-      currency_code: companyMap.currency_code || 'GTQ',
+      currency_code: quote.package_groups?.[0]?.currency || companyMap.currency_code || 'GTQ',
       locale: companyMap.locale || 'es-GT',
       timezone: companyMap.timezone || 'America/Guatemala',
       company_name: companyMap.company_name || 'Depósito',
       company_logo_url: (companyMap.company_logo_url && String(companyMap.company_logo_url).trim()) || '',
       lines: quote.lines.map((l) => ({
+        ...Packages.packageLineFields(l),
         product_name: l.item_name ?? l.product?.name,
         item_kind: l.item_kind, unit_label: l.unit_label, quantity_decimals: l.quantity_decimals,
         service_schedule_snapshot: l.item_kind==='SERVICE'?publicServiceConditions(l.service_schedule_snapshot):null,
@@ -238,6 +247,16 @@ exports.respondPublic = async (req, res, next) => {
     const now = new Date()
     if (quote.status !== 'SENT' || (quote.valid_until && new Date(quote.valid_until) <= now)) return res.status(409).json({ message: 'Esta cotización ya no admite respuestas. Consulta su estado actualizado.' })
     await prismaTransaction.$transaction(async (tx) => {
+      if(status==='ACCEPTED'){
+        const current=await lockCommercialDocument(tx,{companyId:quote.branch.company_id,branchId:quote.branch_id,type:QUOTE_DOC_TYPE},quote.id)
+        if(!current||current.public_token!==token||current.status!=='SENT')throw Object.assign(new Error('La cotización cambió. Actualiza la página.'),{status:409})
+        EventTerms.assertEventPaymentAgreement(current)
+        if(current.package_groups?.length){
+          const lines=await tx.commercialDocumentLine.findMany({where:{document_id:current.id},orderBy:{sort_order:'asc'}})
+          Packages.assertPackageAgreement({...current,lines},{requireComplete:true})
+          await Packages.assertPackageCurrency(tx,quote.branch.company_id,current.package_groups)
+        }
+      }
       const changed = await tx.commercialDocument.updateMany({
         where: { id: quote.id, public_token: token, doc_type: QUOTE_DOC_TYPE, status: 'SENT', OR: [{ valid_until: null }, { valid_until: { gt: now } }] },
         data: { status },
@@ -257,7 +276,16 @@ exports.getShareLink = async (req, res, next) => {
     })
     if (!quote) return res.status(404).json({ message: 'Cotización no encontrada' })
 
-    const token = await prismaTransaction.$transaction(async (tx) => ensurePublicToken(tx, quote.id), QUOTE_TX_OPTIONS)
+    const token = await prismaTransaction.$transaction(async (tx) => {
+      const current=await lockCommercialDocument(tx,{companyId:req.companyId,branchId:quote.branch_id,type:QUOTE_DOC_TYPE},quote.id)
+      if(!current)throw Object.assign(new Error('Cotización no encontrada'),{status:404})
+      if(current.package_groups?.length){
+        const lines=await tx.commercialDocumentLine.findMany({where:{document_id:current.id},orderBy:{sort_order:'asc'}})
+        Packages.assertPackageAgreement({...current,lines},{requireComplete:true})
+        await Packages.assertPackageCurrency(tx,req.companyId,current.package_groups)
+      }
+      return ensurePublicToken(tx,quote.id)
+    }, QUOTE_TX_OPTIONS)
     const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '')
     const path = `/q/${token}`
     const public_url = base ? `${base}${path}` : path
@@ -268,6 +296,9 @@ exports.getShareLink = async (req, res, next) => {
   }
 }
 
+exports.paymentTermsCapability=async(req,res,next)=>{
+ try{requireCompany(req);res.json({enabled:await EventTerms.eventPaymentStorageReady(prisma)})}catch(error){next(error)}
+}
 exports.previewServiceConditions=async(req,res,next)=>{
   try{
     const ids=req.body?.productIds
@@ -275,6 +306,71 @@ exports.previewServiceConditions=async(req,res,next)=>{
     const rows=await prisma.product.findMany({where:{id:{in:ids},company_id:req.companyId,deleted:false,kind:'SERVICE'},select:{id:true,service_schedule_profile:{select:publicProfileSelect}}})
     res.json({conditions:Object.fromEntries(rows.map(row=>[row.id,publicConditionsFromRow(row.service_schedule_profile)]))})
   }catch(e){next(e)}
+}
+
+function packageScope(req,branchId){
+  return{...Units.requestUnitScope(req),branchId,branchIds:req.userBranchIds??req.branchIds??(branchId?[branchId]:[])}
+}
+exports.previewPackages=async(req,res,next)=>{
+  try{
+    const scope=packageScope(req,targetBranch(req,req.body?.branch_id))
+    if(!scope.isAdmin&&!scope.permissions.includes('quotes.create'))throw Object.assign(new Error('No tienes permiso para crear cotizaciones'),{status:403})
+    const result=await prismaTransaction.$transaction(async tx=>{
+      let existingGroups=null
+      if(req.body?.quoteId){
+        require('../inventory/packages/definition').uuid(req.body.quoteId,'quoteId')
+        const current=await lockCommercialDocument(tx,{companyId:scope.companyId,branchId:scope.branchId,type:QUOTE_DOC_TYPE},req.body.quoteId)
+        assertDocumentUnchanged(current,req.body.expectedRevision)
+        if(current.status!=='DRAFT')throw Object.assign(new Error('La cotización ya no está en borrador'),{status:409,code:'DOCUMENT_CHANGED'})
+        existingGroups=current.package_groups
+      }
+      return Packages.buildPackageGroups(tx,scope,req.body?.packages,{allowIncomplete:true,existingGroups})
+    },QUOTE_TX_OPTIONS)
+    res.set?.('Cache-Control','no-store')
+    res.json({packageGroups:Packages.publicPackageGroups(result.groups),items:result.lines,subtotal:result.subtotal,issues:result.issues})
+  }catch(e){next(e)}
+}
+
+async function resolveQuoteAgreement(tx,items,ctx,{selections,existingGroups=null,discountTotal='0'}={}){
+  Packages.assertFreePackageItems(items)
+  const discounted=subtotal=>{
+    const total=new Prisma.Decimal(subtotal).sub(discountTotal)
+    if(total.lt(0))throw Object.assign(new Error('El descuento acordado supera el nuevo subtotal. Revisa el descuento antes de quitar partidas'),{status:409,code:'PACKAGE_REVIEW_REQUIRED'})
+    return total.toFixed(2)
+  }
+  const freeLines=async()=>{
+    if(!items?.some(item=>item.source_line_id!==undefined))return resolveQuoteLines(tx,items,ctx)
+    const old=ctx.sourceLines??[],seen=new Set(),lines=[]
+    for(const item of items){
+      if(item.source_line_id===undefined){lines.push(...(await resolveQuoteLines(tx,[item],ctx)).lines);continue}
+      const source=old.find(line=>line.id===item.source_line_id&&!line.package_component_key&&line.product_id===item.product_id)
+      if(!source||seen.has(source.id)||Object.keys(item).some(key=>!['product_id','qty','source_line_id'].includes(key)))throw Object.assign(new Error('Una partida ya no corresponde al borrador. Recarga y revisa su origen'),{status:409,code:'PACKAGE_REVIEW_REQUIRED'})
+      seen.add(source.id)
+      const raw={...source,qty:String(item.qty)}
+      if(isV2(source)){
+        const product=await tx.product.findFirst({where:{id:source.product_id,company_id:ctx.companyId,deleted:false}})
+        if(!product)throw Object.assign(new Error('Producto no disponible'),{status:409})
+        const calculated=require('../inventory/units/calculation').calculateUnitLine(product,{snapshot:source.unit_snapshot,frozenUnitPrice:String(source.unit_price),operation:'SALE'},
+          {qty:raw.qty,accept_rounding:false})
+        raw.base_qty=String(source.qty)===raw.qty?source.base_qty:calculated.base_qty
+      }else raw.qty=commercialQuantity(raw.qty,source).toFixed()
+      raw.line_total=require('../../services/units/quantity').lineTotal(raw.qty,String(source.unit_price))
+      const [line]=await resolveCommercialLines(tx,ctx.scope(),[raw],{approved:true})
+      const {unit_cost,base_unit_cost,...safe}=line
+      lines.push({...safe,unit_price:String(source.unit_price),service_schedule_snapshot:source.service_schedule_snapshot??Prisma.DbNull})
+    }
+    const subtotal=lines.reduce((sum,line)=>sum.add(line.line_total),new Prisma.Decimal(0)).toFixed(2)
+    return{lines:lines.map((line,sort_order)=>({...line,sort_order})),subtotal,total:subtotal}
+  }
+  if(selections===undefined){const free=await freeLines();return{...free,total:discounted(free.subtotal)}}
+  if(!Array.isArray(items))throw Object.assign(new Error('Envía los artículos libres en items; pueden estar vacíos si agregas un paquete'),{status:400})
+  const result=await Packages.buildPackageGroups(tx,ctx.scope(),selections,{existingGroups,allowIncomplete:true})
+  const free=items.length?await freeLines():{lines:[]}
+  const lines=[...free.lines,...result.lines].map((line,index)=>({...line,sort_order:index,service_schedule_snapshot:line.service_schedule_snapshot??Prisma.DbNull}))
+  if(lines.length>100||!lines.length&&!result.groups.length)throw Object.assign(new Error('Agrega productos o paquetes; hasta 100 partidas reales por cotización'),{status:400})
+  const subtotal=lines.reduce((sum,line)=>sum.add(line.line_total),new Prisma.Decimal(0)).toFixed(2),total=discounted(subtotal)
+  if(!validMoney(Number(total)))throw Object.assign(new Error('Total de cotización fuera de rango'),{status:400})
+  return{lines,subtotal,total,packageGroups:Packages.finalizePackageAmounts(result.groups,lines,{documentTotal:total})}
 }
 
 async function validateCustomerContact(tx, customerContactId) {
@@ -499,7 +595,7 @@ exports.getById = async (req, res, next) => {
       const sale=await prisma.sale.findFirst({where:{id:documentSales[0].sale_id,branch_id:doc.branch_id,branch:{company_id:req.companyId},...(!hasPerm(req.user,'sales.view_detail')?{created_by:req.user.sub}:{})},select:{id:true,reference:true,status:{select:{name:true}}}})
       if(sale)directSale={id:sale.id,reference:sale.reference,status:require('../sales/commercialState').commercialState(sale.status.name)}
     }
-    res.json({...publicDoc,hasDirectSale:!!documentSales?.length,directSale,...await quoteAgendaContext(prisma,req,doc)})
+    res.json({...publicDoc,...(doc.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').publicEventPaymentTerms(doc.event_payment_terms)}:{}),hasDirectSale:!!documentSales?.length,directSale,...await quoteAgendaContext(prisma,req,doc)})
   } catch (e) {
     next(e)
   }
@@ -534,13 +630,13 @@ exports.create = async (req, res, next) => {
     const created = await prismaTransaction.$transaction(async (tx) => {
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId)
-      const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
-        scope:()=>({...Units.requestUnitScope(req),branchId}),
+      const { lines, subtotal, total,packageGroups } = await resolveQuoteAgreement(tx, items, {
+        scope:()=>packageScope(req,branchId),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
         explicitPriceTier,
-      })
+      },{selections:req.body.packages})
 
       await assertLinesAvailable(
         tx,
@@ -565,6 +661,7 @@ exports.create = async (req, res, next) => {
 
       const doc = await tx.commercialDocument.create({
         data: {
+          ...await EventTerms.prepareEventPaymentTermsWrite(tx,{companyId:req.companyId},{raw:req.body.eventPaymentTerms,total,hasServices:lines.some(l=>l.item_kind==='SERVICE')}),
           branch_id: branchId,
           reference,
           doc_type: QUOTE_DOC_TYPE,
@@ -582,6 +679,7 @@ exports.create = async (req, res, next) => {
           notes: notes != null ? String(notes).trim() || null : null,
           created_by: user.sub,
           lines: { create: lines },
+          ...(packageGroups!==undefined?{package_groups:packageGroups}:{}),
           ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: QUOTE_DETAIL_INCLUDE,
@@ -606,11 +704,6 @@ exports.update = async (req, res, next) => {
     if (existing.status !== 'DRAFT') {
       return res.status(400).json({ message: 'Solo se pueden editar cotizaciones en borrador' })
     }
-    if (!req.body.items && req.body.payment_condition !== undefined) {
-      const paymentTerms = await documentPaymentTerms(prisma, req.body, existing.customer_contact_id, req.companyId, existing)
-      return res.json(await prisma.commercialDocument.update({ where: { id: existing.id }, data: paymentTerms, include: QUOTE_DETAIL_INCLUDE }))
-    }
-
     const {
       items,
       customer,
@@ -634,15 +727,35 @@ exports.update = async (req, res, next) => {
     }
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const current=await lockCommercialDocument(tx,{companyId:req.companyId,branchId:existing.branch_id,type:QUOTE_DOC_TYPE},existing.id)
+      assertDocumentUnchanged(current,existing.integration_revision)
+      if(current.status!=='DRAFT')throw Object.assign(new Error('La cotización ya no está en borrador'),{status:409})
+      if(current.event_payment_terms!=null||Object.hasOwn(req.body,'eventPaymentTerms'))assertDocumentUnchanged(current,req.body.expectedRevision)
+      const replacing=Object.hasOwn(req.body,'items')||Object.hasOwn(req.body,'packages')
+      if(replacing&&current.package_groups?.length&&!Object.hasOwn(req.body,'packages'))throw Object.assign(new Error('Esta cotización contiene paquetes. Recarga el editor para conservar su composición'),{status:409,code:'PACKAGE_REVIEW_REQUIRED'})
+      if(replacing&&(current.package_groups?.length||req.body.packages?.length||items?.some(item=>item.source_line_id!==undefined))){
+        if(!req.body.expectedRevision)throw Object.assign(new Error('Recarga la cotización antes de cambiar sus paquetes'),{status:428,code:'DOCUMENT_VERSION_REQUIRED'})
+        assertDocumentUnchanged(current,req.body.expectedRevision)
+        const links=await tx.commercialDocument.findFirst({where:{id:current.id},include:{documentSales:{take:1},convertedChildren:{take:1},quoted_engagement:{select:{id:true}},stock_reservations:{take:1},lines:{select:{reservations:{take:1},engagement_lines:{take:1},deliveryLines:{take:1}}}}})
+        if(links?.converted_from_id||links?.documentSales?.length||links?.convertedChildren?.length||links?.quoted_engagement||links?.stock_reservations?.length||links?.lines?.some(line=>line.reservations?.length||line.engagement_lines?.length||line.deliveryLines?.length))throw Object.assign(new Error('El documento ya está vinculado a otra operación. Revisa su origen antes de modificarlo'),{status:409,code:'PACKAGE_REVIEW_REQUIRED'})
+      }
+      if (!replacing && (req.body.payment_condition !== undefined||Object.hasOwn(req.body,'eventPaymentTerms'))) {
+        const paymentTerms=await documentPaymentTerms(tx,req.body,current.customer_contact_id,req.companyId,current)
+        const savedLines=Object.hasOwn(req.body,'eventPaymentTerms')?await tx.commercialDocumentLine.findMany({where:{document_id:current.id}}):[]
+        const terms=Object.hasOwn(req.body,'eventPaymentTerms')?await EventTerms.prepareEventPaymentTermsWrite(tx,{companyId:req.companyId},{raw:req.body.eventPaymentTerms,existing:current,total:current.total,hasServices:savedLines.some(l=>l.item_kind==='SERVICE')}):{}
+        return tx.commercialDocument.update({where:{id:current.id},data:{...paymentTerms,...terms},include:QUOTE_DETAIL_INCLUDE})
+      }
       await validateCustomerContact(tx, customerContactId)
       const paymentTerms = await documentPaymentTerms(tx, req.body, customerContactId, req.companyId, existing)
-      const { lines, subtotal, total } = await resolveQuoteLines(tx, items, {
-        scope:()=>({...Units.requestUnitScope(req),branchId:existing.branch_id}),
+      const sourceLines=items?.some(item=>item.source_line_id!==undefined)?await tx.commercialDocumentLine.findMany({where:{document_id:current.id},orderBy:{sort_order:'asc'}}):[]
+      const { lines, subtotal, total,packageGroups } = await resolveQuoteAgreement(tx, items, {
+        sourceLines,
+        scope:()=>packageScope(req,existing.branch_id),
         customerContactId,
         companyId:req.companyId,
         salesChannel,
         explicitPriceTier,
-      })
+      },{selections:req.body.packages,existingGroups:current.package_groups,discountTotal:current.discount_total??'0'})
 
       await assertLinesAvailable(
         tx,
@@ -682,9 +795,11 @@ exports.update = async (req, res, next) => {
           subtotal: new Prisma.Decimal(subtotal),
           total: new Prisma.Decimal(total),
           ...paymentTerms,
+          ...await EventTerms.prepareEventPaymentTermsWrite(tx,{companyId:req.companyId},{raw:req.body.eventPaymentTerms,existing:current,total,hasServices:lines.some(l=>l.item_kind==='SERVICE')}),
           notes: notes !== undefined ? (notes != null ? String(notes).trim() || null : null) : undefined,
           valid_until: validUntil,
           lines: { create: lines },
+          ...(packageGroups!==undefined?{package_groups:packageGroups}:{}),
           ...(lines.some(isV2)?{unit_metadata_version:2}:{}),
         },
         include: QUOTE_DETAIL_INCLUDE,
@@ -717,7 +832,7 @@ exports.updateStatus = async (req, res, next) => {
       })
     }
 
-    if (newStatus === 'SENT' && (existing._count?.lines || 0) === 0) {
+    if (newStatus === 'SENT' && !existing.package_groups?.length && (existing._count?.lines || 0) === 0) {
       return res.status(400).json({ message: 'La cotización debe tener al menos una línea' })
     }
 
@@ -729,6 +844,14 @@ exports.updateStatus = async (req, res, next) => {
     const userId = user?.sub || null
 
     const updated = await prismaTransaction.$transaction(async (tx) => {
+      const current=await lockCommercialDocument(tx,{companyId:req.companyId,branchId:existing.branch_id,type:QUOTE_DOC_TYPE},existing.id)
+      assertDocumentUnchanged(current,existing.integration_revision)
+      if(['SENT','ACCEPTED'].includes(newStatus))EventTerms.assertEventPaymentAgreement(current)
+      if(['SENT','ACCEPTED'].includes(newStatus)&&current.package_groups?.length){
+        const lines=await tx.commercialDocumentLine.findMany({where:{document_id:current.id},orderBy:{sort_order:'asc'}})
+        Packages.assertPackageAgreement({...current,lines},{requireComplete:true})
+        await Packages.assertPackageCurrency(tx,req.companyId,current.package_groups)
+      }
       if(existing.status==='ACCEPTED'){
         const locked=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:existing.branch_id},existing.id)
         if(locked.status!==existing.status||locked.documentSales?.length)throw Object.assign(new Error('La cotización ya cambió o tiene una venta vinculada. Continúa desde su venta.'),{status:409,code:'QUOTE_ALREADY_LINKED'})
@@ -790,7 +913,7 @@ exports.convertToOrder = async (req, res, next) => {
     }
 
     const order = await prismaTransaction.$transaction(async (tx) => {
-      quote=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:quote.branch_id},quote.id)
+      quote=await require('./index').lockQuote(tx,{companyId:req.companyId,branchId:quote.branch_id},quote.id,{net:false})
       if(quote.status!=='ACCEPTED') throw Object.assign(new Error('La cotización ya no está aceptada'),{status:409})
       if(quote.convertedChildren.length||quote.quoted_engagement||quote.documentSales?.length) throw Object.assign(new Error('La cotización ya tiene un pedido, contratación o venta vinculada'),{status:409,code:'QUOTE_ALREADY_LINKED'})
       if (quote.lines.some(line=>line.item_kind==='SERVICE')) await assertServicesEnabled(tx,req.companyId)
@@ -806,6 +929,7 @@ exports.convertToOrder = async (req, res, next) => {
         sort_order: idx,
         ...lineSnapshot(l),
         ...unitFields(l),
+        ...Packages.packageLineFields(l),
         ...(isV2(l)?{unit_label:l.unit_label,quantity_decimals:l.quantity_decimals,base_fulfilled:'0',base_invoiced:'0'}:{}),
         service_schedule_snapshot:l.service_schedule_snapshot??Prisma.DbNull,
       }))
@@ -830,6 +954,8 @@ exports.convertToOrder = async (req, res, next) => {
           total: quote.total,
           notes: quote.notes,
           converted_from_id: quote.id,
+          ...(quote.package_groups?.length?{package_groups:Packages.copyPackageGroups(quote.package_groups)}:{}),
+          ...EventTerms.copyEventPaymentTerms(quote),
           created_by: user.sub,
           lines: { create: lines },
           ...(lines.some(isV2)?{unit_metadata_version:2}:{}),

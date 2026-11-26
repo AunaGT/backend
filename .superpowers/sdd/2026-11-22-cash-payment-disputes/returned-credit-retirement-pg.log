@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+not ok 1 - credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+  ---
+  duration_ms: 2528.196373
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.aliases.pg.e2e.js:5:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    
+    Invalid `prisma.$queryRaw()` invocation:
+    
+    
+    Raw query failed. Code: `42702`. Message: `ERROR: column reference "p.id" is ambiguous
+    DETAIL: It could refer to either a PL/pgSQL variable or a table column.`
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    ei.handleRequestError (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:124:7283)
+    ei.handleAndLogRequestError (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:124:6608)
+    ei.request (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:124:6315)
+    async a (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:133:9551)
+    async /home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.aliases.pg.e2e.js:72:21
+    async Proxy._transactionWithCallback (/tmp/auna-disputes-prisma/3c99412bb64ce4dd/client/runtime/library.js:133:8120)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.aliases.pg.e2e.js:68:19)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2667.861223

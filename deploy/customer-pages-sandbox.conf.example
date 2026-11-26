@@ -1,0 +1,22 @@
+# Dedicated HTTPS host, preferably a separate registrable domain. No ERP proxy,
+# cookies, auth endpoints, database credentials, public storage, or broad CORS here.
+# Run scripts/customer-pages-sandbox.js as a separate unprivileged service account,
+# with only ARTIFACT_ROOT, PARENT_ORIGINS and PORT supplied in its environment.
+server {
+    listen 443 ssl;
+    server_name visual-isolation.example.net;
+    # Configure your real TLS certificate here before enabling this server.
+    client_max_body_size 1k;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    location /artifacts/ {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:8091;
+        proxy_set_header Cookie "";
+        proxy_set_header Authorization "";
+        proxy_hide_header Set-Cookie;
+        # Preserve the application's hash-specific CSP and frame-ancestors.
+        # Do not add X-Frame-Options SAMEORIGIN or replace CSP with a wildcard.
+    }
+    location / { return 404; }
+}

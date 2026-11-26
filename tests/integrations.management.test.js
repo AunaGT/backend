@@ -1,0 +1,23 @@
+const test=require('node:test'),assert=require('node:assert/strict'),{fixture,scope,input}=require('./helpers/integrationsDb')
+const service=()=>require('../src/modules/integrations/management'),now=new Date('2026-10-25T12:00:00Z')
+test('a key is shown once, scoped metadata is safe and revocation is idempotent',async()=>{
+ const f=fixture(),created=await service().createCredential(f.db,scope,input,now)
+ assert.match(created.apiKey,/^auna_live_/);assert.equal(created.credential.expiresAt,'2027-01-23T12:00:00.000Z')
+ const detail=await service().getCredential(f.db,scope,created.credential.id,now)
+ assert.equal(detail.name,'Web');assert.doesNotMatch(JSON.stringify(detail),/secret_hash|secretHash|apiKey|auna_live_/)
+ await assert.rejects(()=>service().getCredential(f.db,{...scope,companyId:'other'},detail.id,now),{status:404})
+ await service().revokeCredential(f.db,scope,detail.id,now);await service().revokeCredential(f.db,scope,detail.id,now)
+ assert.equal(f.events.filter(e=>e.action==='REVOKE').length,1)
+})
+test('concurrent creation caps keys at twenty and audit failure rolls everything back',async()=>{
+ const f=fixture(),out=await Promise.allSettled(Array.from({length:21},()=>service().createCredential(f.db,scope,input,now)))
+ assert.equal(out.filter(x=>x.status==='fulfilled').length,20);assert.equal(f.rows.length,20)
+ const broken=fixture();broken.breakAudit();await assert.rejects(()=>service().createCredential(broken.db,scope,input,now));assert.equal(broken.rows.length,0)
+})
+test('replacement cannot widen scopes or transfer ownership and keeps the previous key active',async()=>{
+ const f=fixture(),a=await service().createCredential(f.db,scope,input,now)
+ await assert.rejects(()=>service().replaceCredential(f.db,scope,a.credential.id,{...input,scopes:['prices.read']},now),{status:403})
+ const b=await service().replaceCredential(f.db,scope,a.credential.id,input,now)
+ assert.notEqual(a.apiKey,b.apiKey);assert.equal(f.rows[0].revoked_at,null)
+ assert.equal(b.credential.replacesId,a.credential.id)
+})

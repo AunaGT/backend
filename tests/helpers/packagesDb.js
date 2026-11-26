@@ -18,7 +18,7 @@ function matches(row,where={}) {
 }
 function fixture() {
   const companyId=id(200),branchId=id(201),actorId=id(202)
-  const scope={companyId,branchId,branchIds:[branchId,id(203)],actorId,isAdmin:false,permissions:['products.view','products.edit']}
+  const scope={companyId,branchId,branchIds:[branchId,id(203)],actorId,isAdmin:false,permissions:['products.view','products.edit','products.packages.publish','products.packages.archive']}
   const state={packages:[],versions:[],branches:[],commands:[],modules:[],settings:{currency_code:'GTQ',inventory_services_enabled:'true'},
     companyBranches:[{id:branchId,company_id:companyId,active:true},{id:id(203),company_id:companyId,active:true}],
     products:[20,21,22,23].map(n=>({id:id(n),company_id:companyId,name:`Artículo ${n}`,kind:n===20?'SERVICE':'STANDARD',

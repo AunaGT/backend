@@ -1,5 +1,5 @@
 const {fail,uuid}=require('../validation')
-const {operationScope,originPermission,has}=require('../operations')
+const {operationScope,originPermission,canReadSaleReceipt}=require('../operations')
 const {assertAccess}=require('../../../inventory/barcodeLabels/access')
 function boundedSnapshot(value){const json=JSON.stringify(value);if(Buffer.byteLength(json)>2*1024*1024)fail(400,'Divide la impresión: el documento supera el tamaño permitido');return JSON.parse(json)}
 async function authorizeSource(db,scope,source){
@@ -7,7 +7,7 @@ async function authorizeSource(db,scope,source){
   originPermission(scope,source.kind==='SALE_TICKET'?'RECEIPT':'LABEL')
   if(source.kind==='SALE_TICKET'){
     const sale=await db.sale.findFirst({where:{id:source.id,branch_id:scope.branchId,branch:{company_id:scope.companyId}}})
-    if(!sale||(!['sales.view','sales.view_detail','sales.view_invoice'].some(p=>has(scope,p))&&sale.created_by!==scope.actorId))fail(404,'Venta no encontrada')
+    if(!canReadSaleReceipt(scope,sale))fail(404,'Venta no encontrada')
     return sale
   }
   if(source.kind!=='LABEL_PREPARATION')fail(400,'Origen no admitido')
@@ -26,7 +26,7 @@ async function resolvePrintSource(db,scope,source){
   operationScope(scope);uuid(source.id,'source.id');originPermission(scope,'RECEIPT')
   if(source.kind!=='SALE_TICKET')fail(400,'Origen no admitido')
   const sale=await require('./saleTicketRead').readSaleTicket(db,scope,source.id)
-  if(!sale||(!['sales.view','sales.view_detail','sales.view_invoice'].some(p=>has(scope,p))&&sale.created_by!==scope.actorId))fail(404,'Venta no encontrada')
+  if(!canReadSaleReceipt(scope,sale))fail(404,'Venta no encontrada')
   if(!sale.sale_items?.length)fail(409,'La venta no tiene un documento válido')
   const values=sale._ticket_settings
   // Only document fields, never contact credentials, product internals or the incoming request.

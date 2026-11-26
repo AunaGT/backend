@@ -49,7 +49,7 @@ router.post('/:id/payments', Auth, paymentEditors, IncomingMerchandise.addPaymen
 router.delete(
   '/:id/payments/:entryId',
   Auth,
-  paymentEditors,
+  hasPermission('merchandise.cancel_payment'),
   IncomingMerchandise.deletePaymentEntry
 )
 

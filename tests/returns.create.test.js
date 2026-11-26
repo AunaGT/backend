@@ -96,7 +96,11 @@ test('creation uses the same request instant for eligibility and the stored requ
   const tx={$queryRaw:async()=>[],sale:{findFirst:async()=>sale},systemSetting:{findUnique:async()=>null},returnStatus:{findFirst:async()=>({id:1})},return:{create:async({data})=>{created={id:'R',...data};return created}},returnItem:{create:async()=>{}}}
   const db={sale:{findFirst:async()=>({id:'S'})},$transaction:async fn=>fn(tx),return:{findUnique:async()=>created}}
   await withMocks({[model]:{prisma:db,prismaTransaction:db},[require.resolve('../src/services/referenceGenerator')]:{nextDocumentReference:async()=>'D-1'},[domain]:{...realDomain,evaluateReturnEligibility:args=>{eligibilityInstant=args.now;t.mock.timers.tick(1);return realDomain.evaluateReturnEligibility({...args,now:requestAt})}}},target,async controller=>{
-    const res=jsonResponse();await controller.create({companyId:'A',branchId:'B',user:{sub:'U',role_name:'admin'},body:{sale_id:'S',reason:'Garantía',policy_override_reason:'Autorizada',requested_resolution:'REFUND_CASH',items:[{sale_item_id:1,product_id:'P',qty_returned:1}]}},res,e=>{throw e})
+    const request={companyId:'A',branchId:'B',user:{sub:'U',role_name:'admin'},body:{sale_id:'S',reason:'Garantía',policy_override_reason:'Autorizada',requested_resolution:'REFUND_CASH',items:[{sale_item_id:1,product_id:'P',qty_returned:1}]}}
+    let denied;await controller.create(request,jsonResponse(),e=>{denied=e})
+    assert.equal(denied?.status,403);assert.equal(created,undefined)
+    t.mock.timers.setTime(requestAt.getTime())
+    const res=jsonResponse();await controller.create({...request,user:{sub:'U',permissions:['returns.override_policy']}},res,e=>{throw e})
     assert.equal(res.statusCode,201)
   })
   assert.equal(eligibilityInstant?.toISOString(),requestAt.toISOString())
@@ -108,8 +112,8 @@ test('creation uses the same request instant for eligibility and the stored requ
   tx.systemSetting.findUnique=async()=>({value:JSON.stringify({...DEFAULT_RETURN_POLICY,allowAuthorizedExceptions:false})})
   const record={...created,sale,status:{name:'Pendiente'},return_items:[{id:1,qty_returned:1}]}
   tx.return.findFirst=async()=>record
-  await assert.rejects(approveReturn(tx,{id:'R',companyId:'A',scope:{branch_id:'B'},resolution:'REFUND_CASH'}),e=>e.status===409 && /plazo/i.test(e.message))
+  await assert.rejects(approveReturn(tx,{permissions:['returns.approve'],id:'R',companyId:'A',scope:{branch_id:'B'},resolution:'REFUND_CASH'}),e=>e.status===409 && /plazo/i.test(e.message))
   record.status={name:'Aprobada'};record.approved_resolution='REFUND_CASH'
   tx.returnSettlement={findFirst:async()=>null}
-  await assert.rejects(completeReturn(db,{id:'R',companyId:'A',scope:{branch_id:'B'},payload:{idempotency_key:'boundary'}}),e=>e.status===409 && /plazo/i.test(e.message))
+  await assert.rejects(completeReturn(db,{permissions:['returns.complete'],id:'R',companyId:'A',scope:{branch_id:'B'},payload:{idempotency_key:'boundary'}}),e=>e.status===409 && /plazo/i.test(e.message))
 })

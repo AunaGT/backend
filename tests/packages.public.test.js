@@ -7,10 +7,11 @@ test('public projection strips private package metadata without changing the agr
  const f=await agreementFixture(),built=await buildPackageGroups(f.db,f.scope,[f.selection()]);safe(publicPackageGroups(contaminate(built.groups)))
 })
 test('public quotation returns the saved commercial group and component identity, not private metadata',async()=>quoteHarness(async f=>{
- const built=await buildPackageGroups(f.db,f.scope,[f.selection()]);f.db.systemSetting={findMany:async()=>[]}
+ const built=await buildPackageGroups(f.db,f.scope,[f.selection()]);f.db.systemSetting={findMany:async()=>[{key:'currency_code',value:'USD'}]}
  f.setDocument({id:id(400),doc_type:'QUOTE',status:'SENT',public_token:'token',branch_id:f.scope.branchId,lines:built.lines,package_groups:contaminate(built.groups),total:built.subtotal})
  const {res,error}=await f.invoke('getPublicByToken',{})
  assert.equal(error,undefined);safe(res.body.packageGroups);assert.equal(res.body.lines[0].package_component_key,built.lines[0].package_component_key)
+ assert.equal(res.body.currency_code,'GTQ','saved proposal is not relabeled when company currency changes')
 }))
 test('API own-document read exposes public groups only and preserves the receipt and permissions',async()=>{
  const f=await agreementFixture(),built=await buildPackageGroups(f.db,f.scope,[f.selection()]),{draftFixture}=require('./helpers/integrationDraftDb'),{COMPANY,OWNER,BRANCH}=require('./helpers/integrationsDb')
@@ -23,9 +24,10 @@ test('API own-document read exposes public groups only and preserves the receipt
 test('public order selects saved groups and preserves component identity even without advanced units',async()=>{
  const f=await agreementFixture(),built=await buildPackageGroups(f.db,f.scope,[f.selection()]),{withMocks,jsonResponse}=require('./helpers/reportHarness.cjs');let query
  const order={id:id(500),reference:'P-QA',status:'CONFIRMED',branch:{company_id:f.scope.companyId,name:'QA'},package_groups:contaminate(built.groups),lines:built.lines,documentSales:[],total:built.subtotal}
- const db={commercialDocument:{findFirst:async q=>{query=q;return order}},systemSetting:{findMany:async()=>[],findUnique:async()=>null}}
+ const db={commercialDocument:{findFirst:async q=>{query=q;return order}},systemSetting:{findMany:async()=>[{key:'currency_code',value:'USD'}],findUnique:async()=>null}}
  await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db},[require.resolve('../src/modules/platform/service')]:{getCompanyModuleBlock:async()=>null},[require.resolve('../src/services/customerPagesPublic')]:{resolvePublicPortal:async()=>null}},require.resolve('../src/modules/orders/controller'),async controller=>{
   const res=jsonResponse();let error;await controller.getPublicByToken({params:{token:'test'}},res,e=>{error=e})
   assert.equal(error,undefined);assert.equal(query.select.package_groups,true);assert.equal(query.select.lines.select.package_component_key,true);safe(res.body.packageGroups);assert.equal(res.body.lines[0].package_component_key,built.lines[0].package_component_key)
+  assert.equal(res.body.currency_code,'GTQ')
  })
 })

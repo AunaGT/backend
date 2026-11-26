@@ -18,6 +18,9 @@ const {
 } = require('./controller')
 
 const router = Router()
+router.use('/integrations', require('../integrations/routes').createManagementRouter())
+router.use('/customer-pages', require('./customerPages/routes').createRouter())
+router.use('/connectors', require('../fiscal/routes').createRouter())
 router.use('/document-templates', require('./documentTemplates/routes').createRouter())
 router.use('/hardware/operations', require('./hardware/printing/routes'))
 router.use('/hardware/operations', require('./hardware/drawer/routes'))

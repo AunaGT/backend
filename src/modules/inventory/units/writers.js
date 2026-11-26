@@ -41,7 +41,7 @@ async function prepareProductWrite(tx,scope,current,input,data,{create=false}={}
     if(data.barcode)await assertCodeAvailable(tx,scope,data.barcode,{productId:current?.id})
     return async product=>{await syncBaseBarcode(tx,scope,product.id,data.barcode);return product}
   }
-  authorize(scope,['products.edit','products.create','products.import'],true)
+  authorize(scope,current?['products.edit']:['products.edit','products.create','products.import'],true)
   await lockCompany(tx,scope.companyId)
   await assertEnabled(tx,scope)
   if(input.cost!==undefined&&input.cost!==null)data.cost=parseQuantity(input.cost,{decimals:6,allowZero:true,max:'9999999999.99'}).toFixed()
@@ -71,16 +71,19 @@ async function prepareProductWrite(tx,scope,current,input,data,{create=false}={}
   if(barcode){data.barcode=input.barcode==null||input.barcode===''?null:normalizeCode(input.barcode);if(data.barcode)await assertCodeAvailable(tx,scope,data.barcode,{productId:current?.id})}
   const finish=async product=>{
     let saved=product
+    // This closure runs only after the trusted create writer inserts the product.
+    // Do not grant edit on the request scope or expose a standalone create bypass.
+    const initialScope=!current&&create?{...scope,permissions:[...(scope.permissions||[]),'products.edit']}:scope
     if(creation){
       const ids=new Map()
       for(const {client_key,...presentation} of creation.presentations){
-        const row=await savePresentation(tx,scope,product.id,{...presentation,unit_revision:saved.unit_revision})
+        const row=await savePresentation(tx,initialScope,product.id,{...presentation,unit_revision:saved.unit_revision})
         ids.set(client_key,row.id);saved=await tx.product.findFirst({where:{id:product.id,company_id:scope.companyId}})
       }
       const defaults={}
       for(const [key,target] of [['default_purchase_key','default_purchase_presentation_id'],['default_sale_key','default_sale_presentation_id']])if(creation[key]!==undefined)defaults[target]=creation[key]===null?null:ids.get(creation[key])
-      if(Object.keys(defaults).length)saved=await configureProduct(tx,scope,product.id,{...defaults,unit_revision:saved.unit_revision})
-    }else if(!current&&hasConfig)saved=await configureProduct(tx,scope,product.id,{...config,unit_revision:product.unit_revision??1})
+      if(Object.keys(defaults).length)saved=await configureProduct(tx,initialScope,product.id,{...defaults,unit_revision:saved.unit_revision})
+    }else if(!current&&hasConfig)saved=await configureProduct(tx,initialScope,product.id,{...config,unit_revision:product.unit_revision??1})
     if(barcode)await syncBaseBarcode(tx,scope,product.id,data.barcode)
     return (await extendProductDTO(tx,scope,[saved]))[0]
   }

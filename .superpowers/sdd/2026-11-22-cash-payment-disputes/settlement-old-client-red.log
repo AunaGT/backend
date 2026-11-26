@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: an older client reports a linked-dispute database guard as a recoverable settlement conflict
+not ok 1 - an older client reports a linked-dispute database guard as a recoverable settlement conflict
+  ---
+  duration_ms: 203.234633
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashSettlements.test.js:5:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The validation function is expected to return "true". Received false
+    
+    Caught error:
+    
+    Error: dispute_settlement_dependency
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashSettlements.test.js:8:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: bank methods and settlements each need their own authority
+ok 2 - bank methods and settlements each need their own authority
+  ---
+  duration_ms: 82.848389
+  type: 'test'
+  ...
+# Subtest: 4B permissions are registered only for the canonical admin and listed in the catalog
+ok 3 - 4B permissions are registered only for the canonical admin and listed in the catalog
+  ---
+  duration_ms: 34.246906
+  type: 'test'
+  ...
+# Subtest: posting builders use the frozen bank account of the money event and keep the old rule otherwise
+ok 4 - posting builders use the frozen bank account of the money event and keep the old rule otherwise
+  ---
+  duration_ms: 40.341941
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 522.13645

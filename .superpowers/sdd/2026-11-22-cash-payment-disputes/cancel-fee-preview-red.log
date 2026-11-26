@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: reviewing a won result releases an unwithdrawn advance only after independent approval
+ok 1 - reviewing a won result releases an unwithdrawn advance only after independent approval
+  ---
+  duration_ms: 2565.318748
+  type: 'test'
+  ...
+# Subtest: losing before the bank debit creates no debt but protects the affected unused advance
+ok 2 - losing before the bank debit creates no debt but protects the affected unused advance
+  ---
+  duration_ms: 2411.402722
+  type: 'test'
+  ...
+# Subtest: replacing a cancelled incorrect case requires an explicit link and preserves its original history
+ok 3 - replacing a cancelled incorrect case requires an explicit link and preserves its original history
+  ---
+  duration_ms: 2443.42335
+  type: 'test'
+  ...
+# Subtest: a fee-only withdrawal must be resolved before the case can be cancelled
+not ok 4 - a fee-only withdrawal must be resolved before the case can be cancelled
+  ---
+  duration_ms: 3385.382553
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.decisions.pg.e2e.js:53:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'DISPUTE_STATE_CONFLICT'
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.decisions.pg.e2e.js:58:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: additive dispute DDL preserves existing data and isolates all new tables
+ok 5 - additive dispute DDL preserves existing data and isolates all new tables
+  ---
+  duration_ms: 2748.994626
+  type: 'test'
+  ...
+# Subtest: dispute children cannot divert a receipt restriction to another customer or overreserve funds
+ok 6 - dispute children cannot divert a receipt restriction to another customer or overreserve funds
+  ---
+  duration_ms: 2325.364358
+  type: 'test'
+  ...
+# Subtest: a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+ok 7 - a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+  ---
+  duration_ms: 2352.83045
+  type: 'test'
+  ...
+# Subtest: an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+ok 8 - an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+  ---
+  duration_ms: 3280.825795
+  type: 'test'
+  ...
+# Subtest: an approved cancellation cannot hide an outstanding bank withdrawal
+ok 9 - an approved cancellation cannot hide an outstanding bank withdrawal
+  ---
+  duration_ms: 2361.81946
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 8
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13217.432551

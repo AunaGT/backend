@@ -15,6 +15,7 @@ const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 
 // Proteger todas las rutas con JWT
 router.use(Auth)
+router.use(require('../../middlewares/costVisibility').protectCostResponses)
 
 const canView = hasPermission('returns.view', 'returns.manage')
 const canManage = hasPermission('returns.manage')
@@ -32,10 +33,10 @@ router.get('/:id', canView, controller.getById)
 router.post('/', canManage, controller.create)
 
 // Aprobación y liquidación son pasos separados: aprobar nunca mueve inventario ni dinero.
-router.post('/:id/approve', canManage, controller.approve)
-router.post('/:id/complete', canManage, controller.complete)
+router.post('/:id/approve', hasPermission('returns.approve'), controller.approve)
+router.post('/:id/complete', hasPermission('returns.complete'), controller.complete)
 
 // PATCH /api/returns/:id/status - Actualizar estado de devolución
-router.patch('/:id/status', canManage, controller.updateStatus)
+router.patch('/:id/status', (req,res,next) => hasPermission(req.body?.status_name === 'Completada' ? 'returns.complete' : 'returns.approve')(req,res,next), controller.updateStatus)
 
 module.exports = router

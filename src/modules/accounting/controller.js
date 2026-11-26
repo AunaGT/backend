@@ -251,8 +251,15 @@ exports.reverseEntry = async (req, res, next) => {
     const period = await prisma.accountingPeriod.findFirst({ where: { company_id: req.companyId, year, month } })
     const reversalDate = period?.status === 'CLOSED' ? new Date() : original.date
 
-    const entry = await prisma.$transaction((tx) =>
-      createEntry(tx, {
+    const entry = await prisma.$transaction(async (tx) => {
+      const disputePosting=require('../../services/accounting/cashDisputePosting'),disputeScope={companyId:req.companyId,userId:userId(req)}
+      const disputeResources=await disputePosting.prepareDisputeEntryReversal(tx,disputeScope,original)
+      await require('../../services/accounting/core').lockAccountingCompany(tx,req.companyId)
+      await disputePosting.assertDisputeEntryReversible(tx,disputeScope,original,disputeResources)
+      await require('../../services/accounting/cashClosurePosting').assertCashEntryReversible(tx,{companyId:req.companyId},original)
+      const current = await tx.journalEntry.findFirst({where:{id:original.id,company_id:req.companyId},include:{reversals:{select:{id:true}}}})
+      if (!current || current.reversals.length) throw Object.assign(new Error('Este asiento ya fue anulado'),{status:409})
+      return createEntry(tx, {
         company_id: req.companyId,
         branch_id: original.branch_id,
         date: reversalDate,
@@ -266,8 +273,8 @@ exports.reverseEntry = async (req, res, next) => {
           credit: Number(l.debit),
           description: l.description,
         })),
-      }),
-    )
+      })
+    })
     res.status(201).json(entry)
   } catch (e) { handle(e, res, next) }
 }
@@ -343,6 +350,7 @@ exports.closeYear = async (req, res, next) => {
 
     const entry = await prisma.$transaction(async (tx) => {
       // Reabrir dic momentáneamente para permitir el asiento de cierre y volver a cerrar
+      await require('../../services/accounting/core').lockAccountingCompany(tx,req.companyId)
       await tx.accountingPeriod.update({ where: { company_id_year_month: { company_id: req.companyId, year, month: 12 } }, data: { status: 'OPEN' } })
       const created = await createEntry(tx, {
         company_id: req.companyId,

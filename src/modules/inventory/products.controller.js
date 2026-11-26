@@ -15,7 +15,7 @@ const { createClient } = require('@supabase/supabase-js')
 
 // Reuse shared stock alert service
 const { ensureStockAlert } = require('../../services/stockAlerts')
-const { requireBranch, branchWhere } = require('../../middlewares/tenant')
+const { requireBranch, branchWhere, hasPerm } = require('../../middlewares/tenant')
 const { requestScope } = require('../appointments/access')
 const { saveServiceProfile } = require('../appointments/profiles')
 const { withAgendaTransaction } = require('../appointments/application')
@@ -49,6 +49,7 @@ async function setBranchStock(tx, productId, branchId, { stock, minStock }, ctx 
   if (stock !== undefined) {
     const delta = decimal(stock).sub(row?.stock ?? 0)
     if (!delta.isZero()) {
+      if (ctx.canAdjustStock === false) throw Object.assign(new Error('Necesitas permiso para ajustar existencias. Los demás datos del producto se pueden editar sin cambiar el stock.'), { status: 403 })
       // La misma diferencia por ubicación: entra a la de recepción y, si baja,
       // sale primero de la menos accesible.
       await applyBranchDelta(tx, [[String(productId), delta.abs()]], branchId, delta.gt(0) ? 1 : -1, {
@@ -839,7 +840,7 @@ exports.update = async (req, res, next) => {
         const finish=await Units.prepareProductWrite(tx,requestUnitScope(req),current,payload,safePayload)
         const prod = await finish(await tx.product.update({ where: { id }, data: safePayload }))
         const row = (branchStockValue !== undefined || branchMinValue !== undefined)
-          ? await setBranchStock(tx, id, branchId, { stock: branchStockValue, minStock: branchMinValue }, { userId: req.user?.sub || null })
+          ? await setBranchStock(tx, id, branchId, { stock: branchStockValue, minStock: branchMinValue }, { userId: req.user?.sub || null, canAdjustStock: hasPerm(req.user, 'stock_moves.adjust') })
           : null
         return { prod, row }
       })

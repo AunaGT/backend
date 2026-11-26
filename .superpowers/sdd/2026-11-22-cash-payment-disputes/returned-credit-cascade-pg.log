@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+ok 1 - credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+  ---
+  duration_ms: 6345.570588
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6576.874915

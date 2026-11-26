@@ -27,6 +27,10 @@ async function resolveEngagementFunds(db,scope,id,raw){
   await assertCommercialAccess(db,scope,'refund')
   return command(db,scope,'appointments.refund','RESOLVE_ENGAGEMENT',input,async tx=>{
     await assertCommercialAccess(tx,scope,'refund')
+    if(input.action==='CONFIRM_REFUND'&&input.cashRegisterSessionId){
+      const boundary=require('../../services/cashSessionBoundary')
+      boundary.assertSessionOperation(await boundary.lockScopedSession(tx,scope,input.cashRegisterSessionId),scope)
+    }
     const initial=await loadEngagement(tx,scope,id)
     if(initial.event_payment_terms)await require('./sourceVerification').lockEngagementQuote(tx,scope,initial)
     let correction

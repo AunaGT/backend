@@ -7,6 +7,7 @@ const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 const InventoryCounts = require('./controller')
 
 const router = Router()
+router.use(require('../../middlewares/costVisibility').protectCostResponses)
 
 router.get(
   '/',

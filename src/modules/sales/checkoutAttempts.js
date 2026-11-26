@@ -18,7 +18,8 @@ function canonical(value,key=''){
   return value
 }
 function checkoutHash(kind,input,orderId=null){
-  const keys=kind==='ORDER'?['payment_method_id','amount_received','change','lines','cash_register_id','due_date','initial_payment','credit_override']:['customer','customer_nit','is_final_consumer','payment_method_id','customer_contact_id','sales_channel','cash_register_id','items','amount_received','change','admin_authorized_products','promotion_codes','due_date','initial_payment','credit_override']
+  const keys=['ORDER','ORDER_INVOICE'].includes(kind)?['payment_method_id','amount_received','change','lines','cash_register_id','due_date','initial_payment','credit_override']:['customer','customer_nit','is_final_consumer','payment_method_id','customer_contact_id','sales_channel','cash_register_id','items','amount_received','change','admin_authorized_products','promotion_codes','due_date','initial_payment','credit_override']
+  if(kind==='SALE')keys.push('packages')
   const body=Object.fromEntries(keys.filter(k=>input[k]!==undefined).map(k=>[k,input[k]]))
   return createHash('sha256').update(JSON.stringify(canonical({kind,orderId,body}))).digest('hex')
 }

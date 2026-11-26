@@ -1,0 +1,1 @@
+module.exports.permissions=[{code:'integrations.view',name:'Ver integraciones API',description:'Ver claves e historial sin revelar secretos'},{code:'integrations.manage',name:'Administrar claves API',description:'Crear y revocar claves limitadas; no concede permisos sobre datos de negocio'}]

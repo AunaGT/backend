@@ -9,7 +9,8 @@ function buildEngagementPosting(movement,accounts){
   if(value.lte(0))throw new AccountingError('El movimiento debe ser mayor que cero')
   const amount=value.toNumber()
   if(movement.kind==='APPLY')return [{account_id:accounts.customerAdvances,debit:amount,credit:0},{account_id:accounts.receivables,debit:0,credit:amount}]
-  const target=movement.isCash?accounts.cash:accounts.bank
+  // 4B: anticipo o devolución digital con clasificación congelada usa su cuenta; sin ella, Bancos como siempre.
+  const target=movement.isCash?accounts.cash:movement.frozenBankAccountId||accounts.bank
   return movement.kind==='RECEIVE'?[{account_id:target,debit:amount,credit:0},{account_id:accounts.customerAdvances,debit:0,credit:amount}]
     :[{account_id:accounts.customerAdvances,debit:amount,credit:0},{account_id:target,debit:0,credit:amount}]
 }
@@ -41,7 +42,8 @@ async function postEngagementMovement(tx,scope,movement){
   if(old)return old.id
   const accounts=await getEngagementAccounts(tx,scope.companyId)
   const isCash=isCashMethod(source.method,name=>/efectivo|cash/.test(name.toLowerCase().normalize('NFD').replace(/\p{M}/gu,'')))
-  const lines=buildEngagementPosting({kind:movement.kind,amount:source.amount,isCash},accounts)
+  const frozenBankAccountId=movement.kind==='APPLY'?null:(await require('./bankTarget').frozenBankAccounts(tx,movement.kind==='RECEIVE'?'CUSTOMER_PAYMENT':'CUSTOMER_PAYMENT_REFUND',[movement.id])).get(String(movement.id))
+  const lines=buildEngagementPosting({kind:movement.kind,amount:source.amount,isCash,frozenBankAccountId},accounts)
   const entry=await createEntry(tx,{company_id:scope.companyId,branch_id:source.branchId,date:source.date,created_by:source.actorId,
     description:movement.kind==='RECEIVE'?'Anticipo de contratación':movement.kind==='APPLY'?'Aplicación de anticipo a venta':'Devolución efectiva de anticipo',source_type:sourceType,source_id:movement.id,lines})
   return entry.id

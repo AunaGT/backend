@@ -5,6 +5,7 @@ const plain=value=>Prisma.Decimal.isDecimal(value)?value.toFixed():value instanc
 
 function commerceHarness({products,stock,locations,lots=[],units=[],presentations=[]}){
   const state={products:structuredClone(products),stock:structuredClone(stock),locations:structuredClone(locations),lots:structuredClone(lots),movements:[],sales:[],saleItems:[],returns:[],returnItems:[],settlements:[],credits:[],documents:[],documentLines:[],deliveries:[],deliveryLines:[],reservations:[],outbox:[]}
+  state.cashSession={id:'00000000-0000-4000-8000-000000000001',status:'OPEN',opened_by_id:'U',opened_at:new Date('2026-01-01'),register_active:true,register_kind:'PHYSICAL'}
   const product=id=>state.products.find(p=>p.id===id)&&{...structuredClone(state.products.find(p=>p.id===id)),stock:state.stock[id]??'0',min_stock:0,branch_stocks:[{stock:state.stock[id]??'0'}]}
   const match=(row,where={})=>Object.entries(where).every(([key,value])=>{
     if(value===undefined||['company','branch','warehouse','document','return','delivery','OR'].includes(key))return true
@@ -38,11 +39,13 @@ function commerceHarness({products,stock,locations,lots=[],units=[],presentation
     orderDeliveryLine:{findMany:async({where})=>state.deliveryLines.filter(row=>match(row,where)),update:async({where,data})=>change(state.deliveryLines.find(row=>row.id===where.id),data)},
     saleStatus:{findFirst:async()=>({id:1}),findUnique:async({where})=>({id:where.id,name:where.id===2?'Cancelada':'Completada'})},returnStatus:{findFirst:async()=>({id:3})},
     status:{findFirst:async()=>null},alertType:{findMany:async()=>[]},alertPriority:{findMany:async()=>[]},
-    branch:{findUnique:async()=>({id:'B',code:'A',seq:1})},cashRegister:{findFirst:async()=>({id:'C'})},cashRegisterSession:{findFirst:async()=>({id:'CS',opened_by_id:'U'})},
+    branch:{findUnique:async()=>({id:'B',code:'A',seq:1})},cashRegister:{findFirst:async()=>({id:'C'})},cashRegisterSession:{findFirst:async()=>structuredClone(state.cashSession)},
     companyPaymentMethod:{findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Transferencia',is_credit:false,settlement_kind:'BANK'}})},
     $executeRaw:async(sql,...args)=>{if(String(sql).includes('INSERT INTO sale_stock_alert_outbox')){const [sale_id,company_id,branch_id,ids]=args;if(!state.outbox.some(j=>j.sale_id===sale_id))state.outbox.push({sale_id,company_id,branch_id,product_ids:JSON.parse(ids)})}return 1},
     $queryRaw:async(sql,...args)=>{
       const text=String(sql),values=args.flatMap(value=>value?.values||[])
+      if(text.includes('pg_advisory_xact_lock'))return []
+      if(text.includes('FROM cash_register_sessions s'))return args.includes(state.cashSession.id)?[structuredClone(state.cashSession)]:[]
       if(text.includes('UPDATE sale_items')){const rows=[];for(let i=0;i<values.length;i+=5){const [id,snapshot,cost,base,v2]=values.slice(i,i+5),row=state.saleItems.find(r=>r.id===id&&r.sale_id===args.at(-1));if(row){row.physical_snapshot=JSON.parse(snapshot);row.unit_cost=cost;if(v2)row.base_unit_cost=base;rows.push({id})}}return rows}
       if(text.includes('UPDATE product_lots')){const rows=[];for(let i=0;i<values.length;i+=3){const [id,qty,product_id]=values.slice(i,i+3),row=state.lots.find(l=>l.id===id&&l.product_id===product_id&&l.branch_id===args.at(-1));if(row&&D(row.qty_remaining).gte(qty)){row.qty_remaining=D(row.qty_remaining).sub(qty).toFixed();rows.push({id})}}return rows}
       if(text.includes('SELECT l.id'))return text.includes('LIMIT 1')?[{id:Object.keys(state.locations)[0].split('|')[1]}]:values.filter(id=>Object.keys(state.locations).some(key=>key.endsWith('|'+id))).map(id=>({id}))

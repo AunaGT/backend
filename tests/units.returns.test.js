@@ -115,7 +115,7 @@ test('exchange approval preserves distinct saved presentations and their prices 
   f.tx.return.findFirst=async()=>current;f.tx.return.update=async()=>current
   f.state.returnItems.push(...current.return_items)
   f.tx.returnReplacementItem={deleteMany:async()=>{},createMany:async({data})=>{saved=data}}
-  await approveReturn(f.tx,{id:'R',scope:{branch_id:'B'},companyId:'A',permissions:['returns.manage'],lines:[{return_item_id:1}]})
+  await approveReturn(f.tx,{id:'R',scope:{branch_id:'B'},companyId:'A',permissions:['returns.approve'],lines:[{return_item_id:1}]})
   assert.deepEqual(saved.map(line=>[line.qty,line.base_qty,line.unit_price,line.unit_label]),[['1','7','10','caja'],['1','1','2','ud']])
 })
 
@@ -133,7 +133,7 @@ test('a measured service return advances authoritative base progress without rec
   f.state.saleItems.push({id:1,sale_id:'V',product_id:'S',qty:'1.25',base_qty:'1.25',base_returned:'0',item_kind:'SERVICE',unit_metadata_version:2,unit_snapshot:unit})
   f.state.returns.push({id:'R',sale_id:'V',status_id:2,approved_resolution:'CUSTOMER_CREDIT',total_refund:'2',return_date:new Date(),unit_metadata_version:2})
   f.state.returnItems.push({id:1,return_id:'R',sale_item_id:1,product_id:'S',qty_returned:'0.25',base_qty:'0.25',unit_metadata_version:2,unit_snapshot:unit})
-  await completeReturn(f.tx,{id:'R',companyId:'A',scope:{branch_id:'B'},userId:'U',payload:{idempotency_key:'once',lines:[{return_item_id:1}]}})
+  await completeReturn(f.tx,{permissions:['returns.complete'],id:'R',companyId:'A',scope:{branch_id:'B'},userId:'U',payload:{idempotency_key:'once',lines:[{return_item_id:1}]}})
   assert.equal(f.state.saleItems[0].base_returned,'0.25');assert.equal(f.state.returnItems[0].received_qty,null);assert.equal(f.state.movements.length,0)
 })
 
@@ -153,7 +153,7 @@ test('real kit sale freezes component cost and a later cancellation restores ori
   assert.equal(f.state.saleItems[0].unit_cost,'2');assert.equal(f.state.saleItems[0].base_unit_cost,'2')
   f.state.products[0].kit_components=[{component_product_id:'NOW_DIFFERENT',qty_per_unit:'99'}]
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:f.tx,prismaTransaction:f.tx}},require.resolve('../src/modules/sales/controller'),async controller=>{
-    await controller.updateStatus({companyId:'A',branchId:'B',params:{id:'V0'},user:{sub:'U'},body:{status_id:2}},jsonResponse(),e=>{throw e})
+    await controller.updateStatus({companyId:'A',branchId:'B',params:{id:'V0'},user:{sub:'U',permissions:['sales.cancel']},body:{status_id:2}},jsonResponse(),e=>{throw e})
   })
   assert.equal(f.state.stock.C,'2')
   assert.deepEqual(f.state.lots.slice(2).map(l=>[l.location_id,l.qty_remaining,l.unit_cost,l.lot_code]),[['L1','0.1','5','A'],['L2','0.15','7','B']])
@@ -169,7 +169,7 @@ test('real return completion restores the selected original lots once and advanc
   f.state.saleItems.push({id:1,sale_id:'V',product_id:'C',qty:'0.7',base_qty:'0.7',base_returned:'0.1',unit_cost:'2',base_unit_cost:'2',item_kind:'STANDARD',unit_metadata_version:2,unit_snapshot:unit,physical_snapshot:snapshot})
   f.state.returns.push({id:'R',sale_id:'V',status_id:2,approved_resolution:'CUSTOMER_CREDIT',total_refund:'3',return_date:new Date(),unit_metadata_version:2})
   f.state.returnItems.push({id:1,return_id:'R',sale_item_id:1,product_id:'C',qty_returned:'0.3',base_qty:'0.3',unit_metadata_version:2,unit_snapshot:unit})
-  const params={id:'R',companyId:'A',scope:{branch_id:'B'},userId:'U',payload:{idempotency_key:'once',lines:[{return_item_id:1,received_qty:'0.3',disposition:'SELLABLE',stock_location_id:'L2'}]}}
+  const params={permissions:['returns.complete'],id:'R',companyId:'A',scope:{branch_id:'B'},userId:'U',payload:{idempotency_key:'once',lines:[{return_item_id:1,received_qty:'0.3',disposition:'SELLABLE',stock_location_id:'L2'}]}}
   await completeReturn(f.tx,params)
   assert.equal(f.state.stock.C,'1.6');assert.equal(f.state.saleItems[0].base_returned,'0.4')
   assert.equal(f.state.returnItems[0].base_received_qty,'0.3');assert.equal(f.state.returnItems[0].base_restock_qty,'0.3')

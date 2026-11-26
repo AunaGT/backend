@@ -1,0 +1,35 @@
+TAP version 13
+# Subtest: replacing a cancelled incorrect case requires an explicit link and preserves its original history
+not ok 1 - replacing a cancelled incorrect case requires an explicit link and preserves its original history
+  ---
+  duration_ms: 2321.719714
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.decisions.pg.e2e.js:33:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    
+    Invalid `prisma.$executeRaw()` invocation:
+    
+    
+    Raw query failed. Code: `P0001`. Message: `ERROR: dispute_cancelled`
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    ei.handleRequestError (/tmp/auna-disputes-prisma/0805684af9761a43/client/runtime/library.js:124:7283)
+    ei.handleAndLogRequestError (/tmp/auna-disputes-prisma/0805684af9761a43/client/runtime/library.js:124:6608)
+    ei.request (/tmp/auna-disputes-prisma/0805684af9761a43/client/runtime/library.js:124:6315)
+    async a (/tmp/auna-disputes-prisma/0805684af9761a43/client/runtime/library.js:133:9551)
+    async Object.decideDisputeProposal (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/cash-closure/disputes.js:136:5)
+    async Proxy._transactionWithCallback (/tmp/auna-disputes-prisma/0805684af9761a43/client/runtime/library.js:133:8120)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.decisions.pg.e2e.js:40:21)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2462.870849

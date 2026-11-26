@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: releasing an event advance into a disputed receipt expands the hold before any free credit is published
+ok 1 - releasing an event advance into a disputed receipt expands the hold before any free credit is published
+  ---
+  duration_ms: 2139.449897
+  type: 'test'
+  ...
+# Subtest: the existing cartera list keeps held advances visible without advertising them as spendable credit
+not ok 2 - the existing cartera list keeps held advances visible without advertising them as spendable credit
+  ---
+  duration_ms: 2195.403076
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.receipts.pg.e2e.js:21:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    100 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 100
+  operator: 'strictEqual'
+  stack: |-
+    /home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.receipts.pg.e2e.js:31:14
+    async withMocks (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/helpers/reportHarness.cjs:8:12)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.receipts.pg.e2e.js:27:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4501.083251

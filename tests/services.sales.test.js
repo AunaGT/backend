@@ -41,8 +41,9 @@ for(const [felEnabled,disabled,responseFails] of [[false,false],[true,false],[fa
   const payments=require.resolve('../src/services/commercialPayment')
   const reference=require.resolve('../src/services/referenceGenerator')
   let stored=null,paymentCount=0,lines=[],documents=[],history=[]
-  const tx={...fixture(),branch:{findUnique:async()=>({id:'B',code:'QA'})},cashRegister:{findFirst:async()=>({id:'C'})},cashRegisterSession:{findFirst:async()=>({id:'CS',opened_by_id:'U'})},saleStatus:{findFirst:async()=>({id:1})},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo',is_credit:false})},
-    companyPaymentMethod:{findFirst:async()=>({enabled:!disabled,payment_method:{id:1,name:'Efectivo',is_credit:false}})},$executeRaw:async()=>0,$queryRaw:async()=>[],
+  const turn={id:'00000000-0000-4000-8000-000000000001',status:'OPEN',opened_by_id:'U',register_active:true,register_kind:'PHYSICAL'}
+  const tx={...fixture(),branch:{findUnique:async()=>({id:'B',code:'QA'})},cashRegister:{findFirst:async()=>({id:'C'})},cashRegisterSession:{findFirst:async()=>turn},saleStatus:{findFirst:async()=>({id:1})},paymentMethod:{findUnique:async()=>({id:1,name:'Efectivo',is_credit:false})},
+    companyPaymentMethod:{findFirst:async()=>({enabled:!disabled,payment_method:{id:1,name:'Efectivo',is_credit:false}})},$executeRaw:async()=>0,$queryRaw:async sql=>String(sql).includes('cash_register_sessions')?[turn]:[],
     sale:{findFirst:async({where})=>{if(responseFails&&where.id)throw Error('detail unavailable after commit');return stored},create:async({data})=>{stored={id:'V',version:1,status:{name:'Completada'},sale_dtes:documents,...data};return stored},update:async({data})=>{stored.version+=data.version.increment;return stored}},saleItem:{createMany:async({data})=>{lines=data;stored.sale_items=data}},$transaction:async run=>run(tx),
     saleDte:{create:async({data})=>{assert.equal(data.company_id,'A');assert.equal(data.branch_id,'B');const doc={id:'doc',...data};documents.push(doc);return doc}},saleHistory:{create:async({data})=>{history.push(data);return data}}}
   tx.systemSetting.findMany=async({where})=>where.key==='fel_enabled'&&felEnabled?[{value:'true'}]:[]

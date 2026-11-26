@@ -40,7 +40,7 @@ test('no route, inactive policy, wrong actor, noncash and old classification ski
 })
 module.exports={fixture}
 test('initial/receivable/Agenda cash share one canonical receipt; returns use only actual refunds',async()=>{
- const h=await fixture();h.scope.permissions.push('receivables.manage','appointments.collect','returns.manage')
+ const h=await fixture();h.scope.permissions.push('receivables.manage','appointments.collect','returns.complete')
  await h.db.hardwareDrawerPolicy.create({data:{company_id:ids.company,version:1,policy:{posCashSale:true,initialCreditReceipt:true,receivableReceipt:true,agendaReceipt:true,cashReturn:true}}})
  const receipt=await h.db.customerPayment.create({data:{branch_id:ids.branch,branch:{company_id:ids.company},amount:'5',kind:'PAYMENT',registered_by:ids.actor,cash_register_session_id:h.session.id,payment_method:{settlement_kind:'CASH'}}})
  const idsOf=[]

@@ -8,7 +8,12 @@ async function lockQuote(tx,scope,quoteId,{net=true}={}){
   if(!locked.length) fail(404,'NOT_FOUND','Cotización no encontrada')
   const quote=await tx.commercialDocument.findFirst({where:{id:quoteId,branch_id:scope.branchId,branch:{company_id:scope.companyId},doc_type:'QUOTE'},
     include:{lines:{orderBy:{sort_order:'asc'}},customerContact:true,documentSales:{select:{sale_id:true}},convertedChildren:{where:{doc_type:'ORDER'},include:{documentSales:true}},quoted_engagement:{select:{id:true,sale_id:true}}}})
-  if(quote)require('../../services/commercialPackages').assertPackageAgreement(quote,{requireComplete:true})
+  if(quote){
+    require('../../services/eventPaymentTermsStorage').assertEventPaymentAgreement(quote)
+    const packages=require('../../services/commercialPackages')
+    packages.assertPackageAgreement(quote,{requireComplete:true})
+    await packages.assertPackageCurrency(tx,scope.companyId,quote.package_groups)
+  }
   return quote&&{...quote,lines:net?require('../../services/commercialDocumentFulfillment').netDocumentLines(quote):quote.lines}
 }
 async function assertQuoteSourceAccess(tx,scope){
@@ -28,6 +33,7 @@ async function loadQuoteSource(tx,scope,quoteId){
     customer:quote.customer,customerNit:quote.customer_nit,isFinalConsumer:quote.is_final_consumer,paymentCondition:quote.payment_condition,creditDays:quote.credit_days,
     salesChannel:quote.sales_channel,notes:quote.notes,engagement:quote.quoted_engagement,orders:quote.convertedChildren,
     ...(quote.package_groups?.length?{packageGroups:require('../../services/commercialPackages').copyPackageGroups(quote.package_groups)}:{}),
+    ...(quote.event_payment_terms?{eventPaymentTerms:require('../../services/eventPaymentTerms').readEventPaymentTermsSnapshot(quote.event_payment_terms)}:{}),
     lines:quote.lines.map(l=>({id:l.id,productId:l.product_id,itemKind:l.item_kind,itemName:l.item_name,unitLabel:l.unit_label,quantityDecimals:l.quantity_decimals,
       quantity:isV2(l)||l.package_component_key?l.qty.toFixed():l.qty.toFixed(4),unitPrice:isV2(l)||l.package_component_key?l.unit_price.toFixed():l.unit_price.toFixed(2),lineTotal:l.line_total.toFixed(2),sortOrder:l.sort_order,
       ...(isV2(l)?{unitMetadataVersion:2,unitSnapshot:l.unit_snapshot,baseQty:l.base_qty.toFixed(),baseUnitCost:l.base_unit_cost?.toFixed()??null}:{}),

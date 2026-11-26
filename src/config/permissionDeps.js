@@ -12,10 +12,40 @@
 
 /** code → permisos que otorga implícitamente. */
 const IMPLIES = {
+  'cash.registers.manage': ['cash.registers.view'],
+  'cash.movements.create_own': ['cash.movements.view_own'],
+  'cash.movements.create_team': ['cash.movements.view_team'],
+  'cash.movements.correct': ['cash.movements.view_own'],
+  'cash.custody.manage': ['cash.custody.view'],
+  'cash.transfers.operate_own': ['cash.custody.view'],
+  'cash.transfers.operate_team': ['cash.custody.view'],
+  'cash.transfers.receive': ['cash.custody.view'],
+  'cash.digital.confirm': ['cash.notices.create'],
+  'products.view_costs': ['products.view'],
+  'integrations.manage': ['integrations.view'],
+  'customer_pages.manage':['customer_pages.view'],
+  'customer_pages.publish':['customer_pages.view'],
+  'customer_pages.code':['customer_pages.view'],
+  'fiscal.view': ['settings.view'],
+  'fiscal.manage': ['fiscal.view'],
+  'fiscal.test': ['fiscal.view'],
+  'fiscal.activate': ['fiscal.view'],
+  'fiscal.retry': ['fiscal.view'],
+  'fiscal.cancel': ['fiscal.view'],
+  'fiscal.download': ['fiscal.view'],
   'document_templates.view': ['settings.view'],
   'document_templates.manage': ['document_templates.view'],
   'document_templates.publish': ['document_templates.view'],
   'hr.deductions.manage': ['hr.deductions.view'],
+  'hr.employees.create': ['hr.employees.view'],
+  'hr.employees.edit': ['hr.employees.view'],
+  'hr.employees.delete': ['hr.employees.view'],
+  'hr.attendance.manage': ['hr.attendance.view'],
+  'hr.advances.manage': ['hr.advances.view'],
+  'payroll.create': ['payroll.view'],
+  'payroll.confirm': ['payroll.view'],
+  'payroll.pay': ['payroll.view'],
+  'payroll.cancel': ['payroll.view'],
   'hardware.view': ['settings.view'],
   'hardware.manage': ['hardware.view'],
   'hardware.test_print': ['hardware.view'],
@@ -24,6 +54,7 @@ const IMPLIES = {
   'appointments.edit': ['appointments.view'],
   'appointments.cancel': ['appointments.view'],
   'appointments.attend': ['appointments.view'],
+  'appointments.override_payment_policy':['appointments.attend','receivables.view'],
   'appointments.configure': ['appointments.view'],
   'appointments.view_team': ['appointments.view'],
   'appointments.collect':['appointments.view','receivables.view'],
@@ -106,6 +137,13 @@ const IMPLIES = {
   'orders.create': ['orders.view', 'products.view', 'contacts.clients.view'],
   'orders.manage': ['orders.view'],
   'returns.manage': ['returns.view', 'sales.view', 'sales.view_detail', 'products.view'],
+  'returns.approve': ['returns.view', 'sales.view_detail', 'products.view'],
+  'returns.complete': ['returns.view', 'sales.view_detail', 'products.view'],
+  'receivables.cancel_payment': ['receivables.view'],
+  'merchandise.cancel_payment': ['merchandise.view', 'merchandise.details'],
+  'merchandise.correct_payment': ['merchandise.view', 'merchandise.details'],
+  'products.packages.publish': ['products.view'],
+  'products.packages.archive': ['products.view'],
 
   // --- Cartera --------------------------------------------------------------
   // La cartera es una lista de clientes: sin verlos no se puede navegar a nadie.
@@ -117,8 +155,14 @@ const IMPLIES = {
 
   // --- Caja -----------------------------------------------------------------
   'cashclosure.create': ['cashclosure.view'],
-  'cashclosure.create_day': ['cashclosure.view', 'cashclosure.create'],
-  'cashclosure.create_own': ['cashclosure.view', 'cashclosure.create'],
+  'cashclosure.view_team': ['cashclosure.view'],
+  'cashclosure.correct': ['cashclosure.view_team'],
+  'cash.disputes.manage': ['cash.disputes.view'],
+  'cash.disputes.movements': ['cash.disputes.view'],
+  'cash.disputes.resolve': ['cash.disputes.view'],
+  'cash.disputes.charge_customer': ['cash.disputes.view'],
+  'cashclosure.create_day': ['cashclosure.view'],
+  'cashclosure.create_own': ['cashclosure.view'],
   'cashclosure.approve': ['cashclosure.view'],
   'cashclosure.validate': ['cashclosure.view'],
 
@@ -160,4 +204,18 @@ function expandPermissions(codes) {
   return [...out]
 }
 
-module.exports = { IMPLIES, expandPermissions }
+// Requirements apply to the named action, not to every use of the permission.
+// They explain compound checks without silently granting financial authority.
+const REQUIREMENTS = {
+  'returns.override_policy': [{ action: 'Solicitar una devolución fuera de plazo', permissions: ['returns.manage'] }],
+  'appointments.collect': [{ action: 'Cobrar en Agenda', permissions: ['receivables.manage'] }],
+  'appointments.refund': [{ action: 'Resolver o devolver anticipos', permissions: ['receivables.manage'] }],
+  'appointments.issue_sale': [{ action: 'Generar y confirmar la venta de una contratación', permissions: ['sales.create', 'receivables.view'] }],
+  'orders.manage': [{ action: 'Convertir o facturar un pedido', permissions: ['sales.create'] }],
+  'quotes.manage': [
+    { action: 'Convertir una cotización a pedido', permissions: ['orders.create'] },
+    { action: 'Convertir una cotización a venta', permissions: ['sales.create'] },
+  ],
+  'hr.documents.view': [{ action: 'Abrir documentos desde el expediente de empleados', permissions: ['hr.employees.view'] }],
+}
+module.exports = { IMPLIES, REQUIREMENTS, expandPermissions }

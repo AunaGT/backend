@@ -1,0 +1,1 @@
+src/modules/appointments/components/AgendaCalendar.tsx(32,64): error TS2339: Property 'formatRange' does not exist on type 'DateTimeFormat'.

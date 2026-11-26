@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: dispute requests isolate tenant context, preserve attempts and reject a response cancelled during decoding
+ok 1 - dispute requests isolate tenant context, preserve attempts and reject a response cancelled during decoding
+  ---
+  duration_ms: 715.294556
+  type: 'test'
+  ...
+# Subtest: credit summary distinguishes spendable credit from a review hold without extra controls
+ok 2 - credit summary distinguishes spendable credit from a review hold without extra controls
+  ---
+  duration_ms: 564.840891
+  type: 'test'
+  ...
+# Subtest: ordinary customer credit stays a single amount when there is no dispute hold
+ok 3 - ordinary customer credit stays a single amount when there is no dispute hold
+  ---
+  duration_ms: 188.772773
+  type: 'test'
+  ...
+# Subtest: a held receipt is labeled as under review instead of as fully applied
+ok 4 - a held receipt is labeled as under review instead of as fully applied
+  ---
+  duration_ms: 300.893741
+  type: 'test'
+  ...
+# Subtest: dispute summary separates the claim, bank money and customer debt with no editable balance fields
+ok 5 - dispute summary separates the claim, bank money and customer debt with no editable balance fields
+  ---
+  duration_ms: 827.677962
+  type: 'test'
+  ...
+# Subtest: new accounting sources are readable and cannot be reversed through the generic journal action
+ok 6 - new accounting sources are readable and cannot be reversed through the generic journal action
+  ---
+  duration_ms: 26.243309
+  type: 'test'
+  ...
+# Subtest: an unavailable movement form explains the two funding routes and prevents financial submission
+ok 7 - an unavailable movement form explains the two funding routes and prevents financial submission
+  ---
+  duration_ms: 737.010232
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5007.001493

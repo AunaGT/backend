@@ -20,7 +20,7 @@ const {
   refreshCookieOptions,
 } = require('../../config/security')
 const { generateUserTemplate } = require('../../services/userTemplate')
-const { IMPLIES, expandPermissions } = require('../../config/permissionDeps')
+const { IMPLIES, REQUIREMENTS, expandPermissions } = require('../../config/permissionDeps')
 const { bulkValidateUsers, bulkCreateUsers } = require('../../services/userBulkImport')
 const { runImportStream } = require('../../utils/importStream')
 const { requireCompany } = require('../../middlewares/tenant')
@@ -522,7 +522,7 @@ exports.getPermissions = async (req, res, next) => {
     })
     // `implies` viaja con el catálogo: la pantalla de roles no tiene que
     // mantener su propia copia de las dependencias.
-    res.json(permissions.map((p) => ({ ...p, implies: IMPLIES[p.code] || [] })))
+    res.json(permissions.map((p) => ({ ...p, implies: IMPLIES[p.code] || [], requirements: REQUIREMENTS[p.code] || [] })))
   } catch (e) { next(e) }
 }
 

@@ -1,0 +1,67 @@
+TAP version 13
+# Subtest: verified historical deductions append a reclassification without another bank debit or changed history
+ok 1 - verified historical deductions append a reclassification without another bank debit or changed history
+  ---
+  duration_ms: 5307.411918
+  type: 'test'
+  ...
+# Subtest: a historical deduction already posted to the dispute asset reuses the settlement journal exactly once
+ok 2 - a historical deduction already posted to the dispute asset reuses the settlement journal exactly once
+  ---
+  duration_ms: 5243.017273
+  type: 'test'
+  ...
+# Subtest: raw partial or cross-origin historical links are rejected before they can masquerade as withdrawals
+ok 3 - raw partial or cross-origin historical links are rejected before they can masquerade as withdrawals
+  ---
+  duration_ms: 5450.161623
+  type: 'test'
+  ...
+# Subtest: linking is exact, scoped and versioned, and a closed accounting period rolls the whole command back
+ok 4 - linking is exact, scoped and versioned, and a closed accounting period rolls the whole command back
+  ---
+  duration_ms: 5702.910645
+  type: 'test'
+  ...
+# Subtest: deferred adoption stays unposted until both original and settlement entries can be verified
+ok 5 - deferred adoption stays unposted until both original and settlement entries can be verified
+  ---
+  duration_ms: 5232.766585
+  type: 'test'
+  ...
+# Subtest: a linked settlement cannot be voided through the old service or raw writer
+ok 6 - a linked settlement cannot be voided through the old service or raw writer
+  ---
+  duration_ms: 4983.604147
+  type: 'test'
+  ...
+# Subtest: a settlement journal with the wrong deduction counterpart cannot authorize a reclassification
+ok 7 - a settlement journal with the wrong deduction counterpart cannot authorize a reclassification
+  ---
+  duration_ms: 4565.959133
+  type: 'test'
+  ...
+# Subtest: adoption and settlement void serialize in both orders without orphan effects or deadlocks
+not ok 8 - adoption and settlement void serialize in both orders without orphan effects or deadlocks
+  ---
+  duration_ms: 4928.412574
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.settlements.pg.e2e.js:116:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'findUnique')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.settlements.pg.e2e.js:142:42)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 7
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 41670.342569

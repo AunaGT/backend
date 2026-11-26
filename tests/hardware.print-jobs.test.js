@@ -41,3 +41,29 @@ test('a frozen copy can explicitly discard a revoked destination without reloadi
  assert.equal(child.workstationId,null);assert.equal(child.destinationName,null);assert.equal((await service().jobDocument(h.db,h.scope,child.id)).snapshotId,(await service().jobDocument(h.db,h.scope,job.id)).snapshotId);assert.equal(h.rows('documentSnapshot')[0].data.totals.total,'20.00')
 })
 module.exports={fixture,input}
+test('revoking invoice authority blocks cached foreign tickets, replays and copies with expanded creator permissions',async()=>{
+ const {expandPermissions}=require('../src/config/permissionDeps')
+ const {resolvePrintSource}=require('../src/modules/config/hardware/printing/sources')
+ const h=await fixture()
+ await h.db.sale.updateMany({where:{id:h.sale.id},data:{created_by:randomUUID()}})
+ h.scope.permissions=expandPermissions(['sales.create','sales.view_invoice','hardware.view'])
+ const body=input(h),job=await service().createJob(h.db,h.scope,body)
+ // Older jobs contain the actual ticket instead of a V2 artifact reference.
+ await h.db.hardwarePrintJob.updateMany({where:{id:job.id},data:{snapshot:{version:1,renderer:'SALE_TICKET_V1',sale:{customer:'Privado',sale_items:[{item_name:'Privado'}]},options:{logoUrl:''}}}})
+ const revoked={...h.scope,permissions:expandPermissions(['sales.create','hardware.view'])}
+ assert.ok(revoked.permissions.includes('sales.view'))
+ const count=h.rows('hardwarePrintJob').length
+ for(const run of [
+   ()=>service().jobDocument(h.db,revoked,job.id),
+   ()=>service().getJob(h.db,revoked,job.id),
+   ()=>service().createJob(h.db,revoked,body,{includeDocument:true}),
+   ()=>service().reprintJob(h.db,revoked,job.id,{requestKey:randomUUID(),reason:'Intento después de revocar',pdfOnly:true}),
+   ()=>resolvePrintSource(h.db,revoked,body.source),
+ ])await assert.rejects(run,{status:404})
+ assert.equal(h.rows('hardwarePrintJob').length,count)
+ assert.equal((await service().printHistory(h.db,revoked)).items[0].capabilities.reprint,false)
+ assert.equal((await service().jobDocument(h.db,h.scope,job.id)).sale.customer,'Privado')
+ await h.db.sale.updateMany({where:{id:h.sale.id},data:{created_by:h.scope.actorId}})
+ assert.equal((await service().jobDocument(h.db,revoked,job.id)).sale.customer,'Privado')
+ assert.equal((await service().printHistory(h.db,revoked)).items[0].capabilities.reprint,true)
+})

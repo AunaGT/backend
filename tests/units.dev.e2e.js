@@ -44,7 +44,7 @@ async function fixture(tx,{advanced=false,measured=false}={}){
  const base=await tx.measureUnit.findUnique({where:{company_id_code:{company_id:id,code:measured?'KG':'UNIT'}}})
  const product=await tx.product.create({data:{company_id:id,name:'QA producto UUID',category_id:category.id,status_id:status.id,supplier_id:supplier.id,base_unit_id:base.id,unit_metadata_version:advanced?2:1,quantity_decimals:measured?6:0,price:'7',cost:'0',tracks_expiry:false}})
  await tx.productStock.create({data:{product_id:product.id,branch_id:branch.id,stock:'0',min_stock:'0'}})
- const scope={companyId:id,branchId:branch.id,actorId:actor.id,permissions:['products.register_incoming','products.view','products.edit','sales.create','returns.manage']}
+ const scope={companyId:id,branchId:branch.id,actorId:actor.id,permissions:['products.register_incoming','products.view','products.edit','sales.create','returns.manage','returns.approve','returns.complete']}
  const req={companyId:id,branchId:branch.id,user:{sub:actor.id,permissions:scope.permissions}}
  return {id,actor:actor.id,branch:branch.id,location:location.id,otherLocation:otherLocation.id,supplier:supplier.id,product,scope,req,cash:cash.id,session:session.id,saleStatus:saleStatus.id}
 }
@@ -77,10 +77,10 @@ async function returnOne(tx,f,sale,{index=0,quarantine=false}={}){
  const pending=await tx.returnStatus.findFirst({where:{name:'Pendiente'}})
  const record=await tx.return.create({data:{sale_id:sale.id,status_id:pending.id,total_refund:amount,items_count:1,unit_metadata_version:original.unit_metadata_version,requested_resolution:'REFUND_ORIGINAL',return_items:{create:[{...line,refund_amount:amount}]}} ,include:{return_items:true}})
  const scope={branch_id:f.branch,branch:{company_id:f.id}}
- await approveReturn(tx,{id:record.id,scope,userId:f.actor,companyId:f.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:record.return_items[0].id,disposition:quarantine?'QUARANTINE':'SELLABLE',stock_location_id:f.location}]})
+ await approveReturn(tx,{permissions:f.scope.permissions,id:record.id,scope,userId:f.actor,companyId:f.id,resolution:'REFUND_ORIGINAL',lines:[{return_item_id:record.return_items[0].id,disposition:quarantine?'QUARANTINE':'SELLABLE',stock_location_id:f.location}]})
  const payload={idempotency_key:randomUUID(),lines:[{return_item_id:record.return_items[0].id,received_qty:'1',disposition:quarantine?'QUARANTINE':'SELLABLE',stock_location_id:f.location}],settlement:{cash_register_session_id:f.session,payment_method_id:f.cash}}
- const result=await completeApprovedReturn(tx,{id:record.id,scope,userId:f.actor,companyId:f.id,payload})
- await completeApprovedReturn(tx,{id:record.id,scope,userId:f.actor,companyId:f.id,payload})
+ const result=await completeApprovedReturn(tx,{permissions:f.scope.permissions,id:record.id,scope,userId:f.actor,companyId:f.id,payload})
+ await completeApprovedReturn(tx,{permissions:f.scope.permissions,id:record.id,scope,userId:f.actor,companyId:f.id,payload})
  assert.equal(await tx.returnSettlement.count({where:{return_id:record.id}}),1)
  return result
 }

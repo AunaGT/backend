@@ -42,7 +42,7 @@ test('solo una devolución aprobada puede construir su liquidación', () => {
   }, {
     idempotency_key: 'finish-1',
     lines: [{ return_item_id: 11, received_qty: 2, disposition: 'SELLABLE', stock_location_id: 'loc-1' }],
-    settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
+    settlement: { payment_method_id: 1, cash_register_session_id: '00000000-0000-4000-8000-000000000001' },
   }), /aprobarse/i)
 })
 
@@ -50,7 +50,7 @@ test('restaura únicamente lo recibido y exige ubicación para stock físico', (
   const plan = buildCompletionPlan(approvedReturn, {
     idempotency_key: 'finish-1',
     lines: [{ return_item_id: 11, received_qty: 2, disposition: 'SELLABLE', stock_location_id: 'loc-1' }],
-    settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
+    settlement: { payment_method_id: 1, cash_register_session_id: '00000000-0000-4000-8000-000000000001' },
   })
   assert.deepEqual(plan.lines, [{
     return_item_id: 11,
@@ -71,7 +71,7 @@ test('desecho registra recepción sin inflar inventario', () => {
   const plan = buildCompletionPlan(approvedReturn, {
     idempotency_key: 'finish-3',
     lines: [{ return_item_id: 11, received_qty: 2, disposition: 'SCRAP' }],
-    settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
+    settlement: { payment_method_id: 1, cash_register_session_id: '00000000-0000-4000-8000-000000000001' },
   })
   assert.equal(plan.lines[0].restock_qty, 0)
   assert.equal(plan.lines[0].stock_location_id, null)
@@ -81,7 +81,7 @@ test('el neto guardado conserva el descuento y nunca reduce SaleItem.qty', () =>
   const plan = buildCompletionPlan(approvedReturn, {
     idempotency_key: 'finish-discount',
     lines: [{ return_item_id: 11, received_qty: 2, disposition: 'SCRAP' }],
-    settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
+    settlement: { payment_method_id: 1, cash_register_session_id: '00000000-0000-4000-8000-000000000001' },
   })
   assert.deepEqual(plan.saleAdjustment, {
     total_returned: 18,
@@ -137,6 +137,7 @@ test('aprobar conserva la solicitud original y no produce efectos físicos o fin
   }
 
   await approveReturn(tx, {
+    permissions: ['returns.approve'],
     companyId: 'A',
     id: row.id,
     scope: { branch_id: 'branch-1' },
@@ -183,7 +184,9 @@ function completionFixture({ failSettlement = false } = {}) {
   }
   const tx = {
     systemSetting: {findUnique:async()=>null},
-    $queryRaw: async () => [{ id: approvedReturn.id }],
+    $queryRaw: async sql => String(sql).includes('cash_register_sessions')
+      ? [{ id: '00000000-0000-4000-8000-000000000001', status: 'OPEN', opened_by_id: 'user-1', register_active: true, register_kind: 'PHYSICAL' }]
+      : [{ id: approvedReturn.id }],
     $executeRaw:async()=>0,
     companyPaymentMethod:{findFirst:async()=>({enabled:true,payment_method:{id:1,name:'Efectivo',is_credit:false}})},
     return: {
@@ -207,7 +210,7 @@ function completionFixture({ failSettlement = false } = {}) {
       },
     },
     stockLocation: { findMany: async () => [{ id: 'loc-1', pickable: true }] },
-    cashRegisterSession: { findFirst: async () => ({ id: 'cash-1', status: 'OPEN' }) },
+    cashRegisterSession: { findFirst: async () => ({ id: '00000000-0000-4000-8000-000000000001', status: 'OPEN' }) },
     paymentMethod: { findUnique: async () => ({ id: 1, name: 'Efectivo', is_credit: false }) },
     sale: {
       update: async ({ data }) => Object.assign(state.sale, data),
@@ -224,6 +227,7 @@ function completionFixture({ failSettlement = false } = {}) {
     ensureAlerts: async () => {},
   }
   const params = {
+    permissions: ['returns.complete'],
     companyId:'A',
     id: approvedReturn.id,
     scope: { branch_id: 'branch-1' },
@@ -231,7 +235,7 @@ function completionFixture({ failSettlement = false } = {}) {
     payload: {
       idempotency_key: 'finish-once',
       lines: [{ return_item_id: 11, received_qty: 2, disposition: 'SELLABLE', stock_location_id: 'loc-1' }],
-      settlement: { payment_method_id: 1, cash_register_session_id: 'cash-1' },
+      settlement: { payment_method_id: 1, cash_register_session_id: '00000000-0000-4000-8000-000000000001' },
     },
   }
   return { state, client, deps, params,tx }
@@ -242,6 +246,36 @@ test('new refund requires current availability and rolls back stock',async()=>{
   f.tx.companyPaymentMethod={findFirst:async()=>({enabled:false,payment_method:{id:1,is_credit:false,name:'Efectivo'}})}
   await assert.rejects(completeReturn(f.client,f.params,f.deps),e=>e.code==='PM_DISABLED')
   assert.equal(f.state.stock,0);assert.equal(f.state.settlements.length,0)
+})
+
+for (const mode of ['CREDIT_OFFSET', 'EXCHANGE_NONE', 'EXCHANGE_CREDIT']) test(`${mode} ignores a cached unusable turn and never assigns it to non-money effects`, async () => {
+  for (const turn of ['CLOSED', 'OTHER_USER', 'FOREIGN', 'INVALID']) {
+    const f = completionFixture(), read = f.tx.return.findFirst
+    f.state.sale.customer_contact_id = 'customer-1'
+    f.tx.$queryRaw = async sql => String(sql).includes('cash_register_sessions')
+      ? turn === 'FOREIGN' ? [] : [{ id: f.params.payload.settlement.cash_register_session_id, status: turn === 'CLOSED' ? 'CLOSED' : 'OPEN',
+        opened_by_id: turn === 'OTHER_USER' ? 'other' : 'user-1', register_active: true, register_kind: 'PHYSICAL' }]
+      : [{ id: f.params.id }]
+    if (turn === 'INVALID') f.params.payload.settlement.cash_register_session_id = 'not-a-turn'
+    f.tx.companyPaymentMethod.findFirst = async () => assert.fail('Non-money settlement must not resolve a money method')
+    if (mode === 'CREDIT_OFFSET') {
+      f.state.sale.payment_method = { id: 2, is_credit: true }
+      f.tx.sale.findUnique = async () => f.state.sale
+    } else {
+      f.tx.return.findFirst = async args => ({ ...await read(args), approved_resolution: 'EXCHANGE', replacement_items: [{ product_id: 'replacement', qty: 1 }] })
+      f.deps.createReplacementSale = async (_tx, input) => {
+        assert.equal(input.cashRegisterSessionId, null, 'No unvalidated cached session on replacement sale')
+        return { sale: { id: 'replacement-sale' }, difference: { direction: mode === 'EXCHANGE_NONE' ? 'NONE' : 'REFUND', amount: mode === 'EXCHANGE_NONE' ? 0 : 5 } }
+      }
+      f.params.payload.settlement.channel = mode === 'EXCHANGE_CREDIT' ? 'CUSTOMER_CREDIT' : 'ORIGINAL'
+      f.tx.customerPayment = { create: async ({ data }) => { assert.equal(data.kind, 'CREDIT_NOTE'); return data } }
+    }
+    const result = await completeReturn(f.client, f.params, f.deps)
+    assert.equal(result.status.name, 'Completada')
+    assert.equal(result._settlement.cash_register_session_id, null)
+    assert.equal(result._settlement.payment_method_id, null)
+    assert.equal(f.state.settlements.length, 1)
+  }
 })
 
 test('Aprobada se completa una sola vez con la misma clave', async () => {
@@ -276,7 +310,7 @@ test('approval rechecks the latest company policy after locking and before chang
     let changes=0
     const row={...approvedReturn,status:{name:'Pendiente'},requested_resolution:'REFUND_CASH'}
     const tx={$queryRaw:async()=>[],return:{findFirst:async()=>row,update:async()=>{changes++;return row}},systemSetting:{findUnique:async({where})=>{assert.equal(where.company_id_key.company_id,'A');return {value:JSON.stringify(policy)}}},returnStatus:{findFirst:async()=>({id:2})},returnItem:{update:async()=>{changes++}},stockLocation:{findMany:async()=>[]}}
-    await assert.rejects(approveReturn(tx,{id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409)
+    await assert.rejects(approveReturn(tx,{permissions:['returns.approve'],id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409)
     assert.equal(changes,0)
   }
 })
@@ -317,6 +351,6 @@ test('approval and completion decode the stored Guatemala request clock before e
   let writes=0
   const row={...approvedReturn,return_date:storedDate,status:{name:'Pendiente'},requested_resolution:'REFUND_CASH'}
   const tx={$queryRaw:async()=>[],return:{findFirst:async()=>row,update:async()=>{writes++;return row}},systemSetting:{findUnique:async()=>({value:JSON.stringify(policy)})},returnStatus:{findFirst:async()=>({id:2})},returnItem:{update:async()=>{writes++}},stockLocation:{findMany:async()=>[]}}
-  await assert.rejects(approveReturn(tx,{id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409 && /plazo/i.test(e.message))
+  await assert.rejects(approveReturn(tx,{permissions:['returns.approve'],id:row.id,companyId:'A',scope:{branch_id:'branch-1'},resolution:'REFUND_CASH',lines:[{return_item_id:11,disposition:'SCRAP'}]}),e=>e.status===409 && /plazo/i.test(e.message))
   assert.equal(writes,0)
 })

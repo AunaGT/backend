@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: a disposition cannot move principal to a different dispute asset than its withdrawal
+not ok 1 - a disposition cannot move principal to a different dispute asset than its withdrawal
+  ---
+  duration_ms: 2613.822461
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.accounting.pg.e2e.js:63:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'DISPUTE_ACCOUNTING_PROVENANCE'
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.accounting.pg.e2e.js:76:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2783.170841

@@ -201,14 +201,15 @@ test('el branding público se consulta para la empresa resuelta por el token', a
 })
 
 test('el cliente solo responde una cotización enviada, vigente y sin cambios concurrentes', async (t) => {
-  const tx = { commercialDocument: { updateMany: async ({ where, data }) => {
+  const current={id:'quote-a',branch_id:'branch-a',public_token:'secret-token',status:'SENT',valid_until:new Date('2099-01-01'),branch:{company_id:'company-a'}}
+  const tx = { $queryRaw:async()=>[{id:current.id}],commercialDocument: {findFirst:async()=>current, updateMany: async ({ where, data }) => {
     assert.equal(where.id, 'quote-a')
     assert.equal(where.status, 'SENT')
     assert.equal(data.status, 'ACCEPTED')
     return { count: 1 }
   } } }
   const Quotes = loadQuotesController(t, {
-    '../src/models/prisma': { prisma: { commercialDocument: { findFirst: async () => ({ id: 'quote-a', status: 'SENT', valid_until: new Date('2099-01-01'), branch: { company_id: 'company-a' } }) } }, prismaTransaction: { $transaction: async (fn) => fn(tx) } },
+    '../src/models/prisma': { prisma: { commercialDocument: { findFirst: async () => current } }, prismaTransaction: { $transaction: async (fn) => fn(tx) } },
     '../src/modules/quotes/access': { getCompanyModuleBlock: async () => null },
   })
   const res = responseStub()
@@ -295,6 +296,7 @@ test('crear una cotización consulta la vigencia de la empresa del request', asy
 test('reiniciar la vigencia al editar usa la empresa del request', async (t) => {
   let settingsQuery
   const existing = {
+    integration_revision: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     id: 'quote-a',
     status: 'DRAFT',
     valid_until: new Date('2026-10-01T00:00:00.000Z'),
@@ -306,6 +308,7 @@ test('reiniciar la vigencia al editar usa la empresa del request', async (t) => 
     commercialDocument: { findFirst: async () => existing },
   }
   const tx = {
+    $queryRaw: async () => [{id: existing.id}],
     product: {
       findMany: async () => [{ id: 'product-a', name: 'Producto', available_for_sale: true }],
     },
@@ -316,7 +319,7 @@ test('reiniciar la vigencia al editar usa la empresa del request', async (t) => 
       },
     },
     commercialDocumentLine: { deleteMany: async () => {} },
-    commercialDocument: { update: async () => ({ id: 'quote-a' }) },
+    commercialDocument: { findFirst:async()=>existing, update: async () => ({ id: 'quote-a' }) },
   }
   const prismaTransaction = { $transaction: async (callback) => callback(tx) }
   const Quotes = loadQuotesController(t, quoteControllerMocks(prisma, prismaTransaction))
@@ -342,15 +345,18 @@ test('enviar una cotización consulta el soft-hold de la empresa del request', a
         id: 'quote-a',
         status: 'DRAFT',
         branch_id: 'branch-a',
+        integration_revision: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         _count: { lines: 1 },
       }),
     },
   }
   const tx = {
+    $queryRaw: async () => [{id:'quote-a'}],
     commercialDocumentLine: {
       findMany: async () => [{ product_id: 'product-a', qty: 1 }],
     },
     commercialDocument: {
+      findFirst: async () => ({id:'quote-a',status:'DRAFT',branch_id:'branch-a',integration_revision:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}),
       findUnique: async () => ({ public_token: 'public-token' }),
       update: async () => ({ id: 'quote-a', status: 'SENT' }),
     },
@@ -467,6 +473,8 @@ test('la cotización pública evita tenant y las rutas privadas lo conservan', a
       'convertToOrder',
       'convertToSale',
       'previewServiceConditions',
+      'paymentTermsCapability',
+      'previewPackages',
     ].map((name) => [name, handler])),
   }
   delete require.cache[routesPath]

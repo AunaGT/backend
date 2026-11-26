@@ -19,9 +19,9 @@ const { getTimezone } = require('../../utils/getTimezone')
 const { creditDueDate } = require('../../services/commercialPayment')
 const { prisma, prismaTransaction } = require('../../models/prisma')
 const { resolvePaymentMethod } = require('../../services/paymentMethods/access')
-const { requireCompany, requireBranch } = require('../../middlewares/tenant')
+const { requireCompany, requireBranch, hasPerm } = require('../../middlewares/tenant')
 const { round2 } = require('../../services/accounting/logic')
-const {allocationForReceipt,allocationSelect}=require('./domain/paymentAllocations')
+const {allocationForReceipt,allocationSelect,hydrateReceiptAllocations}=require('./domain/paymentAllocations')
 const {
   ROUND_EPS,
   ReceivableError,
@@ -103,24 +103,35 @@ exports.invoices = async (req, res, next) => {
       }
       if (q.date_from && q.date_to && String(q.date_from) > String(q.date_to)) fail(400, 'Rango de fechas inválido')
     }
-    const totalItems = await prisma.sale.count({ where })
+    // Los cargos por contracargo comparten esta lista de documentos abiertos, ordenados por vencimiento.
+    // ponytail: mezcla en memoria hasta la página pedida; con miles de cargos abiertos conviene una consulta UNION paginada.
+    const saleCount = await prisma.sale.count({ where })
+    const firstPass = await require('./domain/chargeDocuments').chargeInvoices(prisma, companyId, { branchIds: branchIdsOf(req), state, customerId: q.customer_id ? String(q.customer_id) : null, term,
+      from: where.date?.gte ?? null, to: where.date?.lt ?? null, now, take: page * pageSize })
+    const totalItems = saleCount + firstPass.total
     const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
     const safePage = Math.min(page, totalPages)
+    // Sin cargos abiertos se pagina en la base como siempre; con cargos se mezclan hasta la página pedida.
+    const merged = firstPass.total > 0
     const sales = await prisma.sale.findMany({
-      where, skip: (safePage - 1) * pageSize, take: pageSize,
+      where, ...(merged ? { take: safePage * pageSize } : { skip: (safePage - 1) * pageSize, take: pageSize }),
       orderBy: [{ due_date: 'asc' }, { date: 'asc' }, { id: 'asc' }],
       select: { id: true, reference: true, date: true, due_date: true, adjusted_total: true,
         payment_status: true, customerContact: { select: { id: true, name: true } },
         paymentEntries: { select: { amount: true } } },
     })
-    res.json({ page: safePage, pageSize, totalItems, totalPages, items: sales.map((s) => ({
+    const saleRows = sales.map((s) => ({
       id: s.id, reference: s.reference, date: s.date, due_date: s.due_date,
       total: round2(number(s.adjusted_total)), abonado: round2(number(s.adjusted_total) - balanceOf(s)),
       saldo: balanceOf(s), payment_status: s.payment_status,
       customer_id: s.customerContact.id, customer_name: s.customerContact.name,
       vencida: Boolean(s.due_date && s.due_date < now),
       dias_vencida: s.due_date ? Math.max(0, Math.floor((now - s.due_date) / 86400000)) : 0,
-    })) })
+    }))
+    const due = row => new Date(row.due_date || row.date).getTime()
+    const items = merged ? [...saleRows, ...firstPass.items].sort((a, b) => due(a) - due(b) || new Date(a.date) - new Date(b.date) || String(a.id).localeCompare(String(b.id)))
+      .slice((safePage - 1) * pageSize, safePage * pageSize) : saleRows
+    res.json({ page: safePage, pageSize, totalItems, totalPages, items })
   } catch (e) { next(e) }
 }
 
@@ -137,6 +148,11 @@ exports.list = async (req, res, next) => {
     requireCompany(req)
     const ids = branchIdsOf(req)
     const branchIn = Prisma.join(ids.map((i) => Prisma.sql`${i}::uuid`))
+    const disputes=await require('../cash-closure/disputes.queries').disputesAvailable(prisma)
+    const held=disputes?Prisma.sql`coalesce((SELECT sum(held) FROM customer_receipt_restrictions WHERE payment_id=cp.id),0)`:Prisma.sql`0`
+    const retired=disputes?Prisma.sql`coalesce((SELECT sum(retired) FROM customer_receipt_restrictions WHERE payment_id=cp.id),0)`:Prisma.sql`0`
+    const chargeApplied=disputes?Prisma.sql`coalesce((SELECT sum(CASE action WHEN 'APPLY' THEN amount ELSE -amount END) FROM customer_dispute_charge_applications WHERE payment_id=cp.id),0)`:Prisma.sql`0`
+    const refunded=disputes?Prisma.sql`cash_dispute_receipt_refunded(cp.id)`:Prisma.sql`COALESCE(rf.refunded,0)`
     // El FULL OUTER JOIN existe para que un cliente que solo tiene anticipo (pagó
     // por adelantado y no debe nada) siga apareciendo: con un JOIN normal
     // desaparecería y ese dinero no se vería en ninguna pantalla.
@@ -165,8 +181,9 @@ exports.list = async (req, res, next) => {
       credito AS (
         SELECT
           cp.customer_id AS cid,
-          SUM(cp.amount - COALESCE(a.applied, 0) - COALESCE(pc.committed, 0) - COALESCE(rf.refunded, 0)) AS credito,
-          SUM(COALESCE(pc.committed,0)) AS comprometido
+          SUM(cp.amount - COALESCE(a.applied, 0) - COALESCE(pc.committed, 0) - ${refunded} - ${held} - ${retired} - ${chargeApplied}) AS credito,
+          SUM(COALESCE(pc.committed,0)) AS comprometido,
+          SUM(${held}) AS retenido
         FROM customer_payments cp
         LEFT JOIN (
           SELECT customer_payment_id, SUM(amount) AS applied
@@ -187,35 +204,52 @@ exports.list = async (req, res, next) => {
         d.vence_primero                     AS vence_primero,
         GREATEST(COALESCE(c.credito, 0), 0) AS credito
         ,COALESCE(c.comprometido,0) AS comprometido
+        ,COALESCE(c.retenido,0) AS retenido
       FROM deuda d
       FULL OUTER JOIN credito c ON c.cid = d.cid
       JOIN suppliers sup ON sup.id = COALESCE(d.cid, c.cid)
       WHERE COALESCE(d.saldo, 0) > ${ROUND_EPS}
          OR COALESCE(c.credito, 0) > ${ROUND_EPS}
          OR COALESCE(c.comprometido,0) > ${ROUND_EPS}
+         OR COALESCE(c.retenido,0) > ${ROUND_EPS}
       ORDER BY vencido DESC, saldo DESC
     `
+    // Los cargos por contracargo son otro documento por cobrar: suman al saldo y al vencido sin contarse como factura.
+    const Charges = require('./domain/chargeDocuments')
+    const [charges, recoveries] = await Promise.all([Charges.chargeTotalsByCustomer(prisma, ids), Charges.recoveryCreditTotalsByCustomer(prisma, ids)])
+    const missing = [...new Set([...charges.keys(), ...recoveries.keys()])].filter(id => !rows.some(r => r.customer_id === id))
+    if (missing.length) rows.push(...(await prisma.supplier.findMany({ where: { id: { in: missing }, company_id: req.companyId }, select: { id: true, name: true, credit_limit: true } }))
+      .map(c => ({ customer_id: c.id, customer_name: c.name, credit_limit: c.credit_limit, saldo: 0, vencido: 0, facturas: 0, vence_primero: null, credito: 0, comprometido: 0, retenido: 0 })))
     const items = rows.map((r) => {
-      const saldo = round2(number(r.saldo))
+      const cargo = charges.get(r.customer_id), recuperacion = recoveries.get(r.customer_id) || 0
+      const saldo = round2(number(r.saldo) + (cargo?.saldo || 0))
       const credito = round2(number(r.credito))
+      const firstCharge = cargo?.items.map(i => i.due_date).sort((a, b) => new Date(a) - new Date(b))[0]
       return {
         customer_id: r.customer_id,
         customer_name: r.customer_name,
         credito_comprometido:round2(number(r.comprometido)),
+        credito_en_revision:round2(number(r.retenido)),
         credit_limit: r.credit_limit == null ? null : round2(number(r.credit_limit)),
         saldo,
-        vencido: round2(number(r.vencido)),
+        vencido: round2(number(r.vencido) + (cargo?.vencido || 0)),
         facturas: Number(r.facturas),
-        vence_primero: r.vence_primero,
+        cargos: cargo?.cargos || 0,
+        cargos_vencidos: cargo?.vencidos || 0,
+        documentos: Number(r.facturas) + (cargo?.cargos || 0),
+        vence_primero: [r.vence_primero, firstCharge].filter(Boolean).sort((a, b) => new Date(a) - new Date(b))[0] ?? null,
         credito_disponible: credito,
-        saldo_neto: round2(Math.max(0, saldo - credito)),
+        credito_recuperacion: recuperacion,
+        saldo_neto: round2(Math.max(0, saldo - credito - recuperacion)),
       }
-    })
+    }).filter(i => i.saldo > ROUND_EPS || i.credito_disponible > ROUND_EPS || i.credito_comprometido > ROUND_EPS || i.credito_en_revision > ROUND_EPS || i.credito_recuperacion > ROUND_EPS)
+      .sort((a, b) => b.vencido - a.vencido || b.saldo - a.saldo)
     res.json({
       items,
       total_por_cobrar: round2(items.reduce((s, i) => s + i.saldo, 0)),
       total_vencido: round2(items.reduce((s, i) => s + i.vencido, 0)),
       total_credito: round2(items.reduce((s, i) => s + i.credito_disponible, 0)),
+      total_credito_en_revision: round2(items.reduce((s, i) => s + i.credito_en_revision, 0)),
     })
   } catch (e) {
     next(e)
@@ -266,6 +300,16 @@ exports.aging = async (req, res, next) => {
       totales[bucket] = round2(totales[bucket] + saldo)
     }
 
+    const ids = branchIdsOf(req), charges = await require('./domain/chargeDocuments').chargeTotalsByCustomer(prisma, ids, now)
+    if (charges.size) {
+      const names = new Map((await prisma.supplier.findMany({ where: { id: { in: [...charges.keys()] }, company_id: req.companyId }, select: { id: true, name: true } })).map(c => [c.id, c.name]))
+      for (const [cid, cargo] of charges) {
+        if (!porCliente.has(cid)) porCliente.set(cid, { customer_id: cid, customer_name: names.get(cid) || '', corriente: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90_mas: 0, total: 0 })
+        const fila = porCliente.get(cid)
+        // Un cargo vence al terminar su día: se mide desde el final de esa fecha.
+        for (const item of cargo.items) { const bucket = agingBucket(new Date(new Date(item.due_date).getTime() + 86399999), now); fila[bucket] = round2(fila[bucket] + item.balance); fila.total = round2(fila.total + item.balance); totales[bucket] = round2(totales[bucket] + item.balance) }
+      }
+    }
     const items = [...porCliente.values()].sort((a, b) => b.total - a.total)
     res.json({
       items,
@@ -299,9 +343,13 @@ exports.overdueCount = async (req, res, next) => {
       select: { adjusted_total: true, paymentEntries: { select: { amount: true } } },
     })
     const vencidas = open.filter((s) => balanceOf(s) > ROUND_EPS)
+    const charges = [...(await require('./domain/chargeDocuments').chargeTotalsByCustomer(prisma, branchIdsOf(req), now)).values()]
+    const cargos = charges.reduce((n, c) => n + c.vencidos, 0), montoCargos = round2(charges.reduce((s, c) => s + c.vencido, 0))
     res.json({
-      count: vencidas.length,
-      monto: round2(vencidas.reduce((s, v) => s + balanceOf(v), 0)),
+      count: vencidas.length + cargos,
+      monto: round2(vencidas.reduce((s, v) => s + balanceOf(v), 0) + montoCargos),
+      facturas: vencidas.length,
+      cargos,
     })
   } catch (e) {
     next(e)
@@ -365,6 +413,8 @@ exports.statement = async (req, res, next) => {
       prisma.customerPayment.count({ where: paymentsWhere }),
     ])
 
+    const Charges = require('./domain/chargeDocuments')
+    const [hydratedPayments, chargeStatement, chargeApplications] = await Promise.all([hydrateReceiptAllocations(prisma,payments), Charges.chargeStatementOf(prisma, customer.id, where), Charges.chargeApplicationsOfReceipts(prisma, payments.map(p => p.id))])
     const origins=await require('../appointments').linkedEngagementOrigins(prisma,req,{paymentIds:payments.map(p=>p.id)})
     const now = new Date()
     res.json({
@@ -397,8 +447,10 @@ exports.statement = async (req, res, next) => {
           ? Math.max(0, Math.floor((now - new Date(s.due_date)) / 86400000))
           : 0,
       })),
-      cobros: payments.map((p) => {
-        const aplicado = round2(p.applications.reduce((acc, a) => acc + number(a.amount), 0))
+      ...chargeStatement,
+      cobros: hydratedPayments.map((p) => {
+        const aCargos = chargeApplications.get(p.id) || []
+        const aplicado = round2(p.applications.reduce((acc, a) => acc + number(a.amount), 0) + aCargos.reduce((acc, a) => acc + a.amount, 0))
         const allocation=allocationForReceipt(p)
         return {
           id: p.id,
@@ -410,13 +462,13 @@ exports.statement = async (req, res, next) => {
           payment_method: p.payment_method,
           registered_by: p.registeredBy,
           aplicado,
-          no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),
+          no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),retenido:Number(allocation.held||0),saldo_cancelado:Number(allocation.retired||0),tiene_disputa:!!p.has_dispute,
           engagementId:origins.payments[p.id]||null,
-          aplicaciones: p.applications.map((a) => ({
+          aplicaciones: [...p.applications.map((a) => ({
             sale_id: a.sale?.id,
             reference: a.sale?.reference,
             amount: round2(number(a.amount)),
-          })),
+          })), ...aCargos],
         }
       }),
     })
@@ -503,28 +555,22 @@ exports.createPayment = async (req, res, next) => {
     if (reference.length > 255) reference = reference.slice(0, 255)
 
     const created = await prismaTransaction.$transaction(async (tx) => {
-      const method = await resolvePaymentMethod(tx,{companyId,methodId:body.payment_method_id,purpose:'RECEIPT'})
-      if (body.cash_register_session_id) {
-        const sess = await tx.cashRegisterSession.findFirst({
-          where: { id: String(body.cash_register_session_id), cashRegister: { branch_id: branchId } },
-          select: { id: true, status: true },
-        })
-        if (!sess) fail(400, 'Sesión de caja no encontrada en esta sucursal')
-        if (sess.status !== 'OPEN') fail(400, 'La sesión de caja ya está cerrada')
-      }
-      const { paymentId } = await applyPayment(tx, {
+      const requestAttempt = await require('./paymentAttempts').beginPaymentAttempt(tx, { companyId, branchId, userId: uid }, body)
+      const { paymentId } = requestAttempt?.paymentId ? { paymentId: requestAttempt.paymentId } : await applyPayment(tx, {
+        externalRequest: true, requestAttempt,
+        companyId, isAdmin: require('../users/roles/policy').isSystemAdmin(req.user?.role),
         customerId: customer.id,
         branchId,
         amount,
         paidAt,
-        paymentMethodId: method.id,
+        paymentMethodId: body.payment_method_id,
         cashRegisterSessionId: body.cash_register_session_id || null,
         reference: reference || null,
         notes: body.notes != null ? String(body.notes).trim() || null : null,
         userId: uid,
         manualApplications,
         allowAdvance: body.allow_advance === true,
-        hardware:method.settlement_kind==='CASH'?{origin:'RECEIVABLE_RECEIPT',scope:require('../config/hardware/drawer/events').requestHardwareScope(req)}:undefined,
+        hardware:{origin:'RECEIVABLE_RECEIPT',scope:require('../config/hardware/drawer/events').requestHardwareScope(req)},
       })
 
       return tx.customerPayment.findUnique({
@@ -544,8 +590,9 @@ exports.createPayment = async (req, res, next) => {
     }, PAYMENT_TX_OPTIONS)
 
     const resumen = await customerBalance(prisma, customer.id, { branch_id: branchId })
+    const aCargos = (await require('./domain/chargeDocuments').chargeApplicationsOfReceipts(prisma, [created.id])).get(created.id) || []
     const aplicado = round2(
-      created.applications.reduce((acc, a) => acc + number(a.amount), 0)
+      created.applications.reduce((acc, a) => acc + number(a.amount), 0) + aCargos.reduce((acc, a) => acc + a.amount, 0)
     )
     res.status(201).json({
       ...created,
@@ -555,7 +602,7 @@ exports.createPayment = async (req, res, next) => {
         reference: a.sale?.reference,
         payment_status: a.sale?.payment_status,
         amount: round2(number(a.amount)),
-      })),
+      })).concat(aCargos),
       aplicado,
       no_aplicado: round2(amount - aplicado),
       resumen,
@@ -575,6 +622,7 @@ exports.createPayment = async (req, res, next) => {
  */
 exports.deletePayment = async (req, res, next) => {
   try {
+    if (!hasPerm(req.user, 'receivables.cancel_payment')) fail(403, 'Necesitas permiso para anular cobros')
     const companyId = requireCompany(req)
     const uid = req.user?.sub
     if (!uid) fail(401, 'Usuario no autenticado')
@@ -582,7 +630,7 @@ exports.deletePayment = async (req, res, next) => {
     const payment = await prisma.customerPayment.findFirst({
       where: { id: req.params.id, branch: { company_id: companyId },...branchFilter(req) },
       select: {
-        id: true, customer_id: true, branch_id: true,
+        id: true, customer_id: true, branch_id: true, cash_register_session_id: true,
         applications: { select: { sale_id: true, sale:{select:{appointment_engagement:{select:{id:true}}}} } },
         commitments:{select:{id:true},take:1},allocation_events:{select:{id:true},take:1},refunds:{select:{id:true},take:1},
       },
@@ -598,7 +646,14 @@ exports.deletePayment = async (req, res, next) => {
 
     const saleIds = [...new Set(payment.applications.map((a) => a.sale_id))]
     await prisma.$transaction(async (tx) => {
+      if (payment.cash_register_session_id) {
+        const boundary = require('../../services/cashSessionBoundary')
+        const session = await boundary.lockScopedSession(tx, { companyId, branchId: payment.branch_id, userId: uid }, payment.cash_register_session_id)
+        if (session.money_event_version === 1 && await require('../cash-closure/eventStorage').findEvent(tx, 'CUSTOMER_PAYMENT', payment.id)) fail(409, 'Este cobro ya forma parte del registro de caja. Corrígelo con un reintegro trazable; no puede eliminarse.')
+        boundary.assertSessionOperation(session, { userId: uid, isAdmin: require('../users/roles/policy').isSystemAdmin(req.user?.role) })
+      }
       await lockCustomer(tx, payment.customer_id)
+      if (await require('./domain/chargeDocuments').receiptDisputeDependency(tx, payment.id)) throw Object.assign(new ReceivableError('Este cobro está vinculado a una disputa o a un cargo por contracargo. Corrígelo desde su expediente.', 409), { code: 'RECEIPT_DISPUTE_DEPENDENCY' })
       assertDeletable(await tx.customerPayment.findUnique({where:{id:payment.id},select:{applications:{select:{sale:{select:{appointment_engagement:{select:{id:true}}}}}},commitments:{select:{id:true},take:1},allocation_events:{select:{id:true},take:1},refunds:{select:{id:true},take:1}}}))
       await tx.customerPayment.delete({ where: { id: payment.id } })
       for (const saleId of saleIds) await syncSaleStatus(tx, saleId)
@@ -728,14 +783,15 @@ exports.applyCredit = async (req, res, next) => {
     if (!customer) fail(404, 'Cliente no encontrado')
 
     const applied = await prisma.$transaction(
-      (tx) => applyAvailableCredit(tx, customer.id, branchId),
+      (tx) => applyAvailableCredit(tx, customer.id, branchId, { companyId, userId: req.user?.sub }),
       PAYMENT_TX_OPTIONS
     )
 
     const resumen = await customerBalance(prisma, customer.id, { branch_id: branchId })
     res.json({
       aplicado: round2(applied.reduce((s, a) => s + a.amount, 0)),
-      ventas_afectadas: new Set(applied.map((a) => a.sale_id)).size,
+      ventas_afectadas: new Set(applied.filter((a) => a.sale_id).map((a) => a.sale_id)).size,
+      cargos_afectados: new Set(applied.filter((a) => a.documentId).map((a) => a.documentId)).size,
       resumen,
     })
   } catch (e) {
@@ -804,14 +860,16 @@ exports.receipt = async (req, res, next) => {
     })
     if (!payment) fail(404, 'Cobro no encontrado')
 
-    const allocation=allocationForReceipt(payment)
-    const aplicado = round2(payment.applications.reduce((s, a) => s + number(a.amount), 0))
+    const [hydratedPayment]=await hydrateReceiptAllocations(prisma,[payment])
+    const allocation=allocationForReceipt(hydratedPayment)
+    const aCargos = (await require('./domain/chargeDocuments').chargeApplicationsOfReceipts(prisma, [payment.id])).get(payment.id) || []
+    const aplicado = round2(payment.applications.reduce((s, a) => s + number(a.amount), 0) + aCargos.reduce((s, a) => s + a.amount, 0))
     const resumen = await customerBalance(prisma, payment.customer.id, branchFilter(req))
     res.json({
       ...payment,
       amount: round2(number(payment.amount)),
       aplicado,
-      no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),
+      no_aplicado:Number(allocation.available),comprometido:Number(allocation.committed),devuelto:Number(allocation.refunded),retenido:Number(allocation.held||0),saldo_cancelado:Number(allocation.retired||0),tiene_disputa:!!hydratedPayment.has_dispute,
       aplicaciones: payment.applications.map((a) => ({
         sale_id: a.sale?.id,
         reference: a.sale?.reference,
@@ -819,7 +877,7 @@ exports.receipt = async (req, res, next) => {
         due_date: a.sale?.due_date,
         total: round2(number(a.sale?.adjusted_total)),
         amount: round2(number(a.amount)),
-      })),
+      })).concat(aCargos),
       resumen,
     })
   } catch (e) {

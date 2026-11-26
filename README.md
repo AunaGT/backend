@@ -33,8 +33,9 @@ PORT=3000
 
 ## Scripts
 
-- dev: nodemon index.js
-- start: node index.js
+- dev: inicia juntos el servidor y el generador de PDF; nodemon reinicia ambos al cambiar el código.
+- start: node index.js (servidor web de producción).
+- documents:worker: generador de PDF independiente; en producción debe ejecutarse junto al servidor web con su propio supervisor.
 - seed: node prisma/seed.js
 - migrate / migrate:dev: crea y aplica migraciones únicamente en desarrollo
 - migrate:status: compara las migraciones locales con la base sin modificarla

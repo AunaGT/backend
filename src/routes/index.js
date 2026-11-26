@@ -36,6 +36,7 @@ router.get('/', (req, res) => {
   res.json({ ok: true, message: 'API up', release: getReleaseInfo() })
 })
 
+router.use('/public/customer-pages', require('../modules/config/customerPages/publicResources.routes').createRouter())
 router.use(quotesModule.routePrefix, quotesModule.loadPublicRouter())
 router.use(ordersModule.routePrefix, ordersModule.loadPublicRouter())
 

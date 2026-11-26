@@ -53,4 +53,4 @@ function lineTotal(qty, unitPrice) {
   return total.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
 }
 
-module.exports = { parseQuantity, convertQuantity, lineTotal }
+module.exports = { parseDecimal, parseQuantity, convertQuantity, lineTotal }

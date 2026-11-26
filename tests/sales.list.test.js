@@ -201,14 +201,14 @@ test('sale detail selects product images while preserving reference lookup and c
   let query, response
   prisma.sale.findFirst = async args => { query = args; return record }
   try {
-    await controller.getById({ params: { id: 'V-001' }, companyId: 'company-a' }, { json: data => { response = data } }, error => { throw error })
+    await controller.getById({ params: { id: 'V-001' }, companyId: 'company-a', user: { permissions: ['sales.view_detail'] } }, { json: data => { response = data } }, error => { throw error })
     assert.deepEqual(query.where, { reference: 'V-001', branch: { company_id: 'company-a' } })
     assert.equal(query.include.sale_items.include.product.select.image_url, true)
     assert.equal(query.include.sale_items.include.product.select.barcode, true)
     assert.equal(query.include.sale_dtes, true)
     assert.deepEqual(response, { ...record,line_count:0, customerContact: null,
       commercial:{state:'LEGACY',originEngagementId:null,version:1,confirmedAt:null,fiscalState:'DISABLED'},
-      capabilities:{confirm:false,requestInvoice:false,collect:false,editManual:false,confirmManual:false,cancelManual:false,reason:'Selecciona la sucursal de la venta para realizar acciones'},
+      capabilities:{viewDocument:false,confirm:false,requestInvoice:false,collect:false,editManual:false,confirmManual:false,cancelManual:false,reason:'Selecciona la sucursal de la venta para realizar acciones'},
     })
   } finally {
     prisma.sale.findFirst = previousFind
@@ -228,7 +228,7 @@ test('sale detail exposes current contact data only with matching company, custo
     ]) {
       let response
       prisma.sale.findFirst = async () => ({ id: 'sale-qa', customer: 'Historical name', customer_nit: '123', customerContact: linked })
-      await controller.getById({ params: { id: 'V-QA' }, companyId: 'company-a', user: { permissions } }, { json: data => { response = data } }, error => { throw error })
+      await controller.getById({ params: { id: 'V-QA' }, companyId: 'company-a', user: { permissions: ['sales.view_detail', ...permissions] } }, { json: data => { response = data } }, error => { throw error })
       assert.equal(response.customer, 'Historical name')
       assert.equal(response.customer_nit, '123')
       assert.deepEqual(response.customerContact, allowed ? { id: 'contact-qa', name: 'Current name', phone: '5555', image_url: null } : null)

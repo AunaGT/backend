@@ -15,6 +15,26 @@ test('quotation creation persists incomplete selection as draft with no posting 
   assert.equal(f.document().status,'DRAFT');assert.equal(f.document().package_groups[0].state,'INCOMPLETE')
   assert.equal(f.document().total,'0');assert.deepEqual(f.document().lines,[]);assert.equal(f.stockWrites(),0)
 }))
+test('published package cannot be newly quoted or previewed in a different company currency',async()=>{
+  for(const method of ['create','previewPackages'])await quoteHarness(async f=>{
+    f.state.settings.currency_code='USD'
+    const out=await f.invoke(method,{items:[],packages:[f.selection()]})
+    assert.equal(out.error?.code,'CURRENCY_MISMATCH',method)
+    assert.equal(f.document(),null);assert.equal(f.stockWrites(),0)
+  })
+})
+test('currency change blocks closing and conversion of a saved agreement without rewriting its amounts',async()=>{
+  for(const [method,body,status]of [['updateStatus',{status:'SENT'},'DRAFT'],['updateStatus',{status:'ACCEPTED'},'SENT'],['getShareLink',{},'DRAFT'],['respondPublic',{status:'ACCEPTED'},'SENT'],['convertToOrder',{},'ACCEPTED']]){
+    await quoteHarness(async f=>{
+      await existing(f,{complete:true,status});const before=structuredClone(f.document())
+      f.state.settings.currency_code='USD'
+      const out=await f.invoke(method,body)
+      assert.equal(out.error?.code,'CURRENCY_MISMATCH',method)
+      assert.deepEqual(f.document(),before);assert.equal(f.stockWrites(),0)
+      await assert.rejects(()=>require('../src/modules/quotes').loadQuoteSource(f.db,{...f.scope,isAdmin:true},id(400)),{code:'CURRENCY_MISMATCH'})
+    })
+  }
+})
 test('old item-only clients cannot silently remove internally agreed package groups',async()=>quoteHarness(async f=>{
   await existing(f,{complete:true});const before=structuredClone(f.document())
   const {error}=await f.invoke('update',{items:[{product_id:id(21),qty:'1'}]})

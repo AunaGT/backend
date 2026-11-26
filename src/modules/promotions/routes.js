@@ -18,10 +18,11 @@ const router = express.Router()
 const controller = require('./controller')
 const { Auth, hasPermission } = require('../../middlewares/autenticacion')
 
-// Lecturas y validación de códigos: cualquier usuario autenticado (el POS las necesita).
-// Mutaciones: solo quien gestiona promociones.
+// Administrative reads are separate from the POS's cart validation.
 router.use(Auth)
 const canManage = hasPermission('promotions.manage')
+const canRead = hasPermission('promotions.view')
+const canApply = hasPermission('sales.create', 'promotions.view')
 const multer = require('multer')
 const couponAssets = require('./couponAssets.controller')
 const couponUpload = multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024,files:1,fields:0,parts:2}})
@@ -55,7 +56,7 @@ router.delete('/coupon-assets/:assetId',canManage,couponAssets.remove)
  *           type: integer
  *         description: Filter by promotion type
  */
-router.get('/', controller.list)
+router.get('/', canRead, controller.list)
 
 /**
  * @swagger
@@ -64,7 +65,7 @@ router.get('/', controller.list)
  *     summary: Get all promotion types
  *     tags: [Promotions]
  */
-router.get('/types', controller.getTypes)
+router.get('/types', canRead, controller.getTypes)
 
 /**
  * @swagger
@@ -93,7 +94,7 @@ router.post('/types/seed', canManage, controller.seedTypes)
  *               items:
  *                 type: array
  */
-router.post('/validate', controller.validateCode)
+router.post('/validate', canApply, controller.validateCode)
 
 /**
  * @swagger
@@ -102,7 +103,7 @@ router.post('/validate', controller.validateCode)
  *     summary: Calculate discount for a promotion and cart
  *     tags: [Promotions]
  */
-router.post('/calculate', controller.calculateDiscount)
+router.post('/calculate', canApply, controller.calculateDiscount)
 
 /**
  * @swagger
@@ -111,7 +112,7 @@ router.post('/calculate', controller.calculateDiscount)
  *     summary: Get promotion by code
  *     tags: [Promotions]
  */
-router.get('/code/:code', controller.getByCode)
+router.get('/code/:code', canRead, controller.getByCode)
 
 /**
  * @swagger
@@ -120,7 +121,7 @@ router.get('/code/:code', controller.getByCode)
  *     summary: Get promotion by ID
  *     tags: [Promotions]
  */
-router.get('/:id', controller.getById)
+router.get('/:id', canRead, controller.getById)
 
 /**
  * @swagger

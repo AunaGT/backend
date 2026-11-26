@@ -16,7 +16,9 @@ function quantityTotal(rows,key,unitKey='unit'){
  return rows.every(row=>typeof row[key]==='number')?total.toNumber():total.toFixed()
 }
 async function attachBaseUnits(db,companyId,rows,idKey='id'){
- if(!rows.length||!await require('../inventory/units').unitsEnabled(db,companyId))return rows
+ if(!rows.length)return rows
+ // Unidades desactivadas: el reporte usa la unidad heredada; la unidad base asignada por omisión no se exige.
+ if(!await require('../inventory/units').unitsEnabled(db,companyId)){for(const row of rows)if(!row.base_unit)row.base_unit_id=null;return rows}
  const products=await db.product.findMany({where:{company_id:companyId,id:{in:[...new Set(rows.map(r=>r[idKey]))]}},select:{id:true,base_unit_id:true,quantity_decimals:true,base_unit:{select:{id:true,code:true,label:true}}}}),byId=new Map(products.map(p=>[p.id,p]))
  for(const row of rows){const p=byId.get(row[idKey]);if(!p)throw Object.assign(Error('Producto fuera del alcance del reporte'),{status:409});Object.assign(row,{base_unit_id:p.base_unit_id,base_unit:p.base_unit,quantity_decimals:p.quantity_decimals});baseUnit(row)}
  return rows

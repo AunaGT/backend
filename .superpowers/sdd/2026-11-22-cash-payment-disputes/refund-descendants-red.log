@@ -1,0 +1,45 @@
+TAP version 13
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 1 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 2492.83803
+  type: 'test'
+  ...
+# Subtest: database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+ok 2 - database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+  ---
+  duration_ms: 2431.514138
+  type: 'test'
+  ...
+# Subtest: attributing a confirmed engagement refund does not count its existing money source twice
+ok 3 - attributing a confirmed engagement refund does not count its existing money source twice
+  ---
+  duration_ms: 2347.924751
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+not ok 4 - a merchant-funded refund consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 5623.40641
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.refunds.pg.e2e.js:70:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.refunds.pg.e2e.js:95:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13089.268116

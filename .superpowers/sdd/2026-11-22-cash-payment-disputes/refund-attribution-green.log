@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 1 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 2703.040928
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6741.506148

@@ -50,10 +50,9 @@ for(const purpose of ['receipt','refund'])test(`Agenda ${purpose} rejects disabl
 test('initial payment cannot apply money with disabled company method',async()=>{
   let writes=0
   const legacy={id:7,name:'Tarjeta',company_id:null,is_credit:false,settlement_kind:'BANK'}
-  const tx={$executeRaw:async()=>0,paymentMethod:{findUnique:async()=>legacy},companyPaymentMethod:{findFirst:async()=>({enabled:false,payment_method:legacy})}}
-  await withMocks({[require.resolve('../src/modules/receivables')]:{applyPayment:async()=>{writes++}}},require.resolve('../src/services/commercialPayment'),async s=>{
-    await assert.rejects(s.recordInitialPayment(tx,{companyId:'A',user:{sub:'U'},body:{initial_payment:{payment_method_id:7}}},{id:'V',date:new Date(),branch_id:'B',customer_contact_id:'C'},10,'CS'),e=>e.code==='PM_DISABLED')
-  });assert.equal(writes,0)
+  const tx={$executeRaw:async()=>0,paymentMethod:{findUnique:async()=>legacy},companyPaymentMethod:{findFirst:async()=>({enabled:false,payment_method:legacy})},customerPayment:{create:async()=>{writes++}}}
+  await assert.rejects(require('../src/services/commercialPayment').recordInitialPayment(tx,{companyId:'A',user:{sub:'U'},body:{initial_payment:{payment_method_id:7}}},{id:'V',date:new Date(),branch_id:'B',customer_contact_id:'C'},10,'00000000-0000-4000-8000-000000000001'),e=>e.code==='PM_DISABLED')
+  assert.equal(writes,0)
 })
 test('receivable controller resolves availability on money transaction, never outside',async()=>{
   let writes=0,inTx=false

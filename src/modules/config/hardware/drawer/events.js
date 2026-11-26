@@ -1,7 +1,7 @@
 const {has,operationScope,resolveRoute}=require('../operations')
 const {readPolicy,drawerEligibility,ORIGINS}=require('./policy')
 const {hasPerm}=require('../../../../middlewares/tenant')
-const permissionFor={POS_SALE:['sales.create'],INITIAL_CREDIT_RECEIPT:['sales.create'],RECEIVABLE_RECEIPT:['receivables.manage'],AGENDA_RECEIPT:['appointments.collect','receivables.manage'],CASH_RETURN:['returns.manage']}
+const permissionFor={POS_SALE:['sales.create'],INITIAL_CREDIT_RECEIPT:['sales.create'],RECEIVABLE_RECEIPT:['receivables.manage'],AGENDA_RECEIPT:['appointments.collect','receivables.manage'],CASH_RETURN:['returns.complete']}
 function canUseOrigin(scope,origin){return !!permissionFor[origin]&&permissionFor[origin].every(p=>has(scope,p))}
 function requestHardwareScope(req){return{companyId:req.companyId,branchId:req.branchId,actorId:req.user?.sub,permissions:req.user?.permissions||[],isAdmin:hasPerm({...req.user,permissions:[]},'hardware.view')}}
 async function databaseNow(tx){const rows=await tx.$queryRaw`SELECT clock_timestamp() AS now`;return new Date(rows[0].now)}

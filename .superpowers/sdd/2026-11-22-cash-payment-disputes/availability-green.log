@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: creating a case reserves only unallocated receipt funds and replay creates no debt or money
+ok 1 - creating a case reserves only unallocated receipt funds and replay creates no debt or money
+  ---
+  duration_ms: 2112.346845
+  type: 'test'
+  ...
+# Subtest: concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+ok 2 - concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+  ---
+  duration_ms: 1993.00702
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4239.702053

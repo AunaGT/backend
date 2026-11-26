@@ -73,9 +73,23 @@ async function controllerPdf(moduleName, prisma, query, method = 'generateReport
 }
 
 function pdfText(buffer) {
-  const streams = [...buffer.toString('latin1').matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)].map(match => { try { return require('node:zlib').inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1') } catch { return match[1] } }).join('\n')
+  // PDFKit writes LF delimiters. A preceding CR can be a compressed checksum byte,
+  // not part of the delimiter; stripping it silently loses the entire page.
+  const streams = [...buffer.toString('latin1').matchAll(/stream\n([\s\S]*?)\nendstream/g)].map(match => { try { return require('node:zlib').inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1') } catch { return match[1] } }).join('\n')
   return [...streams.matchAll(/<([a-f\d]+)>/gi)].map(match => Buffer.from(match[1], 'hex').toString('latin1')).join('')
 }
+
+test('PDF text extraction preserves a compressed checksum ending in carriage return',()=>{
+  const {deflateSync}=require('node:zlib')
+  let compressed
+  for(let i=0;i<256;i++){
+    const candidate=deflateSync(Buffer.from('<50e167696e6120312064652031>\n%'+ 'a'.repeat(i),'latin1'))
+    if(candidate.at(-1)===13){compressed=candidate;break}
+  }
+  assert.ok(compressed,'fixture must end with the binary byte 0x0d')
+  const buffer=Buffer.concat([Buffer.from('stream\n'),compressed,Buffer.from('\nendstream')])
+  assert.equal(pdfText(buffer),'Página 1 de 1')
+})
 
 test('inventariado PDF conserva todas las líneas y nombres completos en páginas numeradas', async () => {
   let sessionWhere, linesWhere

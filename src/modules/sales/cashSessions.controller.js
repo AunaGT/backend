@@ -9,6 +9,7 @@
  */
 
 const { prisma } = require('../../models/prisma')
+const { lockScopedSession, lockScopedRegister } = require('../../services/cashSessionBoundary')
 
 const number = (v) => {
   if (v === null || v === undefined) return 0
@@ -17,7 +18,7 @@ const number = (v) => {
 }
 
 function isAdminUser (user) {
-  return String(user?.role?.name || user?.role_name || '').toLowerCase() === 'admin'
+  return require('../users/roles/policy').isSystemAdmin(user?.role)
 }
 
 function getPerms (req) {
@@ -29,7 +30,7 @@ function checkCanReadCashSession (req) {
   if (!user) return { allowed: false, status: 401, message: 'No autenticado' }
   if (isAdminUser(user)) return { allowed: true }
   const perms = getPerms(req)
-  const has =
+  const has = require('../../services/cashSharedSessions').operationPermissions.filter(p => p !== 'returns.complete').some(p => perms.includes(p)) ||
     perms.includes('sales.create') ||
     perms.includes('cashclosure.view') ||
     perms.includes('cashclosure.create') ||
@@ -80,6 +81,8 @@ async function resolveRegister (client, explicitId, userId, branchId) {
     return client.cashRegister.findFirst({ where: { id: String(explicitId), active: true, branch_id: branchId } })
   }
   if (userId) {
+    const current = await require('../../services/cashSharedSessions').currentRegister(client, String(userId), branchId)
+    if (current) return current
     // Antes de caer en "mi caja asignada" o la de la sucursal, buscar dónde
     // el usuario tiene trabajo real pendiente (turno abierto, o cerrado sin
     // arqueo todavía) — así una caja ad hoc (no asignada, no default) se
@@ -88,7 +91,8 @@ async function resolveRegister (client, explicitId, userId, branchId) {
       where: {
         opened_by_id: String(userId),
         cashRegister: { branch_id: branchId, active: true },
-        OR: [{ status: 'OPEN' }, { status: 'CLOSED', cash_closure_id: null }],
+        // 3C: un turno con arqueo en reconteo vuelve a ser trabajo pendiente de su cajero.
+        OR: [{ status: 'OPEN' }, { status: 'CLOSED', cash_closure_id: null }, { status: 'CLOSED', cashClosure: { status: 'Reconteo' } }],
       },
       orderBy: [{ opened_at: 'desc' }],
       select: {
@@ -131,6 +135,17 @@ function checkCanManageRegisters (req) {
 exports.listRegisters = async (req, res, next) => {
   try {
     const perm = checkCanReadCashSession(req)
+    const { hasPerm } = require('../../middlewares/tenant')
+    const metadata = hasPerm(req.user, 'cash.registers.view') || hasPerm(req.user, 'cash.registers.manage') || hasPerm(req.user, 'settings.manage')
+    if (metadata && (String(req.query.include_inactive || '') === '1' || !perm.allowed)) {
+      const branchId = require('../../middlewares/tenant').requireBranch(req)
+      const rows = await prisma.cashRegister.findMany({ where: { branch_id: branchId, branch: { company_id: req.companyId }, ...(String(req.query.include_inactive || '') === '1' ? {} : { active: true }) }, orderBy: [{ is_default: 'desc' }, { name: 'asc' }] })
+      const available = await require('./cashRegisters.configuration').registerConfigurationAvailable(prisma)
+      const details = available && rows.length ? await prisma.$queryRaw`SELECT r.id,r.access_control_version,(SELECT count(*)::int FROM cash_register_access a JOIN user_companies uc ON uc.user_id=a.user_id AND uc.company_id=a.company_id AND uc.status='ACTIVE' JOIN user_branches ub ON ub.user_id=a.user_id AND ub.branch_id=a.branch_id WHERE a.register_id=r.id AND a.active) AS authorized_user_count FROM cash_registers r WHERE r.id=ANY(${rows.map(r => r.id)}::uuid[])` : []
+      const hydrated = await require('../../services/cashMetadata').hydrateCashMetadata(prisma, rows, 'registers')
+      res.set?.('Cache-Control', 'private, no-store')
+      return res.json(hydrated.map(r => ({ ...r, ...details.find(d => d.id === r.id) })))
+    }
     if (!perm.allowed) {
       return res.status(perm.status || 403).json({ message: perm.message || 'No autorizado' })
     }
@@ -156,8 +171,15 @@ exports.listRegisters = async (req, res, next) => {
         },
       }
     })
-    res.json(rows.map(({ sessions, ...r }) => ({
+    const hydrated = await require('../../services/cashMetadata').hydrateCashMetadata(prisma, rows, 'registers')
+    const accessAvailable = await require('./cashRegisters.configuration').registerConfigurationAvailable(prisma)
+    const access = accessAvailable && rows.length ? await prisma.$queryRaw`SELECT r.id,r.access_control_version,
+      EXISTS(SELECT 1 FROM cash_register_access a JOIN user_companies uc ON uc.user_id=a.user_id AND uc.company_id=a.company_id AND uc.status='ACTIVE' JOIN user_branches ub ON ub.user_id=a.user_id AND ub.branch_id=a.branch_id WHERE a.register_id=r.id AND a.user_id=${req.user.sub}::uuid AND a.active) AS can_open
+      FROM cash_registers r WHERE r.id=ANY(${rows.map(r => r.id)}::uuid[])` : []
+    res.set?.('Cache-Control', 'private, no-store')
+    const result = hydrated.map(({ sessions, ...r }) => ({
       ...r,
+      ...access.find(a => a.id === r.id),
       has_open_session: sessions.length > 0,
       open_session: sessions[0]
         ? {
@@ -168,7 +190,13 @@ exports.listRegisters = async (req, res, next) => {
             opened_by_name: sessions[0].openedBy?.name ?? null,
           }
         : null,
-    })))
+    }))
+    for (const r of result) if (r.open_session && r.operation_mode === 'SHARED' && r.money_event_version === 1) {
+      const effective = await require('../../services/cashSharedSessions').view(prisma,{companyId:req.companyId,branchId:require('../../middlewares/tenant').requireBranch(req),userId:req.user.sub},
+        { id:r.open_session.id,cash_register_id:r.id,status:'OPEN',operation_mode:'SHARED',money_event_version:1 })
+      r.open_session.can_operate = effective.can_operate === true
+    }
+    res.json(result)
   } catch (e) {
     next(e)
   }
@@ -180,34 +208,11 @@ exports.listRegisters = async (req, res, next) => {
  */
 exports.createRegister = async (req, res, next) => {
   try {
-    const perm = checkCanManageRegisters(req)
-    if (!perm.allowed) {
-      return res.status(perm.status || 403).json({ message: perm.message || 'No autorizado' })
-    }
-
-    const name = String(req.body.name || '').trim().slice(0, 120)
-    if (!name) return res.status(400).json({ message: 'El nombre es requerido' })
-
-    let code = String(req.body.code || '').trim().slice(0, 40)
-    if (!code) {
-      code = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'CAJA'
-    }
-
-    const { requireBranch } = require('../../middlewares/tenant')
-    const branchId = requireBranch(req)
-    const existing = await prisma.cashRegister.findFirst({ where: { code, branch_id: branchId } })
-    if (existing) {
-      return res.status(409).json({ message: `Ya existe una caja con el código "${code}" en la sucursal` })
-    }
-
-    const created = await prisma.cashRegister.create({
-      data: { name, code, is_default: false, active: true, branch_id: branchId }
-    })
-    res.status(201).json(created)
-  } catch (e) {
-    next(e)
-  }
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'legacy-manage')
+    const result = await prisma.$transaction(tx => require('./cashRegisters.configuration').legacyRegisterCommand(tx, scope, 'create', req.params?.id, req.body))
+    res.set?.('Cache-Control', 'private, no-store')
+    res.status(201).json(result)
+  } catch (error) { next(error) }
 }
 
 /**
@@ -217,57 +222,11 @@ exports.createRegister = async (req, res, next) => {
  */
 exports.setRegisterUsers = async (req, res, next) => {
   try {
-    const perm = checkCanManageRegisters(req)
-    if (!perm.allowed) {
-      return res.status(perm.status || 403).json({ message: perm.message || 'No autorizado' })
-    }
-
-    const { id } = req.params
-    const register = await prisma.cashRegister.findFirst({ where: { id, branch: { company_id: req.companyId } } })
-    if (!register) return res.status(404).json({ message: 'Caja no encontrada' })
-    if (!register.active) {
-      return res.status(400).json({ message: 'No se pueden asignar usuarios a una caja inactiva' })
-    }
-
-    const rawIds = Array.isArray(req.body.user_ids) ? req.body.user_ids : null
-    if (!rawIds) return res.status(400).json({ message: 'user_ids debe ser un arreglo' })
-    const userIds = [...new Set(rawIds.map(String))]
-
-    if (userIds.length > 0) {
-      const found = await prisma.user.count({
-        where: { id: { in: userIds }, user_branches: { some: { branch_id: register.branch_id } } },
-      })
-      if (found !== userIds.length) {
-        return res.status(400).json({ message: 'Uno o más usuarios no existen o no pertenecen a la sucursal' })
-      }
-    }
-
-    await prisma.$transaction([
-      // Quitar la caja a quienes la tenían y ya no están en la lista
-      prisma.user.updateMany({
-        where: {
-          cash_register_id: id,
-          ...(userIds.length > 0 ? { id: { notIn: userIds } } : {})
-        },
-        data: { cash_register_id: null }
-      }),
-      ...(userIds.length > 0
-        ? [prisma.user.updateMany({
-            where: { id: { in: userIds } },
-            data: { cash_register_id: id }
-          })]
-        : [])
-    ])
-
-    const assigned = await prisma.user.findMany({
-      where: { cash_register_id: id },
-      select: { id: true, name: true },
-      orderBy: { name: 'asc' }
-    })
-    res.json({ ...register, assigned_users: assigned })
-  } catch (e) {
-    next(e)
-  }
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'legacy-manage')
+    const result = await prisma.$transaction(tx => require('./cashRegisters.configuration').legacyRegisterCommand(tx, scope, 'users', req.params?.id, req.body))
+    res.set?.('Cache-Control', 'private, no-store')
+    res.status(200).json(result)
+  } catch (error) { next(error) }
 }
 
 /**
@@ -276,71 +235,36 @@ exports.setRegisterUsers = async (req, res, next) => {
  */
 exports.updateRegister = async (req, res, next) => {
   try {
-    const perm = checkCanManageRegisters(req)
-    if (!perm.allowed) {
-      return res.status(perm.status || 403).json({ message: perm.message || 'No autorizado' })
-    }
-
-    const { id } = req.params
-    const register = await prisma.cashRegister.findFirst({ where: { id, branch: { company_id: req.companyId } } })
-    if (!register) return res.status(404).json({ message: 'Caja no encontrada' })
-
-    const data = {}
-    if (req.body.name !== undefined) {
-      const name = String(req.body.name || '').trim().slice(0, 120)
-      if (!name) return res.status(400).json({ message: 'El nombre no puede estar vacío' })
-      data.name = name
-    }
-    if (req.body.active !== undefined) {
-      const active = Boolean(req.body.active)
-      if (!active) {
-        if (register.is_default) {
-          return res.status(400).json({ message: 'No se puede desactivar la caja predeterminada. Marque otra como predeterminada primero.' })
-        }
-        const openSession = await prisma.cashRegisterSession.findFirst({
-          where: { cash_register_id: id, status: 'OPEN' }
-        })
-        if (openSession) {
-          return res.status(409).json({ message: 'La caja tiene un turno abierto. Ciérrelo antes de desactivarla.' })
-        }
-      }
-      data.active = active
-    }
-
-    const wantsDefault = req.body.is_default === true && !register.is_default
-    const updated = await prisma.$transaction(async (tx) => {
-      if (wantsDefault) {
-        if (data.active === false) throw Object.assign(new Error('BAD_DEFAULT'), { status: 400 })
-        if (!register.active && data.active !== true) {
-          throw Object.assign(new Error('BAD_DEFAULT'), { status: 400 })
-        }
-        // La caja predeterminada es por sucursal, no global.
-        await tx.cashRegister.updateMany({
-          where: { is_default: true, branch_id: register.branch_id },
-          data: { is_default: false },
-        })
-        data.is_default = true
-      }
-      return tx.cashRegister.update({ where: { id }, data })
-    })
-    res.json(updated)
-  } catch (e) {
-    if (e.message === 'BAD_DEFAULT') {
-      return res.status(400).json({ message: 'La caja predeterminada debe estar activa' })
-    }
-    next(e)
-  }
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'legacy-manage')
+    const result = await prisma.$transaction(tx => require('./cashRegisters.configuration').legacyRegisterCommand(tx, scope, 'update', req.params?.id, req.body))
+    res.set?.('Cache-Control', 'private, no-store')
+    res.status(200).json(result)
+  } catch (error) { next(error) }
 }
 
 /**
  * GET /api/cash-sessions/current
  * Query: cash_register_id (opcional; si no, usa la caja marcada is_default)
  */
+// Solo un arqueo en reconteo deja un turno cerrado con arqueo como pendiente (ver la consulta de closable_session).
+const closableView = session => session ? { ...session, recount: !!session.cash_closure_id } : null
 exports.getCurrent = async (req, res, next) => {
   try {
     const perm = checkCanReadCashSession(req)
-    if (!perm.allowed) {
+    const settlementOnly = !perm.allowed && require('../../middlewares/tenant').hasPerm(req.user, 'returns.complete')
+    if (!perm.allowed && !settlementOnly) {
       return res.status(perm.status || 403).json({ message: perm.message || 'No autorizado' })
+    }
+
+    if (req.query.cash_register_session_id) {
+      const branchId = require('../../middlewares/tenant').requireBranch(req)
+      const row = await prisma.cashRegisterSession.findFirst({ where: { id: String(req.query.cash_register_session_id), cashRegister: { branch_id: branchId, branch: { company_id: req.companyId } } }, include: sessionInclude })
+      if (!row) return res.status(404).json({ message: 'Turno no encontrado' })
+      const [s] = await require('../../services/cashMetadata').hydrateCashMetadata(prisma, [row])
+      const canDeclare = s.opened_by_id === req.user.sub || s.operation_mode === 'SHARED' && (isAdminUser(req.user) || getPerms(req).some(p => ['cashclosure.create','cashclosure.create_day'].includes(p)))
+      if (!canDeclare || settlementOnly) return res.status(404).json({ message: 'Turno no encontrado' })
+      res.set?.('Cache-Control', 'private, no-store')
+      return res.json({ register: s.cashRegister, session: s.status === 'OPEN' ? s : null, closable_session: s.status === 'CLOSED' ? { ...s, recount: s.cashClosure?.status === 'Reconteo', can_declare: true } : null })
     }
 
     const registerId = req.query.cash_register_id || req.query.cashRegisterId || null
@@ -348,6 +272,17 @@ exports.getCurrent = async (req, res, next) => {
 
     if (!register) {
       return res.status(503).json({ message: 'No hay caja configurada. Ejecute migraciones y seed.' })
+    }
+
+    if (settlementOnly) {
+      let session = await prisma.cashRegisterSession.findFirst({ where: { cash_register_id: register.id, opened_by_id: req.user.sub, status: 'OPEN' }, select: { id:true,status:true } })
+      const shared = require('../../services/cashSharedSessions')
+      if (!session && await shared.available(prisma)) {
+        const [s] = await prisma.$queryRaw`SELECT id,cash_register_id,status,operation_mode,money_event_version FROM cash_register_sessions WHERE cash_register_id=${register.id}::uuid AND status='OPEN' AND operation_mode='SHARED' AND money_event_version=1`
+        if (s && (await shared.view(prisma,{companyId:req.companyId,branchId:register.branch_id,userId:req.user.sub},s)).can_operate) session={id:s.id,status:s.status}
+      }
+      res.set?.('Cache-Control', 'private, no-store')
+      return res.json({ register: { id: register.id, name: register.name, code: register.code }, session, closable_session: null })
     }
 
     const session = await prisma.cashRegisterSession.findFirst({
@@ -363,14 +298,18 @@ exports.getCurrent = async (req, res, next) => {
           cash_register_id: register.id,
           opened_by_id: String(uid),
           status: 'CLOSED',
-          cash_closure_id: null
+          OR: [{ cash_closure_id: null }, { cashClosure: { status: 'Reconteo' } }]
         },
         orderBy: [{ closed_at: 'desc' }, { opened_at: 'desc' }],
         include: sessionInclude
       })
     }
 
-    res.json({ register, session, closable_session })
+    const hydratedSessions = await require('../../services/cashMetadata').hydrateCashMetadata(prisma, [session, closable_session].filter(Boolean))
+    const hydratedRegisters = await require('../../services/cashMetadata').hydrateCashMetadata(prisma, [register], 'registers')
+    const visibleSession = await require('../../services/cashSharedSessions').view(prisma, { companyId: req.companyId, branchId: register.branch_id, userId: uid }, hydratedSessions.find(s => s.id === session?.id) || null)
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json({ register: hydratedRegisters[0], session: visibleSession, closable_session: closableView(hydratedSessions.find(s => s.id === closable_session?.id)) })
   } catch (e) {
     next(e)
   }
@@ -390,7 +329,7 @@ exports.openSession = async (req, res, next) => {
     const uid = req.user?.sub
     if (!uid) return res.status(401).json({ message: 'Usuario no autenticado' })
 
-    const opening = number(req.body.opening_float)
+    const opening = Number(require('../receivables/paymentAttempts').exactMoney(req.body.opening_float ?? 0, { allowZero: true }))
     if (!Number.isFinite(opening) || opening < 0) {
       return res.status(400).json({ message: 'opening_float debe ser un número >= 0' })
     }
@@ -407,13 +346,22 @@ exports.openSession = async (req, res, next) => {
         throw new Error('NO_REGISTER')
       }
 
+      const lockedRegister = await lockScopedRegister(tx, { companyId: req.companyId, branchId: require('../../middlewares/tenant').requireBranch(req), userId: uid, isAdmin: isAdminUser(req.user) }, register.id)
+
       const existing = await tx.cashRegisterSession.findFirst({
         where: { cash_register_id: register.id, status: 'OPEN' }
       })
       if (existing) {
+        const [meta] = await require('../../services/cashMetadata').hydrateCashMetadata(tx, [existing])
+        if (require('../../services/cashSharedSessions').isShared(meta)) {
+          const joined = await require('../../services/cashSharedSessions').join(tx, { companyId: req.companyId, branchId: register.branch_id, userId: uid }, existing.id)
+          return { ...await tx.cashRegisterSession.findUnique({ where: { id: existing.id }, include: sessionInclude }), ...joined }
+        }
         throw new Error('ALREADY_OPEN')
       }
 
+      const eventSession = await require('../../services/cashEventAdoption').openEventSession(tx, { companyId: req.companyId, branchId: register.branch_id || require('../../middlewares/tenant').requireBranch(req), userId: uid }, lockedRegister, { openingFloat: req.body.opening_float ?? 0, notes })
+      if (eventSession) return { ...await tx.cashRegisterSession.findUnique({ where: { id: eventSession.id }, include: sessionInclude }), ...eventSession }
       return tx.cashRegisterSession.create({
         data: {
           cash_register_id: register.id,
@@ -466,13 +414,17 @@ exports.closeSession = async (req, res, next) => {
         throw new Error('NO_REGISTER')
       }
 
-      const session = await tx.cashRegisterSession.findFirst({
+      const candidate = await tx.cashRegisterSession.findFirst({
         where: { cash_register_id: register.id, status: 'OPEN' },
         include: sessionInclude
       })
-      if (!session) {
+      if (!candidate) {
         throw new Error('NO_OPEN_SESSION')
       }
+      if (req.body.cash_register_session_id !== undefined && req.body.cash_register_session_id !== candidate.id) throw new Error('SESSION_RACE')
+
+      const session = await lockScopedSession(tx, { companyId: req.companyId, branchId: require('../../middlewares/tenant').requireBranch(req), userId: uid }, candidate.id)
+      if (session.status !== 'OPEN') throw new Error('SESSION_RACE')
 
       const closePerm = checkCanCloseThisSession(req, session)
       if (!closePerm.allowed) {
@@ -481,6 +433,7 @@ exports.closeSession = async (req, res, next) => {
         err.clientMessage = closePerm.message
         throw err
       }
+      if (session.operation_mode === 'SHARED' && session.opened_by_id !== uid && !extraNotes) throw Object.assign(new Error('Indica por qué terminas el turno de otra persona.'), { status: 400 })
 
       let mergedNotes = session.notes != null ? String(session.notes) : ''
       const stamp = `[Fin turno POS ${new Date().toISOString()}]`
@@ -527,4 +480,77 @@ exports.closeSession = async (req, res, next) => {
     }
     next(e)
   }
+}
+
+exports.capabilities = async (req, res, next) => {
+  try {
+    const permission = checkCanReadCashSession(req)
+    const { hasPerm } = require('../../middlewares/tenant')
+    const canView = hasPerm(req.user, 'cash.registers.view') || hasPerm(req.user, 'cash.registers.manage'), canManage = hasPerm(req.user, 'cash.registers.manage')
+    if (!permission.allowed && !canView && !hasPerm(req.user, 'settings.manage')) return res.status(permission.status).json({ message: permission.message })
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json({ ...await require('../../services/cashEventAdoption').capabilities(prisma, { isAdmin: isAdminUser(req.user) }), shared_turns_available: await require('../../services/cashSharedSessions').available(prisma), register_configuration_available: await require('./cashRegisters.configuration').registerConfigurationAvailable(prisma), can_view_register_configuration: canView, can_manage_register_configuration: canManage })
+  } catch (error) { next(error) }
+}
+
+exports.joinSession = async (req, res, next) => {
+  try {
+    if (req.integrationCredential || req.integration) throw Object.assign(new Error('Inicia sesión para unirte al turno'), { status: 401 })
+    const perm = checkCanMutateCashSession(req)
+    if (!perm.allowed && !require('../../services/cashSharedSessions').operationPermissions.some(p => getPerms(req).includes(p))) return res.status(perm.status).json({ message: perm.message })
+    if (Object.keys(req.body || {}).length) throw Object.assign(new Error('Para unirte solo se necesita el turno; tu identidad viene de la sesión.'), { status: 400 })
+    const scope = { companyId: req.companyId, branchId: require('../../middlewares/tenant').requireBranch(req), userId: req.user.sub }
+    const result = await prisma.$transaction(tx => require('../../services/cashSharedSessions').join(tx, scope, req.params.id))
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(result)
+  } catch (error) { next(error) }
+}
+exports.adoptRegister = async (req, res, next) => {
+  try {
+    if (!isAdminUser(req.user)) throw Object.assign(new Error('Solo el administrador del sistema puede habilitar el registro de movimientos.'), { status: 403 })
+    const scope = { companyId: req.companyId, branchId: require('../../middlewares/tenant').requireBranch(req), userId: req.user.sub, isAdmin: true }
+    res.json(await prisma.$transaction(tx => require('../../services/cashEventAdoption').adoptRegister(tx, scope, req.params.id, req.body)))
+  } catch (error) { next(error) }
+}
+exports.paymentOptions = async (req, res, next) => {
+  try {
+    const scope = require('../merchandise/payables/access').payableScope(req)
+    scope.branchId = require('../../middlewares/tenant').requireBranch(req)
+    await require('../merchandise/payables/access').assertAccess(prisma, scope, { write: true })
+    if (!await require('../cash-closure/eventStorage').ledgerAvailable(prisma)) return res.json({ available: false, sessions: [] })
+    const sessions = await prisma.$queryRaw`SELECT s.id,s.cash_register_id,s.opened_by_id,s.status,s.operation_mode,s.money_event_version,r.id AS "cashRegisterId",r.name,r.code,s.currency_code AS "currencyCode",s.money_event_version AS "moneyEventVersion"
+      FROM cash_register_sessions s JOIN cash_registers r ON r.id=s.cash_register_id JOIN branches b ON b.id=r.branch_id
+      WHERE b.company_id=${scope.companyId}::uuid AND r.branch_id=${scope.branchId}::uuid AND r.active AND r.kind='PHYSICAL'
+      AND s.status='OPEN' AND (s.opened_by_id=${scope.userId}::uuid OR s.operation_mode='SHARED') ORDER BY r.name,s.id`
+    const visible = []
+    for (const s of sessions) {
+      if (s.operation_mode === 'SHARED' && !(await require('../../services/cashSharedSessions').view(prisma,scope,s)).can_operate) continue
+      visible.push({ id:s.id,cashRegisterId:s.cashRegisterId,name:s.name,code:s.code,currencyCode:s.currencyCode,moneyEventVersion:s.moneyEventVersion })
+    }
+    res.json({ available: true, sessions: visible })
+  } catch (error) { next(error) }
+}
+
+exports.getConfiguration = async (req, res, next) => {
+  try {
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'view')
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await prisma.$transaction(tx => require('./cashRegisters.configuration').loadRegisterConfiguration(tx, scope, req.params.id)))
+  } catch (error) { next(error) }
+}
+exports.saveConfiguration = async (req, res, next) => {
+  try {
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'manage')
+    if (Object.hasOwn(req.body, 'id')) throw Object.assign(new Error('La caja se identifica en la dirección, no en los datos enviados'), { status: 400 })
+    const result = await prisma.$transaction(tx => require('./cashRegisters.configuration').saveRegisterConfiguration(tx, scope, { ...req.body, ...(req.params.id ? { id: req.params.id } : {}) }))
+    res.set?.('Cache-Control', 'private, no-store')
+    res.status(req.params.id || result.replayed ? 200 : 201).json(result)
+  } catch (error) { next(error) }
+}
+exports.registerUsers = async (req, res, next) => {
+  try {
+    const scope = require('./cashRegisters.access').cashRegisterAccess(req, 'manage')
+    res.set?.('Cache-Control', 'private, no-store')
+    res.json(await require('./cashRegisters.configuration').listEligibleRegisterUsers(prisma, scope, req.query))
+  } catch (error) { next(error) }
 }

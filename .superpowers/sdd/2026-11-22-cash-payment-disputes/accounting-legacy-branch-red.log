@@ -1,0 +1,28 @@
+TAP version 13
+# Subtest: generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+not ok 1 - generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+  ---
+  duration_ms: 2618.161199
+  type: 'test'
+  location: '/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.accounting.pg.e2e.js:41:1'
+  failureType: 'testCodeFailure'
+  error: 'El asiento no conserva una sucursal verificable para su cobro original'
+  code: 'DISPUTE_ACCOUNTING_PROVENANCE'
+  stack: |-
+    fail (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/modules/cash-closure/disputes.domain.js:4:66)
+    blocked (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/services/accounting/cashDisputePosting.js:5:24)
+    Object.prepareDisputeEntryReversal (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/src/services/accounting/cashDisputePosting.js:239:16)
+    async Proxy._transactionWithCallback (/tmp/auna-disputes-prisma/2c10829595dcc29a/client/runtime/library.js:133:8120)
+    async TestContext.<anonymous> (/home/DiegoPatzan/Documents/CODE/Auna/deposito-backend/tests/cashDisputes.accounting.pg.e2e.js:53:21)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2766.378742

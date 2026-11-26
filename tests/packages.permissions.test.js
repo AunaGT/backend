@@ -1,6 +1,17 @@
 const test=require('node:test'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto')
 const {fixture}=require('./helpers/packagesDb'),{id}=require('./helpers/packageFixtures')
 const api=require('../src/modules/inventory/packages/catalog')
+test('editing a draft does not authorize publishing or archiving, including command replay',async()=>{
+  const f=fixture(),editor={...f.scope,permissions:['products.view','products.edit']}
+  const created=await api.savePackage(f.db,editor,null,f.input())
+  const input={expectedVersion:created.version,idempotencyKey:randomUUID()}
+  await assert.rejects(api.activatePackageVersion(f.db,editor,created.id,input),{status:403})
+  const publisher={...f.scope,permissions:['products.view','products.packages.publish']}
+  await api.activatePackageVersion(f.db,publisher,created.id,input)
+  await assert.rejects(api.activatePackageVersion(f.db,editor,created.id,input),{status:403})
+  await assert.rejects(api.archivePackage(f.db,publisher,created.id,{...input,expectedVersion:2,idempotencyKey:randomUUID()}),{status:403})
+  await api.archivePackage(f.db,{...f.scope,permissions:['products.packages.archive']},created.id,{...input,expectedVersion:2,idempotencyKey:randomUUID()})
+})
 test('shared package requires access to all assigned branches before changing it',async()=>{
   const f=fixture(),input=f.input();input.branchIds=[f.scope.branchId,id(203)]
   const created=await api.savePackage(f.db,f.scope,null,input)

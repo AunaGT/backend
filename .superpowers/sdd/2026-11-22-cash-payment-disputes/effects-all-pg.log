@@ -1,0 +1,232 @@
+TAP version 13
+# Subtest: posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+ok 1 - posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+  ---
+  duration_ms: 10765.492951
+  type: 'test'
+  ...
+# Subtest: a closed accounting period rolls back every new dispute entry and preserves the pending source
+ok 2 - a closed accounting period rolls back every new dispute entry and preserves the pending source
+  ---
+  duration_ms: 5027.963885
+  type: 'test'
+  ...
+# Subtest: generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+ok 3 - generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+  ---
+  duration_ms: 3667.282774
+  type: 'test'
+  ...
+# Subtest: changing company currency never silently converts a frozen dispute source
+ok 4 - changing company currency never silently converts a frozen dispute source
+  ---
+  duration_ms: 3875.097266
+  type: 'test'
+  ...
+# Subtest: a disposition cannot move principal to a different dispute asset than its withdrawal
+ok 5 - a disposition cannot move principal to a different dispute asset than its withdrawal
+  ---
+  duration_ms: 3518.791766
+  type: 'test'
+  ...
+# Subtest: the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+ok 6 - the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+  ---
+  duration_ms: 3191.370362
+  type: 'test'
+  ...
+# Subtest: an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+ok 7 - an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+  ---
+  duration_ms: 3046.999078
+  type: 'test'
+  ...
+# Subtest: credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+ok 8 - credit notes returned from one bank sale share its dispute hold without multiplying the reserved principal
+  ---
+  duration_ms: 10589.803057
+  type: 'test'
+  ...
+# Subtest: creating a case reserves only unallocated receipt funds and replay creates no debt or money
+ok 9 - creating a case reserves only unallocated receipt funds and replay creates no debt or money
+  ---
+  duration_ms: 10346.748291
+  type: 'test'
+  ...
+# Subtest: concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+ok 10 - concurrent cases cannot claim the same remaining principal and duplicate references do not double reserve
+  ---
+  duration_ms: 5116.193882
+  type: 'test'
+  ...
+# Subtest: reviewing a won result releases an unwithdrawn advance only after independent approval
+ok 11 - reviewing a won result releases an unwithdrawn advance only after independent approval
+  ---
+  duration_ms: 10310.62537
+  type: 'test'
+  ...
+# Subtest: losing before the bank debit creates no debt but protects the affected unused advance
+ok 12 - losing before the bank debit creates no debt but protects the affected unused advance
+  ---
+  duration_ms: 5331.405289
+  type: 'test'
+  ...
+# Subtest: replacing a cancelled incorrect case requires an explicit link and preserves its original history
+ok 13 - replacing a cancelled incorrect case requires an explicit link and preserves its original history
+  ---
+  duration_ms: 3854.237606
+  type: 'test'
+  ...
+# Subtest: a fee-only withdrawal must be resolved before the case can be cancelled
+ok 14 - a fee-only withdrawal must be resolved before the case can be cancelled
+  ---
+  duration_ms: 3863.083804
+  type: 'test'
+  ...
+# Subtest: a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+ok 15 - a confirmed bank withdrawal preserves the original receipt and closed-turn money, and retries return one effect
+  ---
+  duration_ms: 9471.309594
+  type: 'test'
+  ...
+# Subtest: a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+ok 16 - a chosen accounting date is retained while accounting is disabled and always needs a reason when different
+  ---
+  duration_ms: 5352.437123
+  type: 'test'
+  ...
+# Subtest: accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+ok 17 - accounting-active withdrawal commits its exact journal atomically and a closed period leaves no effect or command
+  ---
+  duration_ms: 3980.214579
+  type: 'test'
+  ...
+# Subtest: a standalone provider withholding reduces pending settlement once and cannot be settled again
+ok 18 - a standalone provider withholding reduces pending settlement once and cannot be settled again
+  ---
+  duration_ms: 4015.392773
+  type: 'test'
+  ...
+# Subtest: the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+ok 19 - the same provider balance cannot back two simultaneous withholdings, and foreign cases stay private
+  ---
+  duration_ms: 4029.615484
+  type: 'test'
+  ...
+# Subtest: settlement and withholding serialize on the original funds in either winner order
+ok 20 - settlement and withholding serialize on the original funds in either winner order
+  ---
+  duration_ms: 3480.702771
+  type: 'test'
+  ...
+# Subtest: additive dispute DDL preserves existing data and isolates all new tables
+ok 21 - additive dispute DDL preserves existing data and isolates all new tables
+  ---
+  duration_ms: 10457.80243
+  type: 'test'
+  ...
+# Subtest: dispute children cannot divert a receipt restriction to another customer or overreserve funds
+ok 22 - dispute children cannot divert a receipt restriction to another customer or overreserve funds
+  ---
+  duration_ms: 5188.858053
+  type: 'test'
+  ...
+# Subtest: a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+ok 23 - a monetary disposition requires an approved proposal and cannot exceed its customer allocation
+  ---
+  duration_ms: 3648.502236
+  type: 'test'
+  ...
+# Subtest: an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+ok 24 - an unrelated approval cannot authorize a different case decision or an excessive fee compensation
+  ---
+  duration_ms: 3835.497129
+  type: 'test'
+  ...
+# Subtest: an approved cancellation cannot hide an outstanding bank withdrawal
+ok 25 - an approved cancellation cannot hide an outstanding bank withdrawal
+  ---
+  duration_ms: 3554.750941
+  type: 'test'
+  ...
+# Subtest: origin eligibility, coverage and parent scope are derived from original bank receipts
+ok 26 - origin eligibility, coverage and parent scope are derived from original bank receipts
+  ---
+  duration_ms: 10596.709615
+  type: 'test'
+  ...
+# Subtest: missing dispute schema advertises unavailability and does not block original cash features
+ok 27 - missing dispute schema advertises unavailability and does not block original cash features
+  ---
+  duration_ms: 4679.494346
+  type: 'test'
+  ...
+# Subtest: releasing an event advance into a disputed receipt expands the hold before any free credit is published
+ok 28 - releasing an event advance into a disputed receipt expands the hold before any free credit is published
+  ---
+  duration_ms: 10463.84351
+  type: 'test'
+  ...
+# Subtest: the existing cartera list keeps held advances visible without advertising them as spendable credit
+ok 29 - the existing cartera list keeps held advances visible without advertising them as spendable credit
+  ---
+  duration_ms: 5243.799204
+  type: 'test'
+  ...
+# Subtest: a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+ok 30 - a regular credit-sale refund stays attributed to its original receipt and cannot become available again
+  ---
+  duration_ms: 10695.797094
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when REFUND gets the lock first
+ok 31 - a concurrent refund and claim share one origin budget when REFUND gets the lock first
+  ---
+  duration_ms: 5103.463339
+  type: 'test'
+  ...
+# Subtest: a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+ok 32 - a concurrent refund and claim share one origin budget when CLAIM gets the lock first
+  ---
+  duration_ms: 3764.601067
+  type: 'test'
+  ...
+# Subtest: database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+ok 33 - database coverage rejects a legacy writer refunding principal still occupied by a pending claim
+  ---
+  duration_ms: 3824.002262
+  type: 'test'
+  ...
+# Subtest: attributing a confirmed engagement refund does not count its existing money source twice
+ok 34 - attributing a confirmed engagement refund does not count its existing money source twice
+  ---
+  duration_ms: 3542.588132
+  type: 'test'
+  ...
+# Subtest: completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+ok 35 - completing and retrying a real regular credit-sale return creates one refund and no reusable credit
+  ---
+  duration_ms: 3175.805685
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund with generic attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 36 - a merchant-funded refund with generic attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 3030.508383
+  type: 'test'
+  ...
+# Subtest: a merchant-funded refund with partial existing attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+ok 37 - a merchant-funded refund with partial existing attribution consumes preserved credit once and a later bank recovery creates no second customer credit
+  ---
+  duration_ms: 3095.889625
+  type: 'test'
+  ...
+1..37
+# tests 37
+# suites 0
+# pass 37
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 36721.756261

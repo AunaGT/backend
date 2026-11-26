@@ -23,7 +23,7 @@ test('a manual Cartera payment applied to the engagement sale cannot be deleted'
   const receipt=await db.customerPayment.findFirst({where:{applications:{some:{sale_id:sold.saleId}}}})
   assert.ok(receipt);assert.equal(await db.paymentCommitment.count({where:{payment_id:receipt.id}}),0)
   await withMocks({[require.resolve('../src/models/prisma')]:{prisma:db}},require.resolve('../src/modules/receivables/controller'),async controller=>{
-    let denied;await controller.deletePayment({companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId},params:{id:receipt.id}},jsonResponse(),e=>{denied=e})
+    let denied;await controller.deletePayment({companyId:scope.companyId,branchId:scope.branchId,user:{sub:scope.userId,permissions:['receivables.cancel_payment']},params:{id:receipt.id}},jsonResponse(),e=>{denied=e})
     assert.equal(denied?.code,'PAYMENT_LINKED_TO_ENGAGEMENT')
   })
   assert.equal((await E.getEngagement(db,scope,e.id)).money.applied,'40.00');assert.equal(await db.customerPayment.count(),1)

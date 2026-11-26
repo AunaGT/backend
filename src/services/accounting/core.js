@@ -12,6 +12,7 @@
 
 const { DateTime } = require('luxon')
 const { validateLines, round2 } = require('./logic')
+const { TAX_SETTING_KEYS, legacyAccountingTaxConfig } = require('../taxConfig')
 
 const GT_ZONE = 'America/Guatemala'
 const SETTING_KEY = 'accounting.defaultAccounts'
@@ -83,7 +84,8 @@ async function assertPeriodOpen(tx, date, companyId) {
     update: {},
     create: { company_id: companyId, year, month },
   })
-  if (period.status === 'CLOSED') {
+  const [locked] = await tx.$queryRaw`SELECT status FROM accounting_periods WHERE id=${period.id} FOR UPDATE`
+  if (locked.status === 'CLOSED') {
     throw new AccountingError(`El período ${String(month).padStart(2, '0')}/${year} está cerrado`)
   }
 }
@@ -125,6 +127,7 @@ async function createEntry(tx, { company_id, branch_id = null, date, description
     if (acc.is_group) throw new AccountingError(`La cuenta ${acc.code} ${acc.name} es agrupadora y no recibe movimientos`)
   }
 
+  await lockAccountingCompany(tx,company_id)
   await assertPeriodOpen(tx, date, company_id)
   const entry_number = await nextEntryNumber(tx, company_id)
 
@@ -156,22 +159,14 @@ async function createEntry(tx, { company_id, branch_id = null, date, description
  * Configuración de impuestos (SystemSettings, editable desde la UI):
  * - `vat_affiliation`: régimen SAT. GENERAL desglosa IVA débito/crédito;
  *   PEQUENO no acredita IVA y paga una tarifa fija sobre ingresos brutos.
- * - `iva_rate` / `pequeno_rate`: tasas en % (defaults legales GT: 12 y 5).
+ * - `iva_rate` / `pequeno_rate`: tasas en %. Se conservan los fallbacks
+ *   históricos; no equivalen a un perfil FEL confirmado.
  */
 async function getTaxConfig(tx, companyId) {
   const rows = await tx.systemSetting.findMany({
-    where: { key: { in: ['vat_affiliation', 'iva_rate', 'pequeno_rate'] }, company_id: companyId },
+    where: { key: { in: TAX_SETTING_KEYS }, company_id: companyId },
   })
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]))
-  const pct = (v, fallback) => {
-    const n = Number(v)
-    return Number.isFinite(n) && n >= 0 && n < 100 ? n : fallback
-  }
-  return {
-    regime: /peque/i.test(map.vat_affiliation || '') ? 'PEQUENO' : 'GENERAL',
-    ivaRate: pct(map.iva_rate, 12) / 100,
-    pequenoRate: pct(map.pequeno_rate, 5) / 100,
-  }
+  return legacyAccountingTaxConfig(rows)
 }
 
 /** Mapeo de cuentas por defecto (SystemSetting JSON { key: code }) resuelto a cuentas. */

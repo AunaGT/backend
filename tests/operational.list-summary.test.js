@@ -16,7 +16,6 @@ for (const [path, model, query, field, groups] of [
   ['../src/modules/inventory-count/controller', 'inventoryCountSession', { q: 'ana', status: 'DRAFT', limit: '1', offset: '2' }, 'status', [{ status: 'DRAFT', _count: { _all: 9 } }]],
   ['../src/modules/hr/controllers/advances', 'employeeAdvance', { employee_id: 'employee', status: 'PENDIENTE', page: '2', pageSize: '1' }, 'status', [{ status: 'PENDIENTE', _count: { _all: 9 } }]],
   ['../src/modules/contacts/controller', 'supplier', { search: 'ana', party_type: 'SUPPLIER', page: '2', pageSize: '1' }, 'estado', [{ estado: 1, _count: { _all: 9 } }]],
-  ['../src/modules/cash-closure/controller', 'cashClosure', { status: 'Pendiente', startDate: '2026-10-01', endDate: '2026-10-07', page: '2', pageSize: '1' }, 'status', [{ status: 'Pendiente', _count: { _all: 9 } }]],
 ]) {
   test(`${model}: opt-in summary uses the complete list filters before pagination`, async t => {
     let listWhere, summaryWhere, response

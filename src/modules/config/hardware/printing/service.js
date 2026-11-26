@@ -1,6 +1,6 @@
 const {createHash}=require('node:crypto')
 const {fail,uuid}=require('../validation')
-const {operationScope,originPermission,resolveWorkstation,has}=require('../operations')
+const {operationScope,originPermission,resolveWorkstation,has,canReadSaleReceipt}=require('../operations')
 const {jobInput,eventInput,reprintInput,downloadInput}=require('./validation')
 const {resolvePrintSource,authorizeSource}=require('./sources')
 const {lockPrintBranding}=require('./branding')
@@ -145,10 +145,14 @@ async function printHistory(db,scope,raw={}){
  const where={company_id:scope.companyId,branch_id:scope.branchId||{in:scope.branchIds||[]}}
  const totalItems=await db.hardwarePrintJob.count({where}),totalPages=Math.max(1,Math.ceil(totalItems/pageSize)),current=Math.min(page,totalPages)
  const rows=await db.hardwarePrintJob.findMany({where,select:{id:true,actor_id:true,parent_id:true,source_kind:true,source_id:true,workstation_id:true,route_snapshot:true,state:true,document:true,pages:true,created_at:true,reason:true},orderBy:[{created_at:'desc'},{id:'desc'}],skip:(current-1)*pageSize,take:pageSize})
+ const ownTicketSources=rows.filter(row=>row.actor_id===scope.actorId&&row.source_kind==='SALE_TICKET').map(row=>row.source_id)
+ // One bounded lookup for all own jobs on this page, not a query per card.
+ const needsOwnership=scope.branchId&&!scope.isConsolidated&&has(scope,'sales.create')&&!has(scope,'sales.view_invoice')&&ownTicketSources.length
+ const saleOwners=new Map(needsOwnership?(await db.sale.findMany({where:{id:{in:ownTicketSources},branch_id:scope.branchId,branch:{company_id:scope.companyId}},select:{id:true,created_by:true}})).map(sale=>[sale.id,sale]):[])
  const items=rows.map(row=>{
   let reprint=false
   if(row.actor_id===scope.actorId){
-   try{originPermission(scope,row.source_kind==='SALE_TICKET'?'RECEIPT':'LABEL');reprint=true}
+   try{originPermission(scope,row.source_kind==='SALE_TICKET'?'RECEIPT':'LABEL');reprint=row.source_kind!=='SALE_TICKET'||has(scope,'sales.view_invoice')||canReadSaleReceipt(scope,saleOwners.get(row.source_id))}
    catch(error){if(![400,403].includes(error.status))throw error}
   }
   return{...dto(row),capabilities:{reprint}}

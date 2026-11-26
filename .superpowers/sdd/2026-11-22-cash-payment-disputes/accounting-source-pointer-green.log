@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+ok 1 - posting a dispute withdrawal is source-idempotent and never edits or reposts the original receipt
+  ---
+  duration_ms: 2638.084139
+  type: 'test'
+  ...
+# Subtest: a closed accounting period rolls back every new dispute entry and preserves the pending source
+ok 2 - a closed accounting period rolls back every new dispute entry and preserves the pending source
+  ---
+  duration_ms: 2592.534024
+  type: 'test'
+  ...
+# Subtest: generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+ok 3 - generic reversal locks original resources before accounting and protects disputed receipts and dispute entries
+  ---
+  duration_ms: 2425.264564
+  type: 'test'
+  ...
+# Subtest: changing company currency never silently converts a frozen dispute source
+ok 4 - changing company currency never silently converts a frozen dispute source
+  ---
+  duration_ms: 2371.680179
+  type: 'test'
+  ...
+# Subtest: a disposition cannot move principal to a different dispute asset than its withdrawal
+ok 5 - a disposition cannot move principal to a different dispute asset than its withdrawal
+  ---
+  duration_ms: 2415.530614
+  type: 'test'
+  ...
+# Subtest: the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+ok 6 - the existing posting batch never posts a returned alias credit note as another refund when its reference is empty
+  ---
+  duration_ms: 2389.39504
+  type: 'test'
+  ...
+# Subtest: an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+ok 7 - an absorbed loss and a later recovery follow the frozen expense account, with separate dates per source
+  ---
+  duration_ms: 2442.645973
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 17435.179982

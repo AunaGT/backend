@@ -42,7 +42,7 @@ async function productBaseLocked(db,scope,product){
   return !!(await db.productPresentation.findFirst({where:{company_id:scope.companyId,product_id:product.id},select:{id:true}}))||await hasProductHistory(db,product.id)
 }
 async function configureProduct(tx,scope,id,input) {
-  authorize(scope,['products.edit','products.create'],true);await assertEnabled(tx,scope)
+  authorize(scope,['products.edit'],true);await assertEnabled(tx,scope)
   objectInput(input,[...CONFIG_KEYS,'unit_revision'])
   await lockCompany(tx,scope.companyId)
   await assertEnabled(tx,scope)
